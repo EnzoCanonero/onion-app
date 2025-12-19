@@ -22,10 +22,12 @@ export default function MonthlyReportPage() {
   }
 
   const snapshotSet = new Set(plan.initialSnapshotTaskIds);
-  const addedCount = plan.tasks.filter((t) => !snapshotSet.has(t.id)).length;
-
-  const completedInSnapshot = plan.tasks.filter((t) => snapshotSet.has(t.id) && t.status === "GREEN").length;
   const snapshotCount = plan.initialSnapshotTaskIds.length;
+  const currentCount = plan.tasks.length;
+  const addedCount = Math.max(0, currentCount - snapshotCount);
+
+  const snapshotGreen = plan.tasks.filter((t) => snapshotSet.has(t.id) && t.status === "GREEN").length;
+  const addedGreen = plan.tasks.filter((t) => !snapshotSet.has(t.id) && t.status === "GREEN").length;
 
   const sessions = state.sessions.filter((s) => s.ym === ymSafe && s.endedAt && typeof s.actualMinutes === "number");
 
@@ -45,13 +47,13 @@ export default function MonthlyReportPage() {
         <Link to={`/month/${ymSafe}/setup`}>Month Setup</Link>
       </p>
 
-      <h3>Tree completion (v0)</h3>
+      <h3>Tree completion (v1)</h3>
       <ul>
         <li>
-          Snapshot GREEN: <b>{completedInSnapshot}</b> / {snapshotCount}
+          Snapshot GREEN: <b>{snapshotGreen}</b> / {snapshotCount}
         </li>
         <li>
-          Added tasks since snapshot: <b>{addedCount}</b>
+          Added GREEN: <b>{addedGreen}</b> / {addedCount}
         </li>
       </ul>
 
@@ -74,10 +76,7 @@ export default function MonthlyReportPage() {
         ))}
       </ul>
 
-      <p style={{ opacity: 0.8 }}>
-        v0 note: task status is not yet driven by daily outcomes; it will stay NONE until the next milestone.
-      </p>
+      <p style={{ opacity: 0.8 }}>v1 note: GREEN statuses are sticky once achieved in the month.</p>
     </div>
   );
 }
-

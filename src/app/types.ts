@@ -42,7 +42,7 @@ export type DayEntry = {
   primaryTaskId?: string;
   secondaryTaskIds: string[];
   outcomeByTaskId: Record<string, "COMPLETED" | "NOT_COMPLETED">;
-  shutdownNote?: { done: string; pending: string; nextStep: string };
+  shutdownNote?: { comment: string; pending: string } | { done: string; pending: string; nextStep: string };
   activeSessionId?: string; // enforces "one active running session"
 };
 
