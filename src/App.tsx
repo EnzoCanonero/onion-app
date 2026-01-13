@@ -10,7 +10,7 @@ export default function App() {
   return (
     <div style={{ fontFamily: "system-ui, sans-serif", maxWidth: 960, margin: "0 auto", padding: 16 }}>
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <h1 style={{ margin: 0 }}>FocusTree (v0)</h1>
+        <h1 style={{ margin: 0 }}>FocusTree (v2)</h1>
         <nav style={{ display: "flex", gap: 12 }}>
           <Link to={`/month/${demoYM}/setup`}>Month Setup</Link>
           <Link to={`/day/${demoDate}`}>Daily</Link>

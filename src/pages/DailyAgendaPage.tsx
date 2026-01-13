@@ -11,11 +11,16 @@ import {
   addSession,
   updateDay,
   updateSession,
-  addTaskToMonth,
   setDayTasks,
   setTaskOutcome,
+  setDailyJournal,
+  setPendingNote,
   setShutdownNote,
+  findLastWorkingDay,
+  activateWorkingDay,
 } from "../app/storage";
+import TaskSelectionModal from "../components/TaskSelectionModal";
+import FocusTemplateCard from "../components/FocusTemplateCard";
 
 export default function DailyAgendaPage() {
   const { date } = useParams();
@@ -24,6 +29,8 @@ export default function DailyAgendaPage() {
 
   const nav = useNavigate();
   const [tick, setTick] = useState(0);
+  const [showTaskModal, setShowTaskModal] = useState(false);
+  const [showActivateModal, setShowActivateModal] = useState(false);
   const state = useMemo(() => loadState(), [tick]);
 
   const plan = getMonth(state, ym);
@@ -94,268 +101,455 @@ export default function DailyAgendaPage() {
     });
   };
 
+
+  // v2: Smart defaults - suggest YELLOW tasks as secondaries (shown in modal)
+  const suggestedSecondaryIds = useMemo(() => {
+    if (day.secondaryTaskIds.length > 0) return []; // Don't show suggestions if already has selections
+
+    return plan.tasks
+      .filter((t) => t.status === "YELLOW" && !t.parentId) // Top-level YELLOW tasks
+      .slice(0, 3)
+      .map((t) => t.id);
+  }, [plan.tasks, day.secondaryTaskIds]);
+
+  // v2: Working day activation
+  const handleActivateDay = () => {
+    mutate((s0) => activateWorkingDay(s0, dateSafe));
+    setShowActivateModal(false);
+  };
+
   const tasksById = useMemo(() => new Map(plan.tasks.map((t) => [t.id, t] as const)), [plan.tasks]);
 
-  const assignedTaskIds = Array.from(
-    new Set([day.primaryTaskId, ...day.secondaryTaskIds].filter(Boolean) as string[])
-  );
-
-  const assignedTasks = assignedTaskIds
-    .map((id) => tasksById.get(id))
-    .filter((t): t is NonNullable<typeof t> => Boolean(t));
-
-  const setPrimaryTask = (taskId: string) => {
+  const handleTaskSelectionConfirm = (primaryId: string | undefined, secondaryIds: string[]) => {
     mutate((s0) => {
-      const { state: withDay0, day: day0 } = getOrCreateDay(s0, dateSafe, ym);
-      return setDayTasks(withDay0, dateSafe, taskId, day0.secondaryTaskIds);
+      const { state: withDay0 } = getOrCreateDay(s0, dateSafe, ym);
+      return setDayTasks(withDay0, dateSafe, primaryId, secondaryIds);
     });
+    setShowTaskModal(false);
   };
 
-  const setSecondaryTasks = (taskIds: string[]) => {
-    mutate((s0) => {
-      const { state: withDay0, day: day0 } = getOrCreateDay(s0, dateSafe, ym);
-      return setDayTasks(withDay0, dateSafe, day0.primaryTaskId, taskIds);
-    });
-  };
+  // v2: Last working day info (not just previous day)
+  const lastWorkingDay = useMemo(() => findLastWorkingDay(state, dateSafe, ym), [state, dateSafe, ym]);
 
   const setOutcome = (taskId: string, outcome: "COMPLETED" | "NOT_COMPLETED" | undefined) => {
     mutate((s0) => setTaskOutcome(s0, dateSafe, taskId, outcome));
   };
 
-  const normalizeShutdownNote = (
-    note: unknown
-  ): {
-    comment: string;
-    pending: string;
-  } => {
-    if (!note || typeof note !== "object") return { comment: "", pending: "" };
-    const rec = note as Record<string, unknown>;
-    const pending = typeof rec.pending === "string" ? rec.pending : "";
-
-    if (typeof rec.comment === "string") return { comment: rec.comment, pending };
-
-    const done = typeof rec.done === "string" ? rec.done : "";
-    const nextStep = typeof rec.nextStep === "string" ? rec.nextStep : "";
-    const comment = [done, nextStep].filter((s) => s && s.trim()).join("\n\n");
-    return { comment, pending };
+  const updateJournal = (text: string) => {
+    mutate((s0) => setDailyJournal(s0, dateSafe, text || undefined));
   };
 
-  const updateShutdown = (patch: Partial<{ comment: string; pending: string }>) => {
-    mutate((s0) => {
-      const { state: withDay0, day: day0 } = getOrCreateDay(s0, dateSafe, ym);
-      const current = normalizeShutdownNote(day0.shutdownNote);
-      return setShutdownNote(withDay0, dateSafe, { ...current, ...patch });
-    });
+  const updatePending = (text: string) => {
+    mutate((s0) => setPendingNote(s0, dateSafe, text || undefined));
   };
 
+  const updateShutdown = (text: string) => {
+    mutate((s0) => setShutdownNote(s0, dateSafe, text || undefined));
+  };
+
+  const clearJournal = () => mutate((s0) => setDailyJournal(s0, dateSafe, undefined));
+  const clearPending = () => mutate((s0) => setPendingNote(s0, dateSafe, undefined));
   const clearShutdown = () => mutate((s0) => setShutdownNote(s0, dateSafe, undefined));
-
-  const [newTaskTitle, setNewTaskTitle] = useState("");
-  const [newTaskParentId, setNewTaskParentId] = useState<string>(""); // "" => top-level
-
-  const addNewTask = () => {
-    const title = newTaskTitle.trim();
-    if (!title) return;
-
-    mutate((s0) => {
-      const res = addTaskToMonth(s0, ym, title, newTaskParentId ? newTaskParentId : null);
-      return res.state;
-    });
-
-    setNewTaskTitle("");
-    setNewTaskParentId("");
-  };
 
   return (
     <div>
-      <h2>Daily Agenda: {dateSafe}</h2>
-      <p>
-        Active month: <b>{ym}</b> — <Link to={`/month/${ym}/setup`}>Month Setup</Link> —{" "}
-        <Link to={`/month/${ym}/report`}>Report</Link>
+      <h2>📅 Daily Agenda: {dateSafe}</h2>
+      <p style={{ marginTop: -8, marginBottom: 24, opacity: 0.7 }}>
+        Plan your day, track focus sessions, and reflect on progress
       </p>
 
-      <h3>Daily tasks (v1)</h3>
-      <div style={{ display: "grid", gap: 12 }}>
-        <label style={{ display: "grid", gap: 6 }}>
-          <div>Primary task</div>
-          <select value={day.primaryTaskId ?? ""} onChange={(e) => setPrimaryTask(e.target.value)}>
-            <option value="" disabled>
-              Select a primary task…
-            </option>
-            {plan.tasks.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.title}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label style={{ display: "grid", gap: 6 }}>
-          <div>Secondary tasks</div>
-          <select
-            multiple
-            size={Math.min(10, Math.max(4, plan.tasks.length))}
-            value={day.secondaryTaskIds}
-            onChange={(e) => {
-              const selected = Array.from(e.currentTarget.selectedOptions).map((o) => o.value);
-              setSecondaryTasks(selected);
-            }}
-          >
-            {plan.tasks.map((t) => (
-              <option key={t.id} value={t.id} disabled={t.id === day.primaryTaskId}>
-                {t.title}
-              </option>
-            ))}
-          </select>
-          <div style={{ fontSize: 12, opacity: 0.8 }}>Tip: hold ⌘/Ctrl to multi-select.</div>
-        </label>
-
-        <div style={{ border: "1px solid #ddd", padding: 12, borderRadius: 8 }}>
-          <div style={{ fontWeight: 600, marginBottom: 8 }}>Add new task</div>
-          <div style={{ display: "grid", gap: 8 }}>
-            <label style={{ display: "grid", gap: 6 }}>
-              <div>Title</div>
-              <input value={newTaskTitle} onChange={(e) => setNewTaskTitle(e.target.value)} />
-            </label>
-
-            <label style={{ display: "grid", gap: 6 }}>
-              <div>Parent (optional)</div>
-              <select value={newTaskParentId} onChange={(e) => setNewTaskParentId(e.target.value)}>
-                <option value="">Top-level</option>
-                {plan.tasks.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.title}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <button onClick={addNewTask} disabled={!newTaskTitle.trim()}>
-                Add
-              </button>
-              <div style={{ fontSize: 12, opacity: 0.8 }}>New tasks start with status NONE and do not change the snapshot.</div>
-            </div>
+      {/* v2: Message from Last Working Day - Shutdown note */}
+      <div
+        style={{
+          border: "2px solid #9c27b0",
+          borderRadius: 12,
+          padding: 16,
+          marginBottom: 24,
+          backgroundColor: "#f3e5f5",
+        }}
+      >
+        <h3 style={{ marginTop: 0, marginBottom: 12, color: "#6a1b9a" }}>
+          💌 Message from your yesterday self
+        </h3>
+        {lastWorkingDay?.shutdownNote ? (
+          <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.6, marginBottom: 12 }}>
+            {lastWorkingDay.shutdownNote}
           </div>
-        </div>
+        ) : (
+          <p style={{ fontStyle: "italic", color: "#7b1fa2", marginBottom: 12 }}>
+            Nothing pending from yesterday. Fresh start! Have a great day! 🌟
+          </p>
+        )}
+        {lastWorkingDay && (
+          <div style={{ fontSize: 12, color: "#7b1fa2", marginTop: 8 }}>
+            From: {lastWorkingDay.date} (last working day)
+          </div>
+        )}
       </div>
 
-      <h3 style={{ marginTop: 16 }}>Task outcomes (v1)</h3>
-      {assignedTasks.length === 0 ? (
-        <p style={{ opacity: 0.8 }}>Assign a primary task (and optionally secondary tasks) to record outcomes.</p>
-      ) : (
-        <div style={{ display: "grid", gap: 8 }}>
-          {assignedTasks.map((t) => {
-            const outcome = day.outcomeByTaskId[t.id];
-            return (
-              <div
-                key={t.id}
-                style={{
-                  display: "flex",
-                  gap: 8,
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  border: "1px solid #eee",
-                  padding: 10,
-                  borderRadius: 8,
-                }}
-              >
-                <div style={{ display: "grid", gap: 4 }}>
-                  <div>
-                    {t.title}{" "}
-                    <span style={{ fontSize: 12, opacity: 0.7 }}>
-                      (<code>{t.status}</code>)
-                    </span>
-                  </div>
-                  {outcome ? (
-                    <div style={{ fontSize: 12, opacity: 0.8 }}>
-                      Today: <b>{outcome}</b>
-                    </div>
-                  ) : (
-                    <div style={{ fontSize: 12, opacity: 0.6 }}>Today: not set</div>
-                  )}
-                </div>
+      {/* v2: If day is not activated, show only activation button */}
+      {!day.isWorkingDay ? (
+        <div style={{ textAlign: "center", padding: 48, border: "2px dashed #ddd", borderRadius: 12 }}>
+          <p style={{ fontSize: 18, marginBottom: 24, opacity: 0.8 }}>
+            Ready to start your working day?
+          </p>
+          <button
+            onClick={() => setShowActivateModal(true)}
+            style={{
+              padding: "16px 32px",
+              fontSize: 18,
+              fontWeight: 600,
+              backgroundColor: "#4caf50",
+              color: "white",
+              border: "none",
+              borderRadius: 8,
+              cursor: "pointer",
+              boxShadow: "0 4px 6px rgba(0,0,0,0.1)",
+            }}
+          >
+            🚀 Start Working Day
+          </button>
 
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          {/* Activation Confirmation Modal */}
+          {showActivateModal && (
+            <div
+              style={{
+                position: "fixed",
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                backgroundColor: "rgba(0,0,0,0.5)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                zIndex: 1000,
+              }}
+              onClick={() => setShowActivateModal(false)}
+            >
+              <div
+                style={{
+                  backgroundColor: "white",
+                  borderRadius: 12,
+                  padding: 24,
+                  maxWidth: 400,
+                  boxShadow: "0 8px 16px rgba(0,0,0,0.2)",
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h3 style={{ marginTop: 0, marginBottom: 16 }}>⚠️ Activate Working Day</h3>
+                <p style={{ marginBottom: 24, lineHeight: 1.6 }}>
+                  This will mark <strong>{dateSafe}</strong> as a working day. This action <strong>cannot be undone</strong>.
+                </p>
+                <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
                   <button
-                    onClick={() => setOutcome(t.id, "COMPLETED")}
-                    disabled={outcome === "COMPLETED"}
-                    title="Marks the month task GREEN (sticky)"
+                    onClick={() => setShowActivateModal(false)}
+                    style={{
+                      padding: "8px 16px",
+                      fontSize: 14,
+                      backgroundColor: "white",
+                      border: "1px solid #ddd",
+                      borderRadius: 6,
+                      cursor: "pointer",
+                    }}
                   >
-                    COMPLETED
+                    Cancel
                   </button>
                   <button
-                    onClick={() => setOutcome(t.id, "NOT_COMPLETED")}
-                    disabled={outcome === "NOT_COMPLETED"}
-                    title="Marks the month task YELLOW (unless already GREEN)"
+                    onClick={handleActivateDay}
+                    style={{
+                      padding: "8px 16px",
+                      fontSize: 14,
+                      fontWeight: 600,
+                      backgroundColor: "#4caf50",
+                      color: "white",
+                      border: "none",
+                      borderRadius: 6,
+                      cursor: "pointer",
+                    }}
                   >
-                    NOT_COMPLETED
-                  </button>
-                  <button onClick={() => setOutcome(t.id, undefined)} disabled={!outcome}>
-                    Clear
+                    ✓ Activate
                   </button>
                 </div>
               </div>
-            );
-          })}
+            </div>
+          )}
         </div>
-      )}
-
-      <h3 style={{ marginTop: 16 }}>Shutdown note (v1)</h3>
-      <div style={{ display: "grid", gap: 10 }}>
-        <textarea
-          rows={4}
-          placeholder="Comment…"
-          value={normalizeShutdownNote(day.shutdownNote).comment}
-          onChange={(e) => updateShutdown({ comment: e.target.value })}
-        />
-        <label style={{ display: "grid", gap: 6 }}>
-          <div>Pending</div>
-          <textarea
-            rows={3}
-            value={normalizeShutdownNote(day.shutdownNote).pending}
-            onChange={(e) => updateShutdown({ pending: e.target.value })}
-          />
-        </label>
-
-        <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={clearShutdown} disabled={!day.shutdownNote}>
-            Clear note
-          </button>
-        </div>
-      </div>
-
-      <h3>Focus session (v0)</h3>
-      {day.activeSessionId ? (
-        <>
-          <p>
-            Running session: <code>{day.activeSessionId}</code>
-          </p>
-          <button onClick={endSession}>End</button>
-        </>
       ) : (
         <>
-          <p>No running session.</p>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {plan.templates.map((t) => (
-              <button key={t.id} onClick={() => startSession(t.id)}>
-                Start {t.title}
+          {/* All sections below only show when day is activated */}
+          <h3>Daily Tasks</h3>
+
+          {/* v2: Task Selection Modal */}
+          {showTaskModal && (
+            <TaskSelectionModal
+              tasks={plan.tasks}
+              currentPrimaryId={day.primaryTaskId}
+              currentSecondaryIds={day.secondaryTaskIds}
+              onConfirm={handleTaskSelectionConfirm}
+              onCancel={() => setShowTaskModal(false)}
+              suggestedSecondaryIds={suggestedSecondaryIds}
+            />
+          )}
+
+          {/* Selected Tasks Display */}
+          {!day.primaryTaskId ? (
+            <div style={{ textAlign: "center", padding: 32, border: "2px dashed #ddd", borderRadius: 8 }}>
+              <p style={{ opacity: 0.6, marginBottom: 16 }}>No tasks selected for today</p>
+              <button
+                onClick={() => setShowTaskModal(true)}
+                style={{
+                  padding: "12px 24px",
+                  fontSize: 16,
+                  fontWeight: 600,
+                  backgroundColor: "#2196f3",
+                  color: "white",
+                  border: "none",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                }}
+              >
+                📝 Choose Daily Tasks
               </button>
+            </div>
+          ) : (
+            <div>
+              {/* Primary Task - Gold Rectangle */}
+              <div
+            style={{
+              border: "3px solid #ffa726",
+              borderRadius: 12,
+              padding: 16,
+              marginBottom: 16,
+              backgroundColor: "#fff8e1",
+            }}
+          >
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#f57c00", marginBottom: 4 }}>
+                🎯 PRIMARY TASK
+              </div>
+              <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 4 }}>
+                {tasksById.get(day.primaryTaskId)?.title ?? "Unknown"}
+              </div>
+              {tasksById.get(day.primaryTaskId)?.status !== "NONE" && (
+                <span
+                  style={{
+                    display: "inline-block",
+                    width: 12,
+                    height: 12,
+                    borderRadius: "50%",
+                    backgroundColor:
+                      tasksById.get(day.primaryTaskId)?.status === "GREEN"
+                        ? "#4caf50"
+                        : "#ff9800",
+                    border: "2px solid white",
+                    boxShadow: "0 0 0 1px rgba(0,0,0,0.1)",
+                  }}
+                  title={tasksById.get(day.primaryTaskId)?.status}
+                />
+              )}
+            </div>
+
+            {/* Outcome Buttons for Primary */}
+            {day.primaryTaskId && (() => {
+              const task = tasksById.get(day.primaryTaskId);
+              const isGreen = task?.status === "GREEN";
+              const isYellow = task?.status === "YELLOW";
+              return (
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6, color: "#666" }}>
+                    Update status:
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <button
+                      onClick={() => setOutcome(day.primaryTaskId!, "COMPLETED")}
+                      style={{
+                        padding: "6px 12px",
+                        fontSize: 13,
+                        fontWeight: 600,
+                        backgroundColor: isGreen ? "#4caf50" : "white",
+                        color: isGreen ? "white" : "#4caf50",
+                        border: `2px solid #4caf50`,
+                        borderRadius: 6,
+                        cursor: "pointer",
+                      }}
+                    >
+                      ✓ Completed
+                    </button>
+                    <button
+                      onClick={() => setOutcome(day.primaryTaskId!, "NOT_COMPLETED")}
+                      style={{
+                        padding: "6px 12px",
+                        fontSize: 13,
+                        fontWeight: 600,
+                        backgroundColor: isYellow ? "#ff9800" : "white",
+                        color: isYellow ? "white" : "#ff9800",
+                        border: `2px solid #ff9800`,
+                        borderRadius: 6,
+                        cursor: "pointer",
+                      }}
+                    >
+                      ⏳ Work in Progress
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* Secondary Tasks */}
+          {day.secondaryTaskIds.length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: "#666" }}>
+                📌 SECONDARY TASKS ({day.secondaryTaskIds.length})
+              </div>
+              <div style={{ display: "grid", gap: 8 }}>
+                {day.secondaryTaskIds.map((id) => {
+                  const task = tasksById.get(id);
+                  if (!task) return null;
+                  return (
+                    <div
+                      key={id}
+                      style={{
+                        border: "2px solid #e0e0e0",
+                        borderRadius: 8,
+                        padding: 12,
+                        backgroundColor: "white",
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                        <div style={{ fontWeight: 500 }}>{task.title}</div>
+                        {task.status !== "NONE" && (
+                          <span
+                            style={{
+                              display: "inline-block",
+                              width: 10,
+                              height: 10,
+                              borderRadius: "50%",
+                              backgroundColor: task.status === "GREEN" ? "#4caf50" : "#ff9800",
+                              border: "2px solid white",
+                              boxShadow: "0 0 0 1px rgba(0,0,0,0.1)",
+                            }}
+                            title={task.status}
+                          />
+                        )}
+                      </div>
+
+                      {/* Outcome Buttons */}
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <button
+                          onClick={() => setOutcome(id, "COMPLETED")}
+                          style={{
+                            padding: "4px 10px",
+                            fontSize: 12,
+                            fontWeight: 600,
+                            backgroundColor: task.status === "GREEN" ? "#4caf50" : "white",
+                            color: task.status === "GREEN" ? "white" : "#4caf50",
+                            border: `1.5px solid #4caf50`,
+                            borderRadius: 4,
+                            cursor: "pointer",
+                          }}
+                        >
+                          ✓ Completed
+                        </button>
+                        <button
+                          onClick={() => setOutcome(id, "NOT_COMPLETED")}
+                          style={{
+                            padding: "4px 10px",
+                            fontSize: 12,
+                            fontWeight: 600,
+                            backgroundColor: task.status === "YELLOW" ? "#ff9800" : "white",
+                            color: task.status === "YELLOW" ? "white" : "#ff9800",
+                            border: `1.5px solid #ff9800`,
+                            borderRadius: 4,
+                            cursor: "pointer",
+                          }}
+                        >
+                          ⏳ In Progress
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Edit Tasks Button */}
+          <button
+            onClick={() => setShowTaskModal(true)}
+            style={{
+              padding: "8px 16px",
+              fontSize: 14,
+              backgroundColor: "white",
+              border: "1px solid #ddd",
+              borderRadius: 6,
+              cursor: "pointer",
+              marginBottom: 16,
+            }}
+          >
+            ✏️ Edit Task Selection
+          </button>
+            </div>
+          )}
+
+          {/* v2: Daily Journal - Persistent notes */}
+          <h3 style={{ marginTop: 24 }}>📝 Daily Journal</h3>
+          <div style={{ display: "grid", gap: 10 }}>
+            <textarea
+              rows={6}
+              placeholder="Daily notes, thoughts, observations..."
+              value={day.dailyJournal ?? ""}
+              onChange={(e) => updateJournal(e.target.value)}
+              style={{ padding: 10, fontSize: 14, lineHeight: 1.6 }}
+            />
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={clearJournal} disabled={!day.dailyJournal}>
+                Clear Journal
+              </button>
+            </div>
+          </div>
+
+          {/* v2: Shutdown Note - Full shutdown summary */}
+          <h3 style={{ marginTop: 24 }}>🔒 Shutdown Note</h3>
+          <p style={{ fontSize: 13, color: "#666", marginTop: 0 }}>
+            Complete shutdown summary (shown next working day)
+          </p>
+          <div style={{ display: "grid", gap: 10 }}>
+            <textarea
+              rows={4}
+              placeholder="Full shutdown summary, reflections, detailed notes..."
+              value={day.shutdownNote ?? ""}
+              onChange={(e) => updateShutdown(e.target.value)}
+              style={{ padding: 10, fontSize: 14, lineHeight: 1.6 }}
+            />
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={clearShutdown} disabled={!day.shutdownNote}>
+                Clear Shutdown Note
+              </button>
+            </div>
+          </div>
+
+          {/* v2: Focus Sessions - Moved to bottom */}
+          <h3 style={{ marginTop: 32 }}>⏱️ Focus Sessions</h3>
+          <div style={{ marginBottom: 24 }}>
+            {plan.templates.map((template) => (
+              <FocusTemplateCard
+                key={template.id}
+                template={template}
+                activeSessionId={day.activeSessionId}
+                completedSessions={state.sessions.filter((s) => s.date === dateSafe)}
+                onStartSession={startSession}
+                onEndSession={endSession}
+              />
             ))}
           </div>
+
+          <p style={{ opacity: 0.8, marginTop: 16 }}>
+            v2 note: Working days system - Only activated days show all sections. Shutdown note shows on next working day.
+          </p>
         </>
       )}
-
-      <h3 style={{ marginTop: 16 }}>Quick debug</h3>
-      <ul>
-        <li>Templates available: {plan.templates.length}</li>
-        <li>Sessions logged for this day: {withDay.sessions.filter((s) => s.date === dateSafe && s.endedAt).length}</li>
-        <li>Total sessions in month so far: {withDay.sessions.filter((s) => s.ym === ym && s.endedAt).length}</li>
-      </ul>
-
-      <p style={{ opacity: 0.8 }}>
-        v1 note: task outcomes apply sticky month statuses (GREEN never downgrades; MVP keeps YELLOW too).
-      </p>
     </div>
   );
 }
