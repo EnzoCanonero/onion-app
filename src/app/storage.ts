@@ -120,14 +120,13 @@ export function applyStatusToMonth(
   const existing = plan.tasks.find((t) => t.id === taskId);
   if (!existing) return state;
 
+  // v2: Toggle behavior - clicking the same outcome reverts to NONE
   const nextStatus =
-    existing.status === "GREEN"
-      ? "GREEN"
-      : outcome === "COMPLETED"
-        ? "GREEN"
-        : outcome === "NOT_COMPLETED"
-          ? "YELLOW"
-          : existing.status;
+    outcome === "COMPLETED"
+      ? existing.status === "GREEN" ? "NONE" : "GREEN"  // Toggle GREEN ↔ NONE
+      : outcome === "NOT_COMPLETED"
+        ? existing.status === "YELLOW" ? "NONE" : "YELLOW"  // Toggle YELLOW ↔ NONE
+        : existing.status;
 
   if (nextStatus === existing.status) return state;
 
@@ -157,12 +156,182 @@ export function setTaskOutcome(
   return next;
 }
 
+export function setDailyJournal(
+  state: AppStateV0,
+  date: DateISO,
+  journal: string | undefined
+): AppStateV0 {
+  const ym = ymFromDate(date);
+  const { state: withDay, day } = getOrCreateDay(state, date, ym);
+  return updateDay(withDay, { ...day, dailyJournal: journal });
+}
+
+export function setPendingNote(
+  state: AppStateV0,
+  date: DateISO,
+  note: string | undefined
+): AppStateV0 {
+  const ym = ymFromDate(date);
+  const { state: withDay, day } = getOrCreateDay(state, date, ym);
+  return updateDay(withDay, { ...day, pendingNote: note });
+}
+
 export function setShutdownNote(
   state: AppStateV0,
   date: DateISO,
-  note: { comment: string; pending: string } | undefined
+  note: string | undefined
 ): AppStateV0 {
   const ym = ymFromDate(date);
   const { state: withDay, day } = getOrCreateDay(state, date, ym);
   return updateDay(withDay, { ...day, shutdownNote: note });
+}
+
+// v2: Task tree editing functions
+
+export function updateTaskInMonth(
+  state: AppStateV0,
+  ym: YM,
+  taskId: string,
+  updates: Partial<Pick<TaskNode, "title" | "parentId" | "status">>
+): AppStateV0 {
+  const plan = getMonth(state, ym);
+  if (!plan) return state;
+
+  const nextTasks = plan.tasks.map((t) => (t.id === taskId ? { ...t, ...updates } : t));
+  return upsertMonth(state, { ...plan, tasks: nextTasks });
+}
+
+export function deleteTaskFromMonth(
+  state: AppStateV0,
+  ym: YM,
+  taskId: string,
+  cascadeChildren: boolean = true
+): AppStateV0 {
+  const plan = getMonth(state, ym);
+  if (!plan) return state;
+
+  let toDelete = new Set([taskId]);
+
+  if (cascadeChildren) {
+    // Find all descendants recursively
+    const findChildren = (parentId: string) => {
+      plan.tasks.forEach((t) => {
+        if (t.parentId === parentId && !toDelete.has(t.id)) {
+          toDelete.add(t.id);
+          findChildren(t.id);
+        }
+      });
+    };
+    findChildren(taskId);
+  }
+
+  const nextTasks = plan.tasks.filter((t) => !toDelete.has(t.id));
+  const nextSnapshot = plan.initialSnapshotTaskIds.filter((id) => !toDelete.has(id));
+
+  return upsertMonth(state, { ...plan, tasks: nextTasks, initialSnapshotTaskIds: nextSnapshot });
+}
+
+export function reorderTaskInMonth(
+  state: AppStateV0,
+  ym: YM,
+  taskId: string,
+  direction: "up" | "down"
+): AppStateV0 {
+  const plan = getMonth(state, ym);
+  if (!plan) return state;
+
+  const task = plan.tasks.find((t) => t.id === taskId);
+  if (!task) return state;
+
+  // Get siblings (tasks with same parentId)
+  const siblings = plan.tasks.filter((t) => t.parentId === task.parentId);
+  const currentIndex = siblings.findIndex((t) => t.id === taskId);
+
+  if (currentIndex === -1) return state;
+  if (direction === "up" && currentIndex === 0) return state;
+  if (direction === "down" && currentIndex === siblings.length - 1) return state;
+
+  const newIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
+  const swapTask = siblings[newIndex];
+
+  // Swap positions by reordering the entire tasks array
+  const nextTasks = plan.tasks.map((t) => {
+    if (t.id === taskId) return { ...t };
+    if (t.id === swapTask.id) return { ...t };
+    return t;
+  });
+
+  // Find actual indices in the full array and swap
+  const taskFullIndex = nextTasks.findIndex((t) => t.id === taskId);
+  const swapFullIndex = nextTasks.findIndex((t) => t.id === swapTask.id);
+
+  [nextTasks[taskFullIndex], nextTasks[swapFullIndex]] = [nextTasks[swapFullIndex], nextTasks[taskFullIndex]];
+
+  return upsertMonth(state, { ...plan, tasks: nextTasks });
+}
+
+export function moveTaskInMonth(
+  state: AppStateV0,
+  ym: YM,
+  taskId: string,
+  newParentId: string | null
+): AppStateV0 {
+  const plan = getMonth(state, ym);
+  if (!plan) return state;
+
+  // Prevent moving a task to be a child of itself or its descendants
+  if (newParentId) {
+    let checkParent: string | null = newParentId;
+    while (checkParent) {
+      if (checkParent === taskId) return state; // Circular reference detected
+      const parent = plan.tasks.find((t) => t.id === checkParent);
+      checkParent = parent?.parentId ?? null;
+    }
+  }
+
+  return updateTaskInMonth(state, ym, taskId, { parentId: newParentId });
+}
+
+// v2: Utility functions
+
+export function findPreviousDayEntry(state: AppStateV0, currentDate: DateISO, ym: YM): DayEntry | undefined {
+  const sorted = Object.values(state.days)
+    .filter((d) => d.date < currentDate && d.ym === ym)
+    .sort((a, b) => b.date.localeCompare(a.date));
+  return sorted[0];
+}
+
+export function findLastWorkingDay(state: AppStateV0, currentDate: DateISO, ym: YM): DayEntry | undefined {
+  const sorted = Object.values(state.days)
+    .filter((d) => d.date < currentDate && d.ym === ym && d.isWorkingDay === true)
+    .sort((a, b) => b.date.localeCompare(a.date));
+  return sorted[0];
+}
+
+export function activateWorkingDay(state: AppStateV0, date: DateISO): AppStateV0 {
+  const ym = ymFromDate(date);
+  const { state: withDay, day } = getOrCreateDay(state, date, ym);
+  return updateDay(withDay, { ...day, isWorkingDay: true });
+}
+
+export function formatTime(isoTimestamp: string): string {
+  try {
+    const date = new Date(isoTimestamp);
+    return date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+  } catch {
+    return "—";
+  }
+}
+
+export function getChildrenIds(tasks: TaskNode[], parentId: string | null): string[] {
+  return tasks.filter((t) => t.parentId === parentId).map((t) => t.id);
+}
+
+export function countDescendants(tasks: TaskNode[], taskId: string): number {
+  let count = 0;
+  const children = tasks.filter((t) => t.parentId === taskId);
+  children.forEach((child) => {
+    count += 1 + countDescendants(tasks, child.id);
+  });
+  return count;
 }

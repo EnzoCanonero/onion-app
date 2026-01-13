@@ -39,10 +39,13 @@ export type ProductivitySession = {
 export type DayEntry = {
   date: DateISO;
   ym: YM;
+  isWorkingDay?: boolean; // v2: true if user activated this day as working day
   primaryTaskId?: string;
   secondaryTaskIds: string[];
   outcomeByTaskId: Record<string, "COMPLETED" | "NOT_COMPLETED">;
-  shutdownNote?: { comment: string; pending: string } | { done: string; pending: string; nextStep: string };
+  dailyJournal?: string; // v2: persistent daily notes
+  pendingNote?: string; // v2: what's pending for next day
+  shutdownNote?: string; // v2: end-of-day note shown next day
   activeSessionId?: string; // enforces "one active running session"
 };
 
