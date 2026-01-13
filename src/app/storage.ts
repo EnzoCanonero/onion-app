@@ -335,3 +335,33 @@ export function countDescendants(tasks: TaskNode[], taskId: string): number {
   });
   return count;
 }
+
+// v3: Date navigation utility functions
+
+export function getTodayDate(): DateISO {
+  return new Date().toISOString().slice(0, 10) as DateISO;
+}
+
+export function isValidDateISO(dateStr: string): boolean {
+  const regex = /^\d{4}-\d{2}-\d{2}$/;
+  if (!regex.test(dateStr)) return false;
+  const date = new Date(dateStr);
+  return date.toISOString().slice(0, 10) === dateStr;
+}
+
+export function getCurrentYM(): YM {
+  return getTodayDate().slice(0, 7) as YM;
+}
+
+export function formatDateDisplay(date: DateISO): string {
+  try {
+    return new Date(date).toLocaleDateString('en-US', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric'
+    });
+  } catch {
+    return date;
+  }
+}

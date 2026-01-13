@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import type { YM } from "../app/types";
 import { loadState, getMonth } from "../app/storage";
+import EmptyMonthPanel from "../components/EmptyMonthPanel";
 
 export default function MonthlyReportPage() {
   const { ym } = useParams();
@@ -18,37 +19,7 @@ export default function MonthlyReportPage() {
         <p style={{ marginTop: -8, marginBottom: 24, opacity: 0.7 }}>
           Track your progress and productivity metrics
         </p>
-
-        <div
-          style={{
-            textAlign: "center",
-            padding: 48,
-            border: "2px dashed #ddd",
-            borderRadius: 12,
-            backgroundColor: "#f9f9f9",
-          }}
-        >
-          <p style={{ fontSize: 16, marginBottom: 24, opacity: 0.8 }}>
-            No monthly plan found for <strong>{ymSafe}</strong>
-          </p>
-          <Link
-            to={`/month/${ymSafe}/setup`}
-            style={{
-              padding: "12px 24px",
-              fontSize: 16,
-              fontWeight: 600,
-              backgroundColor: "#2196f3",
-              color: "white",
-              border: "none",
-              borderRadius: 8,
-              textDecoration: "none",
-              display: "inline-block",
-              boxShadow: "0 4px 6px rgba(0,0,0,0.1)",
-            }}
-          >
-            ⚙️ Go to Month Setup
-          </Link>
-        </div>
+        <EmptyMonthPanel ym={ymSafe} showCreateButton={false} />
       </div>
     );
   }
