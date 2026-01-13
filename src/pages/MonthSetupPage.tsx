@@ -5,6 +5,7 @@ import type { MonthPlan, YM } from "../app/types";
 import { loadState, saveState, getMonth, upsertMonth, makeId } from "../app/storage";
 import TaskTreeEditor from "../components/TaskTreeEditor";
 import FocusTemplateEditor from "../components/FocusTemplateEditor";
+import EmptyMonthPanel from "../components/EmptyMonthPanel";
 
 function seedPlan(ym: YM): MonthPlan {
   const t1 = { id: makeId("task"), title: "Main: Write monthly plan", parentId: null, status: "NONE" as const };
@@ -80,18 +81,8 @@ export default function MonthSetupPage() {
       </p>
 
       {!plan ? (
-        <div
-          style={{
-            textAlign: "center",
-            padding: 48,
-            border: "2px dashed #ddd",
-            borderRadius: 12,
-            backgroundColor: "#f9f9f9",
-          }}
-        >
-          <p style={{ fontSize: 16, marginBottom: 24, opacity: 0.8 }}>
-            No monthly plan found for <strong>{ymSafe}</strong>
-          </p>
+        <>
+          <EmptyMonthPanel ym={ymSafe} showCreateButton={false} />
           <button
             onClick={create}
             style={{
@@ -104,11 +95,13 @@ export default function MonthSetupPage() {
               borderRadius: 8,
               cursor: "pointer",
               boxShadow: "0 4px 6px rgba(0,0,0,0.1)",
+              display: "block",
+              margin: "0 auto",
             }}
           >
             ✨ Create Month Plan
           </button>
-        </div>
+        </>
       ) : (
         <>
           {/* Stats & Controls */}

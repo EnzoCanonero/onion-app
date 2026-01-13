@@ -21,6 +21,7 @@ import {
 } from "../app/storage";
 import TaskSelectionModal from "../components/TaskSelectionModal";
 import FocusTemplateCard from "../components/FocusTemplateCard";
+import EmptyMonthPanel from "../components/EmptyMonthPanel";
 
 export default function DailyAgendaPage() {
   const { date } = useParams();
@@ -35,13 +36,12 @@ export default function DailyAgendaPage() {
 
   const plan = getMonth(state, ym);
 
-  // Active month rule (v0): redirect if no plan exists
+  // Active month rule (v3): show empty panel if no plan exists
   if (!plan) {
     return (
       <div>
         <h2>Daily Agenda: {dateSafe}</h2>
-        <p>No MonthPlan for <b>{ym}</b>. You need to create it first.</p>
-        <button onClick={() => nav(`/month/${ym}/setup`)}>Go to Month Setup</button>
+        <EmptyMonthPanel ym={ym} />
       </div>
     );
   }
@@ -147,9 +147,7 @@ export default function DailyAgendaPage() {
     mutate((s0) => setShutdownNote(s0, dateSafe, text || undefined));
   };
 
-  const clearJournal = () => mutate((s0) => setDailyJournal(s0, dateSafe, undefined));
   const clearPending = () => mutate((s0) => setPendingNote(s0, dateSafe, undefined));
-  const clearShutdown = () => mutate((s0) => setShutdownNote(s0, dateSafe, undefined));
 
   return (
     <div>
@@ -495,40 +493,26 @@ export default function DailyAgendaPage() {
 
           {/* v2: Daily Journal - Persistent notes */}
           <h3 style={{ marginTop: 24 }}>📝 Daily Journal</h3>
-          <div style={{ display: "grid", gap: 10 }}>
-            <textarea
-              rows={6}
-              placeholder="Daily notes, thoughts, observations..."
-              value={day.dailyJournal ?? ""}
-              onChange={(e) => updateJournal(e.target.value)}
-              style={{ padding: 10, fontSize: 14, lineHeight: 1.6 }}
-            />
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={clearJournal} disabled={!day.dailyJournal}>
-                Clear Journal
-              </button>
-            </div>
-          </div>
+          <textarea
+            rows={12}
+            placeholder="Daily notes, thoughts, observations..."
+            value={day.dailyJournal ?? ""}
+            onChange={(e) => updateJournal(e.target.value)}
+            style={{ padding: 10, fontSize: 14, lineHeight: 1.6, width: "100%", boxSizing: "border-box" }}
+          />
 
           {/* v2: Shutdown Note - Full shutdown summary */}
           <h3 style={{ marginTop: 24 }}>🔒 Shutdown Note</h3>
           <p style={{ fontSize: 13, color: "#666", marginTop: 0 }}>
             Complete shutdown summary (shown next working day)
           </p>
-          <div style={{ display: "grid", gap: 10 }}>
-            <textarea
-              rows={4}
-              placeholder="Full shutdown summary, reflections, detailed notes..."
-              value={day.shutdownNote ?? ""}
-              onChange={(e) => updateShutdown(e.target.value)}
-              style={{ padding: 10, fontSize: 14, lineHeight: 1.6 }}
-            />
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={clearShutdown} disabled={!day.shutdownNote}>
-                Clear Shutdown Note
-              </button>
-            </div>
-          </div>
+          <textarea
+            rows={4}
+            placeholder="Full shutdown summary, reflections, detailed notes..."
+            value={day.shutdownNote ?? ""}
+            onChange={(e) => updateShutdown(e.target.value)}
+            style={{ padding: 10, fontSize: 14, lineHeight: 1.6, width: "100%", boxSizing: "border-box" }}
+          />
 
           {/* v2: Focus Sessions - Moved to bottom */}
           <h3 style={{ marginTop: 32 }}>⏱️ Focus Sessions</h3>
