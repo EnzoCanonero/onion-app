@@ -1,12 +1,11 @@
 import { useMemo, useState } from "react";
-import { useParams, Link } from "react-router-dom";
-import type { YM } from "../app/types";
 import { loadState, getMonth } from "../app/storage";
+import { useDateNavigation } from "../contexts/DateNavigationContext";
 import EmptyMonthPanel from "../components/EmptyMonthPanel";
 
 export default function MonthlyReportPage() {
-  const { ym } = useParams();
-  const ymSafe = (ym ?? "") as YM;
+  const { selectedMonth } = useDateNavigation();  // From context
+  const ymSafe = selectedMonth;
 
   const [tick] = useState(0);
   const state = useMemo(() => loadState(), [tick]);

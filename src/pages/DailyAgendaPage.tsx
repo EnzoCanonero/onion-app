@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
-import type { DateISO, MeetingEntry } from "../app/types";
+import type { MeetingEntry } from "../app/types";
 import {
   loadState,
   saveState,
@@ -27,14 +26,15 @@ import {
   toggleEmailChecked,
   toggleBureaucraticsCompleted,
 } from "../app/storage";
+import { useDateNavigation } from "../contexts/DateNavigationContext";
 import TaskSelectionModal from "../components/TaskSelectionModal";
 import FocusTemplateCard from "../components/FocusTemplateCard";
 import EmptyMonthPanel from "../components/EmptyMonthPanel";
 import MeetingFormModal from "../components/MeetingFormModal";
 
 export default function DailyAgendaPage() {
-  const { date } = useParams();
-  const dateSafe = (date ?? "") as DateISO;
+  const { selectedDate } = useDateNavigation();  // From context
+  const dateSafe = selectedDate;
   const ym = ymFromDate(dateSafe);
 
   const [tick, setTick] = useState(0);
