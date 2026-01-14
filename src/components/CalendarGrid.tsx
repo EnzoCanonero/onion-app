@@ -31,7 +31,12 @@ function generateCalendarGrid(ym: YM, selectedDate: DateISO): DayCell[] {
   for (let i = 0; i < 42; i++) {
     const current = new Date(startDate);
     current.setDate(startDate.getDate() + i);
-    const dateISO = current.toISOString().slice(0, 10) as DateISO;
+
+    // Format date manually to avoid timezone issues with toISOString()
+    const y = current.getFullYear();
+    const m = String(current.getMonth() + 1).padStart(2, '0');
+    const d = String(current.getDate()).padStart(2, '0');
+    const dateISO = `${y}-${m}-${d}` as DateISO;
 
     cells.push({
       date: dateISO,
