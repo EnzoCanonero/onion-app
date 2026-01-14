@@ -6,11 +6,12 @@ import type {
   DayEntry,
   ProductivitySession,
   TaskNode,
+  MeetingEntry,
 } from "./types";
 
 const KEY = "focustree.state";
 
-const emptyState: AppStateV0 = { version: 0, months: {}, days: {}, sessions: [] };
+const emptyState: AppStateV0 = { version: 0, months: {}, days: {}, sessions: [], meetings: [] };
 
 export function loadState(): AppStateV0 {
   try {
@@ -18,6 +19,12 @@ export function loadState(): AppStateV0 {
     if (!raw) return emptyState;
     const parsed = JSON.parse(raw) as AppStateV0;
     if (parsed?.version !== 0) return emptyState;
+
+    // v4 migration: Add meetings array if not present
+    if (!parsed.meetings) {
+      parsed.meetings = [];
+    }
+
     return parsed;
   } catch {
     return emptyState;
@@ -390,4 +397,45 @@ export function formatDateDisplay(date: DateISO): string {
   } catch {
     return date;
   }
+}
+
+// v4: Meeting management functions
+
+export function addMeeting(state: AppStateV0, meeting: MeetingEntry): AppStateV0 {
+  return { ...state, meetings: [meeting, ...state.meetings] };
+}
+
+export function updateMeeting(
+  state: AppStateV0,
+  meetingId: string,
+  updates: Partial<Omit<MeetingEntry, 'id' | 'createdAt'>>
+): AppStateV0 {
+  return {
+    ...state,
+    meetings: state.meetings.map((m) =>
+      m.id === meetingId ? { ...m, ...updates } : m
+    ),
+  };
+}
+
+export function deleteMeeting(state: AppStateV0, meetingId: string): AppStateV0 {
+  return {
+    ...state,
+    meetings: state.meetings.filter((m) => m.id !== meetingId),
+  };
+}
+
+export function getMeetingsForDate(meetings: MeetingEntry[], date: DateISO): MeetingEntry[] {
+  return meetings
+    .filter((m) => m.date === date)
+    .sort((a, b) => a.time.localeCompare(b.time));
+}
+
+export function toggleMeetingAttended(state: AppStateV0, meetingId: string): AppStateV0 {
+  return {
+    ...state,
+    meetings: state.meetings.map((m) =>
+      m.id === meetingId ? { ...m, attended: !m.attended } : m
+    ),
+  };
 }
