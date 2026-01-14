@@ -314,6 +314,32 @@ export function activateWorkingDay(state: AppStateV0, date: DateISO): AppStateV0
   return updateDay(withDay, { ...day, isWorkingDay: true });
 }
 
+// v4: Close/Reopen day functionality
+export function closeDay(state: AppStateV0, date: DateISO): AppStateV0 {
+  const ym = ymFromDate(date);
+  const { state: withDay, day } = getOrCreateDay(state, date, ym);
+
+  // End any active session before closing
+  let next = withDay;
+  if (day.activeSessionId) {
+    const session = next.sessions.find((s) => s.id === day.activeSessionId);
+    if (session?.startedAt) {
+      const endedAt = new Date().toISOString();
+      const ms = Date.parse(endedAt) - Date.parse(session.startedAt);
+      const minutes = Math.max(0, Math.round(ms / 60000));
+      next = updateSession(next, day.activeSessionId, { endedAt, actualMinutes: minutes });
+    }
+  }
+
+  return updateDay(next, { ...day, isClosed: true, activeSessionId: undefined });
+}
+
+export function reopenDay(state: AppStateV0, date: DateISO): AppStateV0 {
+  const ym = ymFromDate(date);
+  const { state: withDay, day } = getOrCreateDay(state, date, ym);
+  return updateDay(withDay, { ...day, isClosed: false });
+}
+
 export function formatTime(isoTimestamp: string): string {
   try {
     const date = new Date(isoTimestamp);
