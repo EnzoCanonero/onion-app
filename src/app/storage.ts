@@ -347,6 +347,23 @@ export function reopenDay(state: AppStateV0, date: DateISO): AppStateV0 {
   return updateDay(withDay, { ...day, isClosed: false });
 }
 
+// v5: Close/Reopen month functionality
+export function closeMonth(state: AppStateV0, ym: YM): AppStateV0 {
+  const plan = getMonth(state, ym);
+  if (!plan) return state;
+
+  const closedPlan: MonthPlan = { ...plan, isClosed: true };
+  return upsertMonth(state, closedPlan);
+}
+
+export function reopenMonth(state: AppStateV0, ym: YM): AppStateV0 {
+  const plan = getMonth(state, ym);
+  if (!plan) return state;
+
+  const reopenedPlan: MonthPlan = { ...plan, isClosed: false };
+  return upsertMonth(state, reopenedPlan);
+}
+
 export function formatTime(isoTimestamp: string): string {
   try {
     const date = new Date(isoTimestamp);
