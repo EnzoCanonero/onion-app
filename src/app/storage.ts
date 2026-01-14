@@ -439,3 +439,17 @@ export function toggleMeetingAttended(state: AppStateV0, meetingId: string): App
     ),
   };
 }
+
+// v4: Daily reminders toggle functions
+
+export function toggleEmailChecked(state: AppStateV0, date: DateISO): AppStateV0 {
+  const ym = ymFromDate(date);
+  const { state: withDay, day } = getOrCreateDay(state, date, ym);
+  return updateDay(withDay, { ...day, emailChecked: !day.emailChecked });
+}
+
+export function toggleBureaucraticsCompleted(state: AppStateV0, date: DateISO): AppStateV0 {
+  const ym = ymFromDate(date);
+  const { state: withDay, day } = getOrCreateDay(state, date, ym);
+  return updateDay(withDay, { ...day, bureaucraticsCompleted: !day.bureaucraticsCompleted });
+}
