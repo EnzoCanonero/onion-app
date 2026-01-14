@@ -4,7 +4,6 @@ import { DateNavigationProvider, useDateNavigation } from "./contexts/DateNaviga
 import { getCurrentYM } from "./app/storage";
 import MonthSetupPage from "./pages/MonthSetupPage";
 import DailyAgendaPage from "./pages/DailyAgendaPage";
-import MonthlyReportPage from "./pages/MonthlyReportPage";
 import DatePickerButton from "./components/DatePickerButton";
 import DatePickerModal from "./components/DatePickerModal";
 
@@ -22,7 +21,6 @@ function Header() {
         <nav style={{ display: "flex", gap: 12 }}>
           <Link to={`/month/${selectedMonth}/setup`}>Month Setup</Link>
           <Link to={`/day/${selectedDate}`}>Daily</Link>
-          <Link to={`/month/${selectedMonth}/report`}>Report</Link>
         </nav>
       </header>
 
@@ -48,7 +46,6 @@ export default function App() {
           <Route path="/" element={<Navigate to={`/month/${getCurrentYM()}/setup`} replace />} />
           <Route path="/month/:ym/setup" element={<MonthSetupPage />} />
           <Route path="/day/:date" element={<DailyAgendaPage />} />
-          <Route path="/month/:ym/report" element={<MonthlyReportPage />} />
           <Route path="*" element={<div>Not found.</div>} />
         </Routes>
       </div>
