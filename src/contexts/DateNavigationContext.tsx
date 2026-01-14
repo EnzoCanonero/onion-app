@@ -16,50 +16,65 @@ export function DateNavigationProvider({ children }: { children: React.ReactNode
   const location = useLocation();
   const navigate = useNavigate();
 
-  // Maintain selected date in state to persist across route changes
-  const [persistedDate, setPersistedDate] = useState<DateISO>(getTodayDate());
-
-  // Extract date from URL params
-  const selectedDate = useMemo(() => {
-    // Parse /day/:date or /month/:ym routes
+  // Extract initial date from URL params (for deep linking)
+  const initialDate = useMemo(() => {
     const match = location.pathname.match(/\/(day|month)\/([^/]+)/);
     if (match) {
       const param = match[2];
-      // If it's a date (YYYY-MM-DD), use it and update persisted date
+      // If it's a date (YYYY-MM-DD), use it
       if (param.length === 10 && isValidDateISO(param)) {
         return param as DateISO;
       }
-      // If it's a month (YYYY-MM), use the persisted date if it's in the same month
+      // If it's a month (YYYY-MM), use first day of the month
       if (param.length === 7) {
-        const persistedMonth = ymFromDate(persistedDate);
-        if (persistedMonth === param) {
-          return persistedDate;
-        }
-        // Otherwise use first day of the month and update persisted date
         return `${param}-01` as DateISO;
       }
     }
     // Default to today
     return getTodayDate();
-  }, [location.pathname, persistedDate]);
+  }, []); // Only run on mount
 
-  // Update persisted date when selectedDate changes
+  // Context state is now the primary source of truth
+  const [selectedDate, setSelectedDateState] = useState<DateISO>(initialDate);
+  const [selectedMonth, setSelectedMonthState] = useState<YM>(ymFromDate(initialDate));
+
+  // Update URL to match context state (for deep linking / bookmarking)
   useEffect(() => {
-    setPersistedDate(selectedDate);
-  }, [selectedDate]);
+    const currentPath = location.pathname;
 
-  const selectedMonth = useMemo(() => ymFromDate(selectedDate), [selectedDate]);
+    if (currentPath.startsWith('/day/')) {
+      // On daily page, keep URL in sync with selected date
+      const expectedPath = `/day/${selectedDate}`;
+      if (currentPath !== expectedPath) {
+        navigate(expectedPath, { replace: true });
+      }
+    } else if (currentPath.includes('/month/')) {
+      // On month page, keep URL in sync with selected month
+      const pageType = currentPath.endsWith('/setup') ? 'setup' : 'report';
+      const expectedPath = `/month/${selectedMonth}/${pageType}`;
+      if (currentPath !== expectedPath) {
+        navigate(expectedPath, { replace: true });
+      }
+    }
+  }, [selectedDate, selectedMonth, location.pathname, navigate]);
 
   const setSelectedDate = (date: DateISO) => {
     if (!isValidDateISO(date)) {
       console.warn("Invalid date:", date);
       return;
     }
-    navigate(`/day/${date}`);
+    setSelectedDateState(date);
+
+    // Update selected month to match the new date
+    const newMonth = date.slice(0, 7) as YM;
+    setSelectedMonthState(newMonth);
+
+    // NO NAVIGATION - just state update
   };
 
   const goToToday = () => {
-    setSelectedDate(getTodayDate());
+    const today = getTodayDate();
+    setSelectedDate(today);  // Now just updates state
   };
 
   const value = { selectedDate, selectedMonth, setSelectedDate, goToToday };

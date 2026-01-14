@@ -1,8 +1,8 @@
 
 import { useMemo, useState } from "react";
-import { useParams, Link } from "react-router-dom";
 import type { MonthPlan, YM } from "../app/types";
 import { loadState, saveState, getMonth, upsertMonth, makeId } from "../app/storage";
+import { useDateNavigation } from "../contexts/DateNavigationContext";
 import TaskTreeEditor from "../components/TaskTreeEditor";
 import FocusTemplateEditor from "../components/FocusTemplateEditor";
 import EmptyMonthPanel from "../components/EmptyMonthPanel";
@@ -23,8 +23,8 @@ function seedPlan(ym: YM): MonthPlan {
 }
 
 export default function MonthSetupPage() {
-  const { ym } = useParams();
-  const ymSafe = (ym ?? "") as YM;
+  const { selectedMonth } = useDateNavigation();  // From context
+  const ymSafe = selectedMonth;
 
   const [tick, setTick] = useState(0);
   const state = useMemo(() => loadState(), [tick]);
