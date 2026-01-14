@@ -226,31 +226,6 @@ export default function DailyAgendaPage() {
             {dateSafe}
           </p>
 
-          {/* v4: Daily Reminders Section (Closed View) */}
-          <div style={{ marginBottom: 32 }}>
-            <h3 style={{ fontSize: 20, marginBottom: 16, color: "#5d4037", borderBottom: "2px solid #d7ccc8", paddingBottom: 8 }}>
-              Daily Reminders
-            </h3>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 16 }}>
-                  {day.emailChecked ? "✓" : "☐"}
-                </span>
-                <span style={{ opacity: day.emailChecked ? 1 : 0.5 }}>
-                  Don't forget to read your email
-                </span>
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 16 }}>
-                  {day.bureaucraticsCompleted ? "✓" : "☐"}
-                </span>
-                <span style={{ opacity: day.bureaucraticsCompleted ? 1 : 0.5 }}>
-                  Carry out your bureaucratics
-                </span>
-              </div>
-            </div>
-          </div>
-
           {/* Completed Tasks Section */}
           <div style={{ marginBottom: 32 }}>
             <h3 style={{ fontSize: 20, marginBottom: 16, color: "#5d4037", borderBottom: "2px solid #d7ccc8", paddingBottom: 8 }}>
@@ -547,24 +522,18 @@ export default function DailyAgendaPage() {
           {/* All sections below only show when day is activated */}
 
           {/* v4: Daily Reminders Section */}
-          <div
-            style={{
-              backgroundColor: "#fff9e6",
-              border: "2px solid #ffc107",
-              borderRadius: 8,
-              padding: 16,
-              marginBottom: 24,
-            }}
-          >
-            <h3 style={{ marginTop: 0, marginBottom: 12, fontSize: 16 }}>📋 Daily Reminders</h3>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ marginBottom: 24 }}>
+            <p style={{ fontSize: 15, lineHeight: 1.6, color: "#555", marginBottom: 12 }}>
+              Hey! Before diving in, just a quick reminder to:
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, marginLeft: 8 }}>
               <label
                 style={{
                   display: "flex",
                   alignItems: "center",
-                  gap: 8,
+                  gap: 10,
                   cursor: "pointer",
-                  fontSize: 14,
+                  fontSize: 15,
                 }}
               >
                 <input
@@ -579,15 +548,15 @@ export default function DailyAgendaPage() {
                     cursor: "pointer",
                   }}
                 />
-                <span>Don't forget to read your email</span>
+                <span>Check your email 📧</span>
               </label>
               <label
                 style={{
                   display: "flex",
                   alignItems: "center",
-                  gap: 8,
+                  gap: 10,
                   cursor: "pointer",
-                  fontSize: 14,
+                  fontSize: 15,
                 }}
               >
                 <input
@@ -602,7 +571,7 @@ export default function DailyAgendaPage() {
                     cursor: "pointer",
                   }}
                 />
-                <span>Carry out your bureaucratics</span>
+                <span>Handle those bureaucratic tasks 📋</span>
               </label>
             </div>
           </div>
