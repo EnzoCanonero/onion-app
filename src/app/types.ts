@@ -24,6 +24,7 @@ export type MonthPlan = {
   templates: FocusTemplate[];
   initialSnapshotTaskIds: string[];
   createdAt: string; // ISO timestamp
+  isClosed?: boolean; // v5: true if month is closed (read-only report mode)
 };
 
 export type ProductivitySession = {
