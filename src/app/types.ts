@@ -41,6 +41,8 @@ export type DayEntry = {
   ym: YM;
   isWorkingDay?: boolean; // v2: true if user activated this day as working day
   isClosed?: boolean; // v4: true if user closed the day (read-only mode)
+  emailChecked?: boolean; // v4: true if email was checked
+  bureaucraticsCompleted?: boolean; // v4: true if bureaucratic tasks completed
   primaryTaskId?: string;
   secondaryTaskIds: string[];
   outcomeByTaskId: Record<string, "COMPLETED" | "NOT_COMPLETED">;

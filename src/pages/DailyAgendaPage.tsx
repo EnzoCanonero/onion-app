@@ -24,6 +24,8 @@ import {
   deleteMeeting,
   getMeetingsForDate,
   toggleMeetingAttended,
+  toggleEmailChecked,
+  toggleBureaucraticsCompleted,
 } from "../app/storage";
 import TaskSelectionModal from "../components/TaskSelectionModal";
 import FocusTemplateCard from "../components/FocusTemplateCard";
@@ -223,6 +225,31 @@ export default function DailyAgendaPage() {
           <p style={{ textAlign: "center", marginBottom: 32, opacity: 0.7, fontSize: 16 }}>
             {dateSafe}
           </p>
+
+          {/* v4: Daily Reminders Section (Closed View) */}
+          <div style={{ marginBottom: 32 }}>
+            <h3 style={{ fontSize: 20, marginBottom: 16, color: "#5d4037", borderBottom: "2px solid #d7ccc8", paddingBottom: 8 }}>
+              Daily Reminders
+            </h3>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 16 }}>
+                  {day.emailChecked ? "✓" : "☐"}
+                </span>
+                <span style={{ opacity: day.emailChecked ? 1 : 0.5 }}>
+                  Don't forget to read your email
+                </span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 16 }}>
+                  {day.bureaucraticsCompleted ? "✓" : "☐"}
+                </span>
+                <span style={{ opacity: day.bureaucraticsCompleted ? 1 : 0.5 }}>
+                  Carry out your bureaucratics
+                </span>
+              </div>
+            </div>
+          </div>
 
           {/* Completed Tasks Section */}
           <div style={{ marginBottom: 32 }}>
@@ -518,6 +545,68 @@ export default function DailyAgendaPage() {
       ) : (
         <>
           {/* All sections below only show when day is activated */}
+
+          {/* v4: Daily Reminders Section */}
+          <div
+            style={{
+              backgroundColor: "#fff9e6",
+              border: "2px solid #ffc107",
+              borderRadius: 8,
+              padding: 16,
+              marginBottom: 24,
+            }}
+          >
+            <h3 style={{ marginTop: 0, marginBottom: 12, fontSize: 16 }}>📋 Daily Reminders</h3>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  cursor: "pointer",
+                  fontSize: 14,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={day.emailChecked ?? false}
+                  onChange={() => {
+                    mutate((s0) => toggleEmailChecked(s0, dateSafe));
+                  }}
+                  style={{
+                    width: 18,
+                    height: 18,
+                    cursor: "pointer",
+                  }}
+                />
+                <span>Don't forget to read your email</span>
+              </label>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  cursor: "pointer",
+                  fontSize: 14,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={day.bureaucraticsCompleted ?? false}
+                  onChange={() => {
+                    mutate((s0) => toggleBureaucraticsCompleted(s0, dateSafe));
+                  }}
+                  style={{
+                    width: 18,
+                    height: 18,
+                    cursor: "pointer",
+                  }}
+                />
+                <span>Carry out your bureaucratics</span>
+              </label>
+            </div>
+          </div>
+
           <h3>Daily Tasks</h3>
 
           {/* v2: Task Selection Modal */}
