@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
-import type { DateISO } from "../app/types";
+import type { DateISO, MeetingEntry } from "../app/types";
 import {
   loadState,
   saveState,
@@ -19,10 +19,16 @@ import {
   activateWorkingDay,
   closeDay,
   reopenDay,
+  addMeeting,
+  updateMeeting,
+  deleteMeeting,
+  getMeetingsForDate,
+  toggleMeetingAttended,
 } from "../app/storage";
 import TaskSelectionModal from "../components/TaskSelectionModal";
 import FocusTemplateCard from "../components/FocusTemplateCard";
 import EmptyMonthPanel from "../components/EmptyMonthPanel";
+import MeetingFormModal from "../components/MeetingFormModal";
 
 export default function DailyAgendaPage() {
   const { date } = useParams();
@@ -154,6 +160,42 @@ export default function DailyAgendaPage() {
     mutate((s0) => reopenDay(s0, dateSafe));
   };
 
+  // v4: Meeting handlers
+  const [showMeetingForm, setShowMeetingForm] = useState(false);
+  const [editingMeeting, setEditingMeeting] = useState<MeetingEntry | undefined>();
+
+  const dayMeetings = useMemo(
+    () => getMeetingsForDate(state.meetings, dateSafe),
+    [state.meetings, dateSafe]
+  );
+
+  const handleSaveMeeting = (meetingData: Omit<MeetingEntry, "id" | "createdAt">) => {
+    mutate((s0) => {
+      if (editingMeeting) {
+        return updateMeeting(s0, editingMeeting.id, meetingData);
+      } else {
+        const meeting: MeetingEntry = {
+          ...meetingData,
+          id: makeId("meeting"),
+          createdAt: new Date().toISOString(),
+        };
+        return addMeeting(s0, meeting);
+      }
+    });
+    setShowMeetingForm(false);
+    setEditingMeeting(undefined);
+  };
+
+  const handleDeleteMeeting = (meetingId: string) => {
+    if (confirm("Delete this meeting?")) {
+      mutate((s0) => deleteMeeting(s0, meetingId));
+    }
+  };
+
+  const handleToggleAttended = (meetingId: string) => {
+    mutate((s0) => toggleMeetingAttended(s0, meetingId));
+  };
+
   // v4: If day is closed, show journal-style read-only view
   if (day.isClosed && day.isWorkingDay) {
     const completedTasks = [
@@ -245,6 +287,45 @@ export default function DailyAgendaPage() {
               </div>
             ) : (
               <p style={{ fontStyle: "italic", opacity: 0.6 }}>No shutdown note for this day</p>
+            )}
+          </div>
+
+          {/* Meetings Section */}
+          <div style={{ marginBottom: 32 }}>
+            <h3 style={{ fontSize: 20, marginBottom: 16, color: "#5d4037", borderBottom: "2px solid #d7ccc8", paddingBottom: 8 }}>
+              Meetings
+            </h3>
+            {dayMeetings.length > 0 ? (
+              <div style={{ display: "grid", gap: 8 }}>
+                {dayMeetings.map((meeting) => (
+                  <div
+                    key={meeting.id}
+                    style={{
+                      padding: "8px 12px",
+                      backgroundColor: meeting.attended ? "#e8f5e9" : "#fff3e0",
+                      border: `1px solid ${meeting.attended ? "#4caf50" : "#ff9800"}`,
+                      borderRadius: 4,
+                      fontSize: 14,
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div>
+                        <span style={{ fontWeight: 500 }}>
+                          {meeting.attended ? "✓" : "⏳"} {meeting.title}
+                        </span>
+                        <span style={{ marginLeft: 8, opacity: 0.7 }}>({meeting.time})</span>
+                      </div>
+                    </div>
+                    {meeting.description && (
+                      <div style={{ marginTop: 4, fontSize: 13, opacity: 0.8, whiteSpace: "pre-wrap" }}>
+                        {meeting.description}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p style={{ fontStyle: "italic", opacity: 0.6 }}>No meetings scheduled for this day</p>
             )}
           </div>
 
@@ -650,6 +731,189 @@ export default function DailyAgendaPage() {
             ✏️ Edit Task Selection
           </button>
             </div>
+          )}
+
+          {/* v4: Meetings Section */}
+          <h3 style={{ marginTop: 32 }}>📅 Meetings</h3>
+          <div style={{ marginBottom: 24 }}>
+            {dayMeetings.length === 0 ? (
+              <div
+                style={{
+                  textAlign: "center",
+                  padding: 24,
+                  border: "2px dashed #ddd",
+                  borderRadius: 8,
+                }}
+              >
+                <p style={{ opacity: 0.6, marginBottom: 12 }}>No meetings scheduled</p>
+                <button
+                  onClick={() => setShowMeetingForm(true)}
+                  style={{
+                    padding: "10px 20px",
+                    fontSize: 14,
+                    fontWeight: 600,
+                    backgroundColor: "#2196f3",
+                    color: "white",
+                    border: "none",
+                    borderRadius: 6,
+                    cursor: "pointer",
+                  }}
+                >
+                  + Add Meeting
+                </button>
+              </div>
+            ) : (
+              <>
+                <div style={{ display: "grid", gap: 12 }}>
+                  {dayMeetings.map((meeting) => (
+                    <div
+                      key={meeting.id}
+                      style={{
+                        border: "2px solid #2196f3",
+                        borderRadius: 8,
+                        padding: 16,
+                        backgroundColor: "#e3f2fd",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "flex-start",
+                          marginBottom: 8,
+                        }}
+                      >
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>
+                            {meeting.title}
+                          </div>
+                          <div style={{ fontSize: 14, color: "#1976d2", fontWeight: 500 }}>
+                            🕒 {meeting.time}
+                          </div>
+                          <div style={{ display: "flex", alignItems: "center", marginTop: 8 }}>
+                            <label
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                cursor: "pointer",
+                                fontSize: 13,
+                                color: "#555",
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={meeting.attended || false}
+                                onChange={() => handleToggleAttended(meeting.id)}
+                                style={{
+                                  marginRight: 6,
+                                  cursor: "pointer",
+                                  width: 16,
+                                  height: 16,
+                                }}
+                              />
+                              Attended
+                            </label>
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <button
+                            onClick={() => {
+                              setEditingMeeting(meeting);
+                              setShowMeetingForm(true);
+                            }}
+                            style={{
+                              padding: "4px 10px",
+                              fontSize: 12,
+                              backgroundColor: "white",
+                              border: "1px solid #2196f3",
+                              borderRadius: 4,
+                              cursor: "pointer",
+                            }}
+                          >
+                            ✏️ Edit
+                          </button>
+                          <button
+                            onClick={() => handleDeleteMeeting(meeting.id)}
+                            style={{
+                              padding: "4px 10px",
+                              fontSize: 12,
+                              backgroundColor: "white",
+                              border: "1px solid #f44336",
+                              color: "#f44336",
+                              borderRadius: 4,
+                              cursor: "pointer",
+                            }}
+                          >
+                            🗑️
+                          </button>
+                        </div>
+                      </div>
+
+                      {meeting.link && (
+                        <div style={{ marginBottom: 8 }}>
+                          <a
+                            href={meeting.link}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{
+                              color: "#1976d2",
+                              fontSize: 13,
+                              textDecoration: "none",
+                              fontWeight: 500,
+                            }}
+                          >
+                            🔗 Join Meeting
+                          </a>
+                        </div>
+                      )}
+
+                      {meeting.description && (
+                        <div
+                          style={{
+                            fontSize: 13,
+                            color: "#555",
+                            whiteSpace: "pre-wrap",
+                            marginTop: 8,
+                            paddingTop: 8,
+                            borderTop: "1px solid #90caf9",
+                          }}
+                        >
+                          {meeting.description}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                <button
+                  onClick={() => setShowMeetingForm(true)}
+                  style={{
+                    padding: "8px 16px",
+                    fontSize: 14,
+                    backgroundColor: "white",
+                    border: "1px solid #2196f3",
+                    borderRadius: 6,
+                    cursor: "pointer",
+                    marginTop: 12,
+                  }}
+                >
+                  + Add Another Meeting
+                </button>
+              </>
+            )}
+          </div>
+
+          {/* Meeting Form Modal */}
+          {showMeetingForm && (
+            <MeetingFormModal
+              date={dateSafe}
+              meeting={editingMeeting}
+              onSave={handleSaveMeeting}
+              onCancel={() => {
+                setShowMeetingForm(false);
+                setEditingMeeting(undefined);
+              }}
+            />
           )}
 
           {/* v2: Daily Journal - Persistent notes */}

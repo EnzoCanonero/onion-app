@@ -50,9 +50,22 @@ export type DayEntry = {
   activeSessionId?: string; // enforces "one active running session"
 };
 
+export type MeetingEntry = {
+  id: string;
+  date: DateISO;
+  ym: YM;
+  title: string;
+  time: string; // "14:30" or "14:30-15:30"
+  link?: string;
+  description?: string;
+  attended?: boolean; // v4: true if meeting was attended
+  createdAt: string; // ISO timestamp
+};
+
 export type AppStateV0 = {
   version: 0;
   months: Record<string, MonthPlan>;
   days: Record<string, DayEntry>;
   sessions: ProductivitySession[];
+  meetings: MeetingEntry[]; // v4: meeting entries
 };
