@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useNavigate, useParams, Link } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import type { DateISO } from "../app/types";
 import {
   loadState,
@@ -14,10 +14,11 @@ import {
   setDayTasks,
   setTaskOutcome,
   setDailyJournal,
-  setPendingNote,
   setShutdownNote,
   findLastWorkingDay,
   activateWorkingDay,
+  closeDay,
+  reopenDay,
 } from "../app/storage";
 import TaskSelectionModal from "../components/TaskSelectionModal";
 import FocusTemplateCard from "../components/FocusTemplateCard";
@@ -28,10 +29,10 @@ export default function DailyAgendaPage() {
   const dateSafe = (date ?? "") as DateISO;
   const ym = ymFromDate(dateSafe);
 
-  const nav = useNavigate();
   const [tick, setTick] = useState(0);
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [showActivateModal, setShowActivateModal] = useState(false);
+  const [showCloseModal, setShowCloseModal] = useState(false);
   const state = useMemo(() => loadState(), [tick]);
 
   const plan = getMonth(state, ym);
@@ -139,15 +140,175 @@ export default function DailyAgendaPage() {
     mutate((s0) => setDailyJournal(s0, dateSafe, text || undefined));
   };
 
-  const updatePending = (text: string) => {
-    mutate((s0) => setPendingNote(s0, dateSafe, text || undefined));
-  };
-
   const updateShutdown = (text: string) => {
     mutate((s0) => setShutdownNote(s0, dateSafe, text || undefined));
   };
 
-  const clearPending = () => mutate((s0) => setPendingNote(s0, dateSafe, undefined));
+  // v4: Close/Reopen day handlers
+  const handleCloseDay = () => {
+    mutate((s0) => closeDay(s0, dateSafe));
+    setShowCloseModal(false);
+  };
+
+  const handleReopenDay = () => {
+    mutate((s0) => reopenDay(s0, dateSafe));
+  };
+
+  // v4: If day is closed, show journal-style read-only view
+  if (day.isClosed && day.isWorkingDay) {
+    const completedTasks = [
+      day.primaryTaskId ? { id: day.primaryTaskId, isPrimary: true } : null,
+      ...day.secondaryTaskIds.map((id) => ({ id, isPrimary: false })),
+    ]
+      .filter((t): t is { id: string; isPrimary: boolean } => t !== null)
+      .filter((t) => day.outcomeByTaskId[t.id] === "COMPLETED" || day.outcomeByTaskId[t.id] === "NOT_COMPLETED");
+
+    const completedSessions = state.sessions.filter((s) => s.date === dateSafe && s.endedAt);
+
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          backgroundColor: "#fef9e7",
+          padding: "32px 24px",
+          fontFamily: "Georgia, serif",
+        }}
+      >
+        <div style={{ maxWidth: 800, margin: "0 auto" }}>
+          <h2 style={{ textAlign: "center", marginBottom: 8, fontSize: 28, color: "#5d4037" }}>
+            Daily Report
+          </h2>
+          <p style={{ textAlign: "center", marginBottom: 32, opacity: 0.7, fontSize: 16 }}>
+            {dateSafe}
+          </p>
+
+          {/* Completed Tasks Section */}
+          <div style={{ marginBottom: 32 }}>
+            <h3 style={{ fontSize: 20, marginBottom: 16, color: "#5d4037", borderBottom: "2px solid #d7ccc8", paddingBottom: 8 }}>
+              Tasks Completed / In Progress
+            </h3>
+            {completedTasks.length === 0 ? (
+              <p style={{ fontStyle: "italic", opacity: 0.6 }}>No tasks logged for this day</p>
+            ) : (
+              <ul style={{ listStyleType: "none", padding: 0, margin: 0 }}>
+                {completedTasks.map((t) => {
+                  const task = tasksById.get(t.id);
+                  const outcome = day.outcomeByTaskId[t.id];
+                  return (
+                    <li
+                      key={t.id}
+                      style={{
+                        marginBottom: 12,
+                        padding: "8px 12px",
+                        backgroundColor: outcome === "COMPLETED" ? "#e8f5e9" : "#fff3e0",
+                        border: `1px solid ${outcome === "COMPLETED" ? "#4caf50" : "#ff9800"}`,
+                        borderRadius: 4,
+                      }}
+                    >
+                      <span style={{ fontWeight: t.isPrimary ? 700 : 500 }}>
+                        {outcome === "COMPLETED" ? "✓" : "⏳"} {task?.title ?? "Unknown Task"}
+                      </span>
+                      {t.isPrimary && (
+                        <span style={{ marginLeft: 8, fontSize: 11, color: "#f57c00", fontWeight: 600 }}>
+                          [PRIMARY]
+                        </span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+
+          {/* Daily Journal Section */}
+          <div style={{ marginBottom: 32 }}>
+            <h3 style={{ fontSize: 20, marginBottom: 16, color: "#5d4037", borderBottom: "2px solid #d7ccc8", paddingBottom: 8 }}>
+              Daily Journal
+            </h3>
+            {day.dailyJournal ? (
+              <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.8, fontSize: 15 }}>
+                {day.dailyJournal}
+              </div>
+            ) : (
+              <p style={{ fontStyle: "italic", opacity: 0.6 }}>No journal entry for this day</p>
+            )}
+          </div>
+
+          {/* Shutdown Note Section */}
+          <div style={{ marginBottom: 32 }}>
+            <h3 style={{ fontSize: 20, marginBottom: 16, color: "#5d4037", borderBottom: "2px solid #d7ccc8", paddingBottom: 8 }}>
+              Shutdown Note
+            </h3>
+            {day.shutdownNote ? (
+              <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.8, fontSize: 15 }}>
+                {day.shutdownNote}
+              </div>
+            ) : (
+              <p style={{ fontStyle: "italic", opacity: 0.6 }}>No shutdown note for this day</p>
+            )}
+          </div>
+
+          {/* Focus Sessions Summary */}
+          <div style={{ marginBottom: 32 }}>
+            <h3 style={{ fontSize: 20, marginBottom: 16, color: "#5d4037", borderBottom: "2px solid #d7ccc8", paddingBottom: 8 }}>
+              Focus Sessions
+            </h3>
+            {completedSessions.length > 0 ? (
+              <>
+                <div style={{ display: "grid", gap: 8 }}>
+                  {completedSessions.map((session) => {
+                    const template = plan?.templates.find((t) => t.id === session.templateId);
+                    return (
+                      <div
+                        key={session.id}
+                        style={{
+                          padding: "8px 12px",
+                          backgroundColor: "#e3f2fd",
+                          border: "1px solid #90caf9",
+                          borderRadius: 4,
+                          display: "flex",
+                          justifyContent: "space-between",
+                          fontSize: 14,
+                        }}
+                      >
+                        <span style={{ fontWeight: 500 }}>{template?.title ?? "Unknown Session"}</span>
+                        <span style={{ opacity: 0.8 }}>{session.actualMinutes} min</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{ marginTop: 12, fontSize: 14, fontWeight: 600, color: "#5d4037" }}>
+                  Total: {completedSessions.reduce((sum, s) => sum + (s.actualMinutes || 0), 0)} minutes
+                </div>
+              </>
+            ) : (
+              <p style={{ fontStyle: "italic", opacity: 0.6 }}>No focus sessions recorded for this day</p>
+            )}
+          </div>
+
+          {/* Reopen Day Button */}
+          <div style={{ textAlign: "center", marginTop: 48, paddingTop: 24, borderTop: "1px solid #d7ccc8" }}>
+            <button
+              onClick={handleReopenDay}
+              style={{
+                padding: "12px 24px",
+                fontSize: 14,
+                fontWeight: 600,
+                backgroundColor: "#ff9800",
+                color: "white",
+                border: "none",
+                borderRadius: 6,
+                cursor: "pointer",
+                boxShadow: "0 2px 4px rgba(0,0,0,0.2)",
+              }}
+            >
+              🔓 Reopen Day for Editing
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -528,6 +689,95 @@ export default function DailyAgendaPage() {
               />
             ))}
           </div>
+
+          {/* v4: Close Day Button */}
+          <div style={{ marginTop: 48, paddingTop: 24, borderTop: "2px solid #e0e0e0", textAlign: "center" }}>
+            <button
+              onClick={() => setShowCloseModal(true)}
+              style={{
+                padding: "16px 32px",
+                fontSize: 16,
+                fontWeight: 600,
+                backgroundColor: "#9c27b0",
+                color: "white",
+                border: "none",
+                borderRadius: 8,
+                cursor: "pointer",
+                boxShadow: "0 4px 6px rgba(0,0,0,0.1)",
+              }}
+            >
+              🔒 Close Day
+            </button>
+            <p style={{ fontSize: 13, color: "#666", marginTop: 8 }}>
+              Mark the day as complete and lock it for viewing
+            </p>
+          </div>
+
+          {/* Close Day Confirmation Modal */}
+          {showCloseModal && (
+            <div
+              style={{
+                position: "fixed",
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                backgroundColor: "rgba(0,0,0,0.5)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                zIndex: 1000,
+              }}
+              onClick={() => setShowCloseModal(false)}
+            >
+              <div
+                style={{
+                  backgroundColor: "white",
+                  borderRadius: 12,
+                  padding: 24,
+                  maxWidth: 400,
+                  boxShadow: "0 8px 16px rgba(0,0,0,0.2)",
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h3 style={{ marginTop: 0, marginBottom: 16 }}>🔒 Close Working Day</h3>
+                <p style={{ marginBottom: 24, lineHeight: 1.6 }}>
+                  This will close <strong>{dateSafe}</strong> and convert the page into a read-only journal view.
+                  Any active sessions will be ended. You can reopen the day later if you need to make changes.
+                </p>
+                <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
+                  <button
+                    onClick={() => setShowCloseModal(false)}
+                    style={{
+                      padding: "8px 16px",
+                      fontSize: 14,
+                      backgroundColor: "white",
+                      border: "1px solid #ddd",
+                      borderRadius: 6,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleCloseDay}
+                    style={{
+                      padding: "8px 16px",
+                      fontSize: 14,
+                      fontWeight: 600,
+                      backgroundColor: "#9c27b0",
+                      color: "white",
+                      border: "none",
+                      borderRadius: 6,
+                      cursor: "pointer",
+                    }}
+                  >
+                    ✓ Close Day
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           <p style={{ opacity: 0.8, marginTop: 16 }}>
             v2 note: Working days system - Only activated days show all sections. Shutdown note shows on next working day.
