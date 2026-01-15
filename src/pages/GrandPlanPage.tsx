@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { YM, Category, MilestoneNode } from "../app/types";
 import {
   loadState,
@@ -19,6 +19,7 @@ import MilestoneTreeView from "../components/MilestoneTreeView";
 import MilestoneDetailModal from "../components/MilestoneDetailModal";
 
 const DEFAULT_COLORS = ["#4caf50", "#2196f3", "#ff9800", "#e91e63", "#9c27b0", "#00bcd4"];
+const SELECTED_CATEGORY_STORAGE_KEY = "focustree:grand-plan:selected-category";
 
 export default function GrandPlanPage() {
   const [tick, setTick] = useState(0);
@@ -31,8 +32,27 @@ export default function GrandPlanPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showAddCategory, setShowAddCategory] = useState(false);
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
-  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(() => {
+    try {
+      const stored = window.localStorage.getItem(SELECTED_CATEGORY_STORAGE_KEY);
+      return stored && stored.trim() ? stored : null;
+    } catch {
+      return null;
+    }
+  });
   const [selectedMilestone, setSelectedMilestone] = useState<MilestoneNode | null>(null);
+
+  useEffect(() => {
+    try {
+      if (selectedCategoryId) {
+        window.localStorage.setItem(SELECTED_CATEGORY_STORAGE_KEY, selectedCategoryId);
+      } else {
+        window.localStorage.removeItem(SELECTED_CATEGORY_STORAGE_KEY);
+      }
+    } catch {
+      // ignore
+    }
+  }, [selectedCategoryId]);
 
   // Create form state
   const [newTitle, setNewTitle] = useState("My Grand Plan");
@@ -69,6 +89,12 @@ export default function GrandPlanPage() {
   const handleDeleteGrandPlan = () => {
     mutate((s) => deleteGrandPlan(s));
     setShowDeleteConfirm(false);
+    setSelectedCategoryId(null);
+    try {
+      window.localStorage.removeItem(SELECTED_CATEGORY_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
   };
 
   const handleAddCategory = () => {
@@ -115,13 +141,24 @@ export default function GrandPlanPage() {
 
   // Select first category by default
   const sortedCategories = grandPlan?.categories.slice().sort((a, b) => a.order - b.order) ?? [];
-  const activeCategory = selectedCategoryId
-    ? sortedCategories.find((c) => c.id === selectedCategoryId)
-    : sortedCategories[0];
+  const activeCategory =
+    sortedCategories.find((c) => c.id === selectedCategoryId) ?? sortedCategories[0];
 
-  if (activeCategory && !selectedCategoryId) {
-    setSelectedCategoryId(activeCategory.id);
-  }
+  useEffect(() => {
+    if (!grandPlan) return;
+
+    if (sortedCategories.length === 0) {
+      if (selectedCategoryId !== null) setSelectedCategoryId(null);
+      return;
+    }
+
+    const firstId = sortedCategories[0]?.id;
+    if (!firstId) return;
+
+    if (!selectedCategoryId || !sortedCategories.some((c) => c.id === selectedCategoryId)) {
+      setSelectedCategoryId(firstId);
+    }
+  }, [grandPlan, sortedCategories, selectedCategoryId]);
 
   // No Grand Plan - show create prompt
   if (!grandPlan) {
