@@ -1,5 +1,6 @@
-import { useState } from "react";
-import type { MilestoneNode, MilestoneStatus } from "../app/types";
+import { useMemo, useState } from "react";
+import type { MilestoneNode, MilestoneStatus, TaskNode } from "../app/types";
+import { loadState } from "../app/storage";
 
 interface MilestoneDetailModalProps {
   milestone: MilestoneNode;
@@ -18,6 +19,47 @@ export default function MilestoneDetailModal({
   const [description, setDescription] = useState(milestone.description ?? "");
   const [status, setStatus] = useState<MilestoneStatus>(milestone.status);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  const linkedTasksByMonth = useMemo(() => {
+    const state = loadState();
+    const months = Object.values(state.months ?? {});
+    return months
+      .map((plan) => ({
+        ym: plan.ym,
+        tasks: plan.tasks.filter((t) => t.linkedMilestoneId === milestone.id),
+      }))
+      .filter((x) => x.tasks.length > 0)
+      .sort((a, b) => a.ym.localeCompare(b.ym));
+  }, [milestone.id]);
+
+  const totalLinkedTasks = useMemo(
+    () => linkedTasksByMonth.reduce((sum, x) => sum + x.tasks.length, 0),
+    [linkedTasksByMonth]
+  );
+
+  const getTaskStatusIcon = (task: TaskNode) => {
+    switch (task.status) {
+      case "GREEN":
+        return "✓";
+      case "YELLOW":
+        return "◐";
+      case "NONE":
+      default:
+        return "○";
+    }
+  };
+
+  const getTaskStatusColor = (task: TaskNode) => {
+    switch (task.status) {
+      case "GREEN":
+        return "#4caf50";
+      case "YELLOW":
+        return "#ff9800";
+      case "NONE":
+      default:
+        return "#9e9e9e";
+    }
+  };
 
   const handleSave = () => {
     onSave(milestone.id, {
@@ -136,11 +178,64 @@ export default function MilestoneDetailModal({
           />
         </div>
 
-        {/* Info about tasks */}
-        <div style={{ marginBottom: 24, padding: 12, backgroundColor: "#f5f5f5", borderRadius: 6 }}>
-          <p style={{ fontSize: 13, color: "#666", margin: 0, lineHeight: 1.5 }}>
-            Tasks for this milestone can be managed in the Month Setup page. Link this milestone to a month to add tasks that contribute to this goal.
-          </p>
+        {/* Linked tasks */}
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#666", marginBottom: 8 }}>
+            Linked Tasks
+          </div>
+
+          {linkedTasksByMonth.length === 0 ? (
+            <div style={{ padding: 12, backgroundColor: "#f5f5f5", borderRadius: 6 }}>
+              <p style={{ fontSize: 13, color: "#666", margin: 0, lineHeight: 1.5 }}>
+                Tasks for this milestone are managed in the Month Setup page. Link this milestone to a month to add tasks that contribute to this goal.
+              </p>
+            </div>
+          ) : (
+            <div style={{ padding: 12, backgroundColor: "#f5f5f5", borderRadius: 6 }}>
+              <div style={{ fontSize: 13, color: "#666", marginBottom: 10 }}>
+                {totalLinkedTasks} task{totalLinkedTasks === 1 ? "" : "s"} across {linkedTasksByMonth.length} month{linkedTasksByMonth.length === 1 ? "" : "s"} (managed in Month Setup)
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {linkedTasksByMonth.map((bucket) => (
+                  <div key={bucket.ym}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#333", marginBottom: 6 }}>
+                      {bucket.ym}
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {bucket.tasks.map((task) => (
+                        <div
+                          key={task.id}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            padding: "6px 8px",
+                            backgroundColor: "white",
+                            borderRadius: 6,
+                            border: "1px solid #e0e0e0",
+                          }}
+                        >
+                          <span
+                            style={{
+                              width: 20,
+                              textAlign: "center",
+                              fontWeight: 800,
+                              color: getTaskStatusColor(task),
+                            }}
+                            title={task.status}
+                          >
+                            {getTaskStatusIcon(task)}
+                          </span>
+                          <span style={{ fontSize: 13, color: "#333" }}>{task.title}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Actions */}

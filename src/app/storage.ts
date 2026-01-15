@@ -11,11 +11,24 @@ import type {
   Category,
   MilestoneNode,
   FocusTemplate,
+  DailyReminderTemplate,
 } from "./types";
 
 const KEY = "focustree.state";
 
-const emptyState: AppStateV0 = { version: 0, months: {}, days: {}, sessions: [], meetings: [] };
+const DEFAULT_DAILY_REMINDER_TEMPLATES: DailyReminderTemplate[] = [
+  { id: "rem_email", text: "Check your email 📧" },
+  { id: "rem_bureaucratic", text: "Handle those bureaucratic tasks 📋" },
+];
+
+const emptyState: AppStateV0 = {
+  version: 0,
+  months: {},
+  days: {},
+  sessions: [],
+  meetings: [],
+  dailyReminderTemplates: DEFAULT_DAILY_REMINDER_TEMPLATES,
+};
 
 export function loadState(): AppStateV0 {
   try {
@@ -27,6 +40,30 @@ export function loadState(): AppStateV0 {
     // v4 migration: Add meetings array if not present
     if (!parsed.meetings) {
       parsed.meetings = [];
+    }
+
+    // v7 migration: Add editable daily reminder templates + migrate old booleans
+    if (!Array.isArray(parsed.dailyReminderTemplates)) {
+      parsed.dailyReminderTemplates = DEFAULT_DAILY_REMINDER_TEMPLATES;
+    } else {
+      parsed.dailyReminderTemplates = parsed.dailyReminderTemplates
+        .filter(
+          (t: any) => t && typeof t.id === "string" && typeof t.text === "string"
+        )
+        .map((t: any) => ({ id: t.id, text: t.text }));
+    }
+
+    for (const day of Object.values(parsed.days ?? {})) {
+      const nextMap: Record<string, boolean> = { ...(day.reminderCheckedById ?? {}) };
+      if (typeof day.emailChecked === "boolean" && nextMap.rem_email === undefined) {
+        nextMap.rem_email = day.emailChecked;
+      }
+      if (typeof day.bureaucraticsCompleted === "boolean" && nextMap.rem_bureaucratic === undefined) {
+        nextMap.rem_bureaucratic = day.bureaucraticsCompleted;
+      }
+      if (Object.keys(nextMap).length > 0) {
+        day.reminderCheckedById = nextMap;
+      }
     }
 
     return parsed;
@@ -492,6 +529,26 @@ export function toggleBureaucraticsCompleted(state: AppStateV0, date: DateISO): 
   const ym = ymFromDate(date);
   const { state: withDay, day } = getOrCreateDay(state, date, ym);
   return updateDay(withDay, { ...day, bureaucraticsCompleted: !day.bureaucraticsCompleted });
+}
+
+// v7: Editable reminders (templates + per-day checked state)
+
+export function setDailyReminderTemplates(state: AppStateV0, templates: DailyReminderTemplate[]): AppStateV0 {
+  const nextTemplates = templates
+    .filter((t) => t && typeof t.id === "string" && typeof t.text === "string")
+    .map((t) => ({ id: t.id, text: t.text.trim() }))
+    .filter((t) => t.id.trim() && t.text);
+
+  return { ...state, dailyReminderTemplates: nextTemplates };
+}
+
+export function toggleReminderChecked(state: AppStateV0, date: DateISO, reminderId: string): AppStateV0 {
+  const ym = ymFromDate(date);
+  const { state: withDay, day } = getOrCreateDay(state, date, ym);
+  const current = day.reminderCheckedById?.[reminderId] ?? false;
+  const nextMap = { ...(day.reminderCheckedById ?? {}) };
+  nextMap[reminderId] = !current;
+  return updateDay(withDay, { ...day, reminderCheckedById: nextMap });
 }
 
 // v6: Grand Plan functions
