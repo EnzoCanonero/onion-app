@@ -7,6 +7,9 @@ import type {
   ProductivitySession,
   TaskNode,
   MeetingEntry,
+  GrandPlan,
+  Category,
+  MilestoneNode,
 } from "./types";
 
 const KEY = "focustree.state";
@@ -142,7 +145,26 @@ export function applyStatusToMonth(
     tasks: plan.tasks.map((t) => (t.id === taskId ? { ...t, status: nextStatus } : t)),
   };
 
-  return upsertMonth(state, nextPlan);
+  let nextState = upsertMonth(state, nextPlan);
+
+  // v6.2: Auto-progress milestone to IN_PROGRESS when a task is marked
+  if (existing.linkedMilestoneId && nextState.grandPlan && (nextStatus === "GREEN" || nextStatus === "YELLOW")) {
+    const milestone = nextState.grandPlan.milestones.find((m) => m.id === existing.linkedMilestoneId);
+    if (milestone && milestone.status === "NOT_STARTED") {
+      nextState = {
+        ...nextState,
+        grandPlan: {
+          ...nextState.grandPlan,
+          milestones: nextState.grandPlan.milestones.map((m) =>
+            m.id === existing.linkedMilestoneId ? { ...m, status: "IN_PROGRESS" } : m
+          ),
+          updatedAt: new Date().toISOString(),
+        },
+      };
+    }
+  }
+
+  return nextState;
 }
 
 export function setTaskOutcome(
@@ -469,4 +491,476 @@ export function toggleBureaucraticsCompleted(state: AppStateV0, date: DateISO): 
   const ym = ymFromDate(date);
   const { state: withDay, day } = getOrCreateDay(state, date, ym);
   return updateDay(withDay, { ...day, bureaucraticsCompleted: !day.bureaucraticsCompleted });
+}
+
+// v6: Grand Plan functions
+
+export function createGrandPlan(
+  state: AppStateV0,
+  title: string,
+  startMonth: YM,
+  endMonth?: YM
+): AppStateV0 {
+  const now = new Date().toISOString();
+  const grandPlan: GrandPlan = {
+    id: makeId("gp"),
+    title,
+    startMonth,
+    endMonth,
+    categories: [],
+    milestones: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+  return { ...state, grandPlan };
+}
+
+export function createGrandPlanWithExamples(
+  state: AppStateV0,
+  title: string,
+  startMonth: YM,
+  endMonth?: YM
+): AppStateV0 {
+  const now = new Date().toISOString();
+
+  // Create example categories
+  const catWork: Category = {
+    id: makeId("cat"),
+    title: "Career",
+    color: "#2196f3",
+    order: 1,
+    createdAt: now,
+  };
+
+  const catHealth: Category = {
+    id: makeId("cat"),
+    title: "Health & Fitness",
+    color: "#4caf50",
+    order: 2,
+    createdAt: now,
+  };
+
+  // Create example milestones for Career (bottom-to-top: first steps -> goal)
+  const workMs1: MilestoneNode = {
+    id: makeId("ms"),
+    categoryId: catWork.id,
+    parentId: null,
+    title: "Get promoted to Senior",
+    description: "Achieve senior position within the year",
+    status: "NOT_STARTED",
+    order: 1,
+    createdAt: now,
+  };
+
+  const workMs2: MilestoneNode = {
+    id: makeId("ms"),
+    categoryId: catWork.id,
+    parentId: workMs1.id,
+    title: "Lead a major project",
+    description: "Take ownership of a key initiative",
+    status: "NOT_STARTED",
+    order: 1,
+    createdAt: now,
+  };
+
+  const workMs3: MilestoneNode = {
+    id: makeId("ms"),
+    categoryId: catWork.id,
+    parentId: workMs2.id,
+    title: "Complete advanced training",
+    description: "Finish relevant certifications",
+    status: "NOT_STARTED",
+    order: 1,
+    createdAt: now,
+  };
+
+  // Create example milestones for Health (bottom-to-top: first steps -> goal)
+  const healthMs1: MilestoneNode = {
+    id: makeId("ms"),
+    categoryId: catHealth.id,
+    parentId: null,
+    title: "Run a half marathon",
+    description: "Complete 21km race",
+    status: "NOT_STARTED",
+    order: 1,
+    createdAt: now,
+  };
+
+  const healthMs2: MilestoneNode = {
+    id: makeId("ms"),
+    categoryId: catHealth.id,
+    parentId: healthMs1.id,
+    title: "Run 10K comfortably",
+    description: "Build endurance for longer distances",
+    status: "NOT_STARTED",
+    order: 1,
+    createdAt: now,
+  };
+
+  const healthMs3: MilestoneNode = {
+    id: makeId("ms"),
+    categoryId: catHealth.id,
+    parentId: healthMs2.id,
+    title: "Establish running routine",
+    description: "Run 3x per week consistently",
+    status: "NOT_STARTED",
+    order: 1,
+    createdAt: now,
+  };
+
+  const grandPlan: GrandPlan = {
+    id: makeId("gp"),
+    title,
+    startMonth,
+    endMonth,
+    categories: [catWork, catHealth],
+    milestones: [workMs1, workMs2, workMs3, healthMs1, healthMs2, healthMs3],
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  return { ...state, grandPlan };
+}
+
+export function updateGrandPlan(
+  state: AppStateV0,
+  updates: Partial<Pick<GrandPlan, "title" | "startMonth" | "endMonth">>
+): AppStateV0 {
+  if (!state.grandPlan) return state;
+  return {
+    ...state,
+    grandPlan: {
+      ...state.grandPlan,
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    },
+  };
+}
+
+export function deleteGrandPlan(state: AppStateV0): AppStateV0 {
+  // v6.1: Clean up linkedMilestoneId from all tasks in all months
+  const cleanedMonths: Record<string, MonthPlan> = {};
+  for (const [ym, plan] of Object.entries(state.months)) {
+    const cleanedTasks = plan.tasks.map((t) => {
+      const { linkedMilestoneId, ...rest } = t;
+      return rest as TaskNode;
+    });
+    cleanedMonths[ym] = { ...plan, tasks: cleanedTasks };
+  }
+  return { ...state, grandPlan: undefined, months: cleanedMonths };
+}
+
+// Category CRUD
+
+export function addCategory(state: AppStateV0, title: string, color: string): AppStateV0 {
+  if (!state.grandPlan) return state;
+  const maxOrder = Math.max(0, ...state.grandPlan.categories.map((c) => c.order));
+  const category: Category = {
+    id: makeId("cat"),
+    title,
+    color,
+    order: maxOrder + 1,
+    createdAt: new Date().toISOString(),
+  };
+  return {
+    ...state,
+    grandPlan: {
+      ...state.grandPlan,
+      categories: [...state.grandPlan.categories, category],
+      updatedAt: new Date().toISOString(),
+    },
+  };
+}
+
+export function updateCategory(
+  state: AppStateV0,
+  categoryId: string,
+  updates: Partial<Pick<Category, "title" | "color" | "order">>
+): AppStateV0 {
+  if (!state.grandPlan) return state;
+  return {
+    ...state,
+    grandPlan: {
+      ...state.grandPlan,
+      categories: state.grandPlan.categories.map((c) =>
+        c.id === categoryId ? { ...c, ...updates } : c
+      ),
+      updatedAt: new Date().toISOString(),
+    },
+  };
+}
+
+export function deleteCategory(state: AppStateV0, categoryId: string): AppStateV0 {
+  if (!state.grandPlan) return state;
+
+  // Delete all milestones in this category
+  const milestoneIds = new Set(
+    state.grandPlan.milestones.filter((m) => m.categoryId === categoryId).map((m) => m.id)
+  );
+
+  // v6.1: Clean up linkedMilestoneId from tasks linked to deleted milestones
+  const cleanedMonths: Record<string, MonthPlan> = {};
+  for (const [ym, plan] of Object.entries(state.months)) {
+    const cleanedTasks = plan.tasks.map((t) => {
+      if (t.linkedMilestoneId && milestoneIds.has(t.linkedMilestoneId)) {
+        const { linkedMilestoneId, ...rest } = t;
+        return rest as TaskNode;
+      }
+      return t;
+    });
+    cleanedMonths[ym] = { ...plan, tasks: cleanedTasks };
+  }
+
+  return {
+    ...state,
+    months: cleanedMonths,
+    grandPlan: {
+      ...state.grandPlan,
+      categories: state.grandPlan.categories.filter((c) => c.id !== categoryId),
+      milestones: state.grandPlan.milestones.filter((m) => m.categoryId !== categoryId),
+      updatedAt: new Date().toISOString(),
+    },
+  };
+}
+
+export function reorderCategory(state: AppStateV0, categoryId: string, direction: "up" | "down"): AppStateV0 {
+  if (!state.grandPlan) return state;
+
+  const sorted = [...state.grandPlan.categories].sort((a, b) => a.order - b.order);
+  const idx = sorted.findIndex((c) => c.id === categoryId);
+  if (idx === -1) return state;
+  if (direction === "up" && idx === 0) return state;
+  if (direction === "down" && idx === sorted.length - 1) return state;
+
+  const swapIdx = direction === "up" ? idx - 1 : idx + 1;
+  const currentOrder = sorted[idx].order;
+  const swapOrder = sorted[swapIdx].order;
+
+  return {
+    ...state,
+    grandPlan: {
+      ...state.grandPlan,
+      categories: state.grandPlan.categories.map((c) => {
+        if (c.id === categoryId) return { ...c, order: swapOrder };
+        if (c.id === sorted[swapIdx].id) return { ...c, order: currentOrder };
+        return c;
+      }),
+      updatedAt: new Date().toISOString(),
+    },
+  };
+}
+
+// Milestone CRUD
+
+export function addMilestone(
+  state: AppStateV0,
+  categoryId: string,
+  title: string,
+  parentId: string | null
+): AppStateV0 {
+  if (!state.grandPlan) return state;
+
+  // Calculate order among siblings
+  const siblings = state.grandPlan.milestones.filter(
+    (m) => m.categoryId === categoryId && m.parentId === parentId
+  );
+  const maxOrder = Math.max(0, ...siblings.map((m) => m.order));
+
+  const milestone: MilestoneNode = {
+    id: makeId("ms"),
+    categoryId,
+    parentId,
+    title,
+    status: "NOT_STARTED",
+    order: maxOrder + 1,
+    createdAt: new Date().toISOString(),
+  };
+
+  return {
+    ...state,
+    grandPlan: {
+      ...state.grandPlan,
+      milestones: [...state.grandPlan.milestones, milestone],
+      updatedAt: new Date().toISOString(),
+    },
+  };
+}
+
+export function updateMilestone(
+  state: AppStateV0,
+  milestoneId: string,
+  updates: Partial<Pick<MilestoneNode, "title" | "description" | "status" | "parentId">>
+): AppStateV0 {
+  if (!state.grandPlan) return state;
+  return {
+    ...state,
+    grandPlan: {
+      ...state.grandPlan,
+      milestones: state.grandPlan.milestones.map((m) =>
+        m.id === milestoneId ? { ...m, ...updates } : m
+      ),
+      updatedAt: new Date().toISOString(),
+    },
+  };
+}
+
+export function deleteMilestone(state: AppStateV0, milestoneId: string, cascadeChildren: boolean = true): AppStateV0 {
+  if (!state.grandPlan) return state;
+
+  let toDelete = new Set([milestoneId]);
+
+  if (cascadeChildren) {
+    const findChildren = (parentId: string) => {
+      state.grandPlan!.milestones.forEach((m) => {
+        if (m.parentId === parentId && !toDelete.has(m.id)) {
+          toDelete.add(m.id);
+          findChildren(m.id);
+        }
+      });
+    };
+    findChildren(milestoneId);
+  }
+
+  // v6.1: Clean up linkedMilestoneId from tasks linked to deleted milestones
+  const cleanedMonths: Record<string, MonthPlan> = {};
+  for (const [ym, plan] of Object.entries(state.months)) {
+    const cleanedTasks = plan.tasks.map((t) => {
+      if (t.linkedMilestoneId && toDelete.has(t.linkedMilestoneId)) {
+        const { linkedMilestoneId, ...rest } = t;
+        return rest as TaskNode;
+      }
+      return t;
+    });
+    cleanedMonths[ym] = { ...plan, tasks: cleanedTasks };
+  }
+
+  return {
+    ...state,
+    months: cleanedMonths,
+    grandPlan: {
+      ...state.grandPlan,
+      milestones: state.grandPlan.milestones.filter((m) => !toDelete.has(m.id)),
+      updatedAt: new Date().toISOString(),
+    },
+  };
+}
+
+export function reorderMilestone(state: AppStateV0, milestoneId: string, direction: "up" | "down"): AppStateV0 {
+  if (!state.grandPlan) return state;
+
+  const milestone = state.grandPlan.milestones.find((m) => m.id === milestoneId);
+  if (!milestone) return state;
+
+  const siblings = state.grandPlan.milestones
+    .filter((m) => m.categoryId === milestone.categoryId && m.parentId === milestone.parentId)
+    .sort((a, b) => a.order - b.order);
+
+  const idx = siblings.findIndex((m) => m.id === milestoneId);
+  if (idx === -1) return state;
+  if (direction === "up" && idx === 0) return state;
+  if (direction === "down" && idx === siblings.length - 1) return state;
+
+  const swapIdx = direction === "up" ? idx - 1 : idx + 1;
+  const currentOrder = siblings[idx].order;
+  const swapOrder = siblings[swapIdx].order;
+
+  return {
+    ...state,
+    grandPlan: {
+      ...state.grandPlan,
+      milestones: state.grandPlan.milestones.map((m) => {
+        if (m.id === milestoneId) return { ...m, order: swapOrder };
+        if (m.id === siblings[swapIdx].id) return { ...m, order: currentOrder };
+        return m;
+      }),
+      updatedAt: new Date().toISOString(),
+    },
+  };
+}
+
+// v6.1: Task with milestone linking
+
+export function addTaskWithMilestone(
+  state: AppStateV0,
+  ym: YM,
+  title: string,
+  milestoneId: string,
+  parentId: string | null = null
+): { state: AppStateV0; task: TaskNode } | { state: AppStateV0; task: undefined } {
+  const plan = getMonth(state, ym);
+  if (!plan) return { state, task: undefined };
+
+  const task: TaskNode = {
+    id: makeId("task"),
+    title,
+    parentId,
+    status: "NONE",
+    linkedMilestoneId: milestoneId,
+  };
+
+  const nextPlan: MonthPlan = { ...plan, tasks: [...plan.tasks, task] };
+  return { state: upsertMonth(state, nextPlan), task };
+}
+
+export function getMilestonesInMonth(state: AppStateV0, ym: YM): MilestoneNode[] {
+  const plan = getMonth(state, ym);
+  if (!plan || !state.grandPlan) return [];
+
+  // Get unique milestone IDs from tasks
+  const milestoneIds = new Set<string>();
+  plan.tasks.forEach((t) => {
+    if (t.linkedMilestoneId) {
+      milestoneIds.add(t.linkedMilestoneId);
+    }
+  });
+
+  // Return milestones in order
+  return state.grandPlan.milestones
+    .filter((m) => milestoneIds.has(m.id))
+    .sort((a, b) => {
+      // Sort by category order, then by milestone order
+      const catA = state.grandPlan!.categories.find((c) => c.id === a.categoryId);
+      const catB = state.grandPlan!.categories.find((c) => c.id === b.categoryId);
+      if (catA && catB && catA.order !== catB.order) {
+        return catA.order - catB.order;
+      }
+      return a.order - b.order;
+    });
+}
+
+export function getTasksForMilestone(state: AppStateV0, ym: YM, milestoneId: string): TaskNode[] {
+  const plan = getMonth(state, ym);
+  if (!plan) return [];
+  return plan.tasks.filter((t) => t.linkedMilestoneId === milestoneId);
+}
+
+export function getStandaloneTasks(state: AppStateV0, ym: YM): TaskNode[] {
+  const plan = getMonth(state, ym);
+  if (!plan) return [];
+  return plan.tasks.filter((t) => !t.linkedMilestoneId);
+}
+
+// Validation
+
+export function isMonthInGrandPlanPeriod(state: AppStateV0, ym: YM): boolean {
+  if (!state.grandPlan) return false;
+  const { startMonth, endMonth } = state.grandPlan;
+  if (ym < startMonth) return false;
+  if (endMonth && ym > endMonth) return false;
+  return true;
+}
+
+export function canCreateMonth(state: AppStateV0, ym: YM): { allowed: boolean; reason?: string } {
+  if (!state.grandPlan) {
+    return { allowed: true }; // No grand plan = no restrictions
+  }
+  if (isMonthInGrandPlanPeriod(state, ym)) {
+    return { allowed: true };
+  }
+  const { startMonth, endMonth } = state.grandPlan;
+  const periodStr = endMonth ? `${startMonth} to ${endMonth}` : `${startMonth} onwards`;
+  return {
+    allowed: false,
+    reason: `Month ${ym} is outside the Grand Plan period (${periodStr})`,
+  };
 }

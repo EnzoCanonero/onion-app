@@ -4,11 +4,47 @@ export type DateISO = `${number}-${string}-${string}`; // e.g. "2025-12-17"
 
 export type TaskStatus = "NONE" | "YELLOW" | "GREEN";
 
+// v6: Grand Plan types
+export type MilestoneStatus = "NOT_STARTED" | "IN_PROGRESS" | "COMPLETED";
+
+export type MilestoneNode = {
+  id: string;
+  categoryId: string;
+  parentId: string | null;
+  title: string;
+  description?: string;
+  status: MilestoneStatus;
+  order: number;
+  createdAt: string;
+};
+
+// v6.1: MilestoneDetail removed - tasks now have linkedMilestoneId instead
+
+export type Category = {
+  id: string;
+  title: string;
+  color: string;
+  order: number;
+  createdAt: string;
+};
+
+export type GrandPlan = {
+  id: string;
+  title: string;
+  startMonth: YM;
+  endMonth?: YM;
+  categories: Category[];
+  milestones: MilestoneNode[];
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type TaskNode = {
   id: string;
   title: string;
   parentId: string | null;
   status: TaskStatus;
+  linkedMilestoneId?: string; // v6.1: optional link to a milestone
 };
 
 export type FocusTemplate = {
@@ -71,4 +107,5 @@ export type AppStateV0 = {
   days: Record<string, DayEntry>;
   sessions: ProductivitySession[];
   meetings: MeetingEntry[]; // v4: meeting entries
+  grandPlan?: GrandPlan; // v6: single grand plan (optional)
 };
