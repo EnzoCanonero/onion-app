@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { MeetingEntry } from "../app/types";
+import type { MeetingEntry, DailyReminderTemplate } from "../app/types";
 import {
   loadState,
   saveState,
@@ -23,8 +23,8 @@ import {
   deleteMeeting,
   getMeetingsForDate,
   toggleMeetingAttended,
-  toggleEmailChecked,
-  toggleBureaucraticsCompleted,
+  setDailyReminderTemplates,
+  toggleReminderChecked,
   getMilestonesInMonth,
   getTemplatesForMilestone,
   getStandaloneTemplates,
@@ -44,6 +44,8 @@ export default function DailyAgendaPage() {
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [showActivateModal, setShowActivateModal] = useState(false);
   const [showCloseModal, setShowCloseModal] = useState(false);
+  const [isEditingReminders, setIsEditingReminders] = useState(false);
+  const [reminderDraft, setReminderDraft] = useState<DailyReminderTemplate[]>([]);
   const state = useMemo(() => loadState(), [tick]);
 
   const plan = getMonth(state, ym);
@@ -526,57 +528,193 @@ export default function DailyAgendaPage() {
 
           {/* v4: Daily Reminders Section */}
           <div style={{ marginBottom: 24 }}>
-            <p style={{ fontSize: 15, lineHeight: 1.6, color: "#555", marginBottom: 12 }}>
-              Hey! Before diving in, just a quick reminder to:
-            </p>
-            <div style={{ display: "flex", flexDirection: "column", gap: 10, marginLeft: 8 }}>
-              <label
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  cursor: "pointer",
-                  fontSize: 15,
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={day.emailChecked ?? false}
-                  onChange={() => {
-                    mutate((s0) => toggleEmailChecked(s0, dateSafe));
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                marginBottom: 12,
+              }}
+            >
+              <p style={{ fontSize: 15, lineHeight: 1.6, color: "#555", margin: 0 }}>
+                Hey! Before diving in, just a quick reminder to:
+              </p>
+
+              {!isEditingReminders ? (
+                <button
+                  onClick={() => {
+                    setReminderDraft(state.dailyReminderTemplates);
+                    setIsEditingReminders(true);
                   }}
                   style={{
-                    width: 18,
-                    height: 18,
+                    padding: "4px 8px",
+                    fontSize: 14,
+                    backgroundColor: "white",
+                    border: "1px solid #ddd",
+                    borderRadius: 6,
                     cursor: "pointer",
+                    opacity: 0.9,
                   }}
-                />
-                <span>Check your email 📧</span>
-              </label>
-              <label
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  cursor: "pointer",
-                  fontSize: 15,
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={day.bureaucraticsCompleted ?? false}
-                  onChange={() => {
-                    mutate((s0) => toggleBureaucraticsCompleted(s0, dateSafe));
-                  }}
-                  style={{
-                    width: 18,
-                    height: 18,
-                    cursor: "pointer",
-                  }}
-                />
-                <span>Handle those bureaucratic tasks 📋</span>
-              </label>
+                  title="Edit reminders"
+                >
+                  ✏️
+                </button>
+              ) : (
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    onClick={() => {
+                      setIsEditingReminders(false);
+                      setReminderDraft([]);
+                    }}
+                    style={{
+                      padding: "6px 10px",
+                      fontSize: 12,
+                      backgroundColor: "white",
+                      border: "1px solid #ddd",
+                      borderRadius: 6,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      const cleaned = reminderDraft
+                        .map((r) => ({ ...r, text: r.text.trim() }))
+                        .filter((r) => r.text.length > 0);
+                      mutate((s0) => setDailyReminderTemplates(s0, cleaned));
+                      setIsEditingReminders(false);
+                      setReminderDraft([]);
+                    }}
+                    style={{
+                      padding: "6px 10px",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      backgroundColor: "#4caf50",
+                      color: "white",
+                      border: "none",
+                      borderRadius: 6,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Done
+                  </button>
+                </div>
+              )}
             </div>
+
+            {!isEditingReminders ? (
+              state.dailyReminderTemplates.length === 0 ? (
+                <p style={{ fontSize: 13, color: "#999", fontStyle: "italic", margin: 0 }}>
+                  No reminders set. Click ✏️ to add some.
+                </p>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10, marginLeft: 8 }}>
+                  {state.dailyReminderTemplates.map((reminder) => (
+                    <label
+                      key={reminder.id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        cursor: "pointer",
+                        fontSize: 15,
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={day.reminderCheckedById?.[reminder.id] ?? false}
+                        onChange={() => {
+                          mutate((s0) => toggleReminderChecked(s0, dateSafe, reminder.id));
+                        }}
+                        style={{
+                          width: 18,
+                          height: 18,
+                          cursor: "pointer",
+                        }}
+                      />
+                      <span>{reminder.text}</span>
+                    </label>
+                  ))}
+                </div>
+              )
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginLeft: 8 }}>
+                {reminderDraft.length === 0 ? (
+                  <p style={{ fontSize: 13, color: "#999", fontStyle: "italic", margin: 0 }}>
+                    No reminders yet. Add one below.
+                  </p>
+                ) : (
+                  reminderDraft.map((reminder) => (
+                    <div
+                      key={reminder.id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                      }}
+                    >
+                      <input
+                        type="text"
+                        value={reminder.text}
+                        onChange={(e) => {
+                          const nextText = e.target.value;
+                          setReminderDraft((prev) =>
+                            prev.map((r) => (r.id === reminder.id ? { ...r, text: nextText } : r))
+                          );
+                        }}
+                        placeholder="Reminder text…"
+                        style={{
+                          flex: 1,
+                          padding: "8px 10px",
+                          fontSize: 14,
+                          border: "1px solid #ddd",
+                          borderRadius: 8,
+                        }}
+                      />
+                      <button
+                        onClick={() => {
+                          setReminderDraft((prev) => prev.filter((r) => r.id !== reminder.id));
+                        }}
+                        style={{
+                          padding: "6px 10px",
+                          fontSize: 12,
+                          backgroundColor: "white",
+                          color: "#d9534f",
+                          border: "1px solid #ddd",
+                          borderRadius: 8,
+                          cursor: "pointer",
+                        }}
+                        title="Delete reminder"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))
+                )}
+
+                <button
+                  onClick={() => {
+                    setReminderDraft((prev) => [...prev, { id: makeId("rem"), text: "" }]);
+                  }}
+                  style={{
+                    alignSelf: "flex-start",
+                    padding: "6px 10px",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    backgroundColor: "white",
+                    color: "#666",
+                    border: "2px dashed #ccc",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                    marginTop: 4,
+                  }}
+                >
+                  + Add Reminder
+                </button>
+              </div>
+            )}
           </div>
 
           <h3>Daily Tasks</h3>

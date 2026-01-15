@@ -4,6 +4,12 @@ export type DateISO = `${number}-${string}-${string}`; // e.g. "2025-12-17"
 
 export type TaskStatus = "NONE" | "YELLOW" | "GREEN";
 
+// v7: Daily reminders (editable quick checks)
+export type DailyReminderTemplate = {
+  id: string;
+  text: string;
+};
+
 // v6: Grand Plan types
 export type MilestoneStatus = "NOT_STARTED" | "IN_PROGRESS" | "COMPLETED";
 
@@ -81,6 +87,7 @@ export type DayEntry = {
   isClosed?: boolean; // v4: true if user closed the day (read-only mode)
   emailChecked?: boolean; // v4: true if email was checked
   bureaucraticsCompleted?: boolean; // v4: true if bureaucratic tasks completed
+  reminderCheckedById?: Record<string, boolean>; // v7: reminder template id -> checked
   primaryTaskId?: string;
   secondaryTaskIds: string[];
   outcomeByTaskId: Record<string, "COMPLETED" | "NOT_COMPLETED">;
@@ -109,4 +116,5 @@ export type AppStateV0 = {
   sessions: ProductivitySession[];
   meetings: MeetingEntry[]; // v4: meeting entries
   grandPlan?: GrandPlan; // v6: single grand plan (optional)
+  dailyReminderTemplates: DailyReminderTemplate[]; // v7: editable quick checks shown on Daily page
 };

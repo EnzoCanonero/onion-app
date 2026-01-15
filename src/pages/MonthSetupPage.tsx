@@ -1,5 +1,5 @@
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Navigate } from "react-router-dom";
 import type { MonthPlan, YM, TaskNode, MilestoneNode, MilestoneStatus, FocusTemplate } from "../app/types";
 import {
@@ -20,6 +20,24 @@ import {
   getStandaloneTemplates,
 } from "../app/storage";
 import { useDateNavigation } from "../contexts/DateNavigationContext";
+import FireworksOverlay from "../components/FireworksOverlay";
+
+function parseTimeToMinutes(time: string): number | null {
+  const parts = time.split(":").map((x) => Number(x));
+  if (parts.length !== 2) return null;
+  const [hours, minutes] = parts;
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  if (hours < 0 || hours > 23) return null;
+  if (minutes < 0 || minutes > 59) return null;
+  return hours * 60 + minutes;
+}
+
+function withHexAlpha(color: string, alphaHex: string): string {
+  const normalizedAlpha = /^[0-9a-fA-F]{2}$/.test(alphaHex) ? alphaHex : "10";
+  if (/^#[0-9a-fA-F]{6}$/.test(color)) return `${color}${normalizedAlpha}`;
+  if (/^#[0-9a-fA-F]{8}$/.test(color)) return `${color.slice(0, 7)}${normalizedAlpha}`;
+  return color;
+}
 
 function seedPlan(ym: YM): MonthPlan {
   return {
@@ -50,6 +68,7 @@ function TaskGroup({
   onUpdateTemplate,
   onDeleteTemplate,
   hideAddButton = false,
+  collapseStorageKey,
 }: {
   title: string;
   color: string;
@@ -65,6 +84,7 @@ function TaskGroup({
   onUpdateTemplate: (templateId: string, updates: Partial<Pick<FocusTemplate, "title" | "plannedStart" | "plannedEnd">>) => void;
   onDeleteTemplate: (templateId: string) => void;
   hideAddButton?: boolean;
+  collapseStorageKey: string;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
@@ -72,6 +92,29 @@ function TaskGroup({
   const [editTemplateTitle, setEditTemplateTitle] = useState("");
   const [editTemplateStart, setEditTemplateStart] = useState("");
   const [editTemplateEnd, setEditTemplateEnd] = useState("");
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return window.localStorage.getItem(collapseStorageKey) === "1";
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      setCollapsed(window.localStorage.getItem(collapseStorageKey) === "1");
+    } catch {
+      setCollapsed(false);
+    }
+  }, [collapseStorageKey]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(collapseStorageKey, collapsed ? "1" : "0");
+    } catch {
+      // ignore
+    }
+  }, [collapseStorageKey, collapsed]);
 
   const startEdit = (task: TaskNode) => {
     setEditingId(task.id);
@@ -108,31 +151,34 @@ function TaskGroup({
   };
 
   const isCompleted = milestoneStatus === "COMPLETED";
-  const displayColor = isCompleted ? "#FFD700" : color;
-  const bgColor = isCompleted ? "#fffef0" : "white";
+  const accentColor = isCompleted ? "#FFD700" : color;
+  const groupBackgroundColor = withHexAlpha(accentColor, "10");
 
   return (
     <div
       style={{
         marginBottom: 16,
-        padding: 12,
-        backgroundColor: bgColor,
-        borderRadius: 8,
-        border: `2px solid ${displayColor}`,
-        boxShadow: isCompleted ? "0 0 8px rgba(255, 215, 0, 0.4)" : "none",
+        padding: 16,
+        backgroundColor: groupBackgroundColor,
+        borderRadius: 12,
+        border: `2px solid ${accentColor}`,
       }}
     >
       <div
         style={{
           fontWeight: 600,
-          marginBottom: 12,
-          color: displayColor,
+          marginBottom: collapsed ? 0 : 12,
+          color: accentColor,
           fontSize: 14,
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
           gap: 8,
+          cursor: "pointer",
+          userSelect: "none",
         }}
+        title={collapsed ? "Click to expand" : "Click to collapse"}
+        onClick={() => setCollapsed((v) => !v)}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span
@@ -140,27 +186,30 @@ function TaskGroup({
               width: 12,
               height: 12,
               borderRadius: "50%",
-              backgroundColor: displayColor,
+              backgroundColor: accentColor,
               display: "inline-block",
             }}
           />
           {title}
-          {isCompleted && (
-            <span style={{ fontSize: 12, color: "#FFD700" }}>✓ Completed</span>
+          {isCompleted && !collapsed && (
+            <span style={{ fontSize: 12, color: accentColor }}>✓ Completed</span>
           )}
         </div>
         {/* Mark as completed button - only show for milestones that aren't completed */}
-        {milestoneId && !isCompleted && onMarkMilestoneCompleted && (
+        {milestoneId && !collapsed && !isCompleted && onMarkMilestoneCompleted && (
           <button
-            onClick={() => onMarkMilestoneCompleted(milestoneId)}
+            onClick={(e) => {
+              e.stopPropagation();
+              onMarkMilestoneCompleted(milestoneId);
+            }}
             style={{
               padding: "4px 10px",
               fontSize: 11,
               fontWeight: 600,
-              backgroundColor: "#FFD700",
-              color: "#5d4037",
-              border: "none",
-              borderRadius: 4,
+              backgroundColor: "white",
+              color,
+              border: `1px solid ${color}`,
+              borderRadius: 6,
               cursor: "pointer",
               display: "flex",
               alignItems: "center",
@@ -173,232 +222,97 @@ function TaskGroup({
         )}
       </div>
 
-      {/* Tasks Section */}
-      {tasks.length === 0 ? (
-        <p style={{ fontSize: 13, color: "#999", fontStyle: "italic", marginBottom: 8 }}>
-          No tasks yet
-        </p>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {tasks.map((task) => (
-            <div
-              key={task.id}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                padding: "6px 8px",
-                backgroundColor: task.status === "GREEN" ? "#e8f5e9" : task.status === "YELLOW" ? "#fff8e1" : "#fafafa",
-                borderRadius: 4,
-                border: "1px solid #eee",
-              }}
-            >
-              {/* Read-only status indicator */}
-              <span
-                style={{
-                  width: 20,
-                  height: 20,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: 14,
-                  fontWeight: 700,
-                  color: task.status === "GREEN" ? "#4caf50" : task.status === "YELLOW" ? "#ff9800" : "#ccc",
-                }}
-                title={task.status === "GREEN" ? "Completed" : task.status === "YELLOW" ? "In Progress" : "Not started"}
-              >
-                {task.status === "GREEN" ? "✓" : task.status === "YELLOW" ? "◐" : "○"}
-              </span>
-
-              {editingId === task.id ? (
-                <input
-                  type="text"
-                  value={editTitle}
-                  onChange={(e) => setEditTitle(e.target.value)}
-                  onBlur={saveEdit}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") saveEdit();
-                    if (e.key === "Escape") {
-                      setEditingId(null);
-                      setEditTitle("");
-                    }
-                  }}
-                  autoFocus
+      {!collapsed && (
+        <>
+          {/* Tasks Section */}
+          {tasks.length === 0 ? (
+            <p style={{ fontSize: 13, color: "#999", fontStyle: "italic", marginBottom: 8 }}>
+              No tasks yet
+            </p>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {tasks.map((task) => (
+                <div
+                  key={task.id}
                   style={{
-                    flex: 1,
-                    padding: "4px 8px",
-                    fontSize: 13,
-                    border: "1px solid #2196f3",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "7.2px 8px",
+                    backgroundColor: "white",
                     borderRadius: 4,
-                    outline: "none",
-                  }}
-                />
-              ) : (
-                <span
-                  onClick={() => startEdit(task)}
-                  style={{
-                    flex: 1,
-                    fontSize: 13,
-                    cursor: "pointer",
-                    textDecoration: task.status === "GREEN" ? "line-through" : "none",
-                    color: task.status === "GREEN" ? "#666" : "#333",
+                    border: `1px solid ${accentColor}`,
                   }}
                 >
-                  {task.title}
-                </span>
-              )}
+                  {/* Read-only status indicator */}
+                  <span
+                    style={{
+                      width: 20,
+                      height: 20,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: 14,
+                      fontWeight: 700,
+                      color:
+                        task.status === "GREEN"
+                          ? "#4caf50"
+                          : task.status === "YELLOW"
+                          ? "#ff9800"
+                          : "#ccc",
+                    }}
+                    title={
+                      task.status === "GREEN"
+                        ? "Completed"
+                        : task.status === "YELLOW"
+                        ? "In Progress"
+                        : "Not started"
+                    }
+                  >
+                    {task.status === "GREEN" ? "✓" : task.status === "YELLOW" ? "◐" : "○"}
+                  </span>
 
-              <button
-                onClick={() => onDeleteTask(task.id)}
-                style={{
-                  padding: "2px 6px",
-                  fontSize: 11,
-                  backgroundColor: "transparent",
-                  color: "#f44336",
-                  border: "none",
-                  cursor: "pointer",
-                  opacity: 0.7,
-                }}
-              >
-                ✕
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {!hideAddButton && (
-        <button
-          onClick={() => onAddTask(milestoneId)}
-          style={{
-            marginTop: 8,
-            padding: "6px 10px",
-            fontSize: 12,
-            backgroundColor: color,
-            color: "white",
-            border: "none",
-            borderRadius: 4,
-            cursor: "pointer",
-            opacity: 0.9,
-          }}
-        >
-          + Add Task
-        </button>
-      )}
-
-      {/* Focus Templates Section */}
-      <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px dashed #ddd" }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: "#ff9800", marginBottom: 8, display: "flex", alignItems: "center", gap: 4 }}>
-          ⏱️ Focus Templates
-        </div>
-
-        {templates.length === 0 ? (
-          <p style={{ fontSize: 12, color: "#999", fontStyle: "italic", marginBottom: 8 }}>
-            No focus templates
-          </p>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {templates.map((template) => (
-              <div
-                key={template.id}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "6px 8px",
-                  backgroundColor: "#fff8e1",
-                  borderRadius: 4,
-                  border: "1px solid #ffe0b2",
-                }}
-              >
-                {editingTemplateId === template.id ? (
-                  <>
+                  {editingId === task.id ? (
                     <input
                       type="text"
-                      value={editTemplateTitle}
-                      onChange={(e) => setEditTemplateTitle(e.target.value)}
-                      placeholder="Template name"
+                      value={editTitle}
+                      onChange={(e) => setEditTitle(e.target.value)}
+                      onBlur={saveEdit}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") saveEdit();
+                        if (e.key === "Escape") {
+                          setEditingId(null);
+                          setEditTitle("");
+                        }
+                      }}
+                      autoFocus
                       style={{
                         flex: 1,
                         padding: "4px 8px",
-                        fontSize: 12,
-                        border: "1px solid #ff9800",
+                        fontSize: 13,
+                        border: `1px solid ${accentColor}`,
                         borderRadius: 4,
                         outline: "none",
                       }}
                     />
-                    <input
-                      type="time"
-                      value={editTemplateStart}
-                      onChange={(e) => setEditTemplateStart(e.target.value)}
-                      style={{
-                        width: 90,
-                        padding: "4px",
-                        fontSize: 12,
-                        border: "1px solid #ff9800",
-                        borderRadius: 4,
-                      }}
-                    />
-                    <span style={{ fontSize: 12, color: "#999" }}>-</span>
-                    <input
-                      type="time"
-                      value={editTemplateEnd}
-                      onChange={(e) => setEditTemplateEnd(e.target.value)}
-                      style={{
-                        width: 90,
-                        padding: "4px",
-                        fontSize: 12,
-                        border: "1px solid #ff9800",
-                        borderRadius: 4,
-                      }}
-                    />
-                    <button
-                      onClick={saveTemplateEdit}
-                      style={{
-                        padding: "4px 8px",
-                        fontSize: 11,
-                        backgroundColor: "#4caf50",
-                        color: "white",
-                        border: "none",
-                        borderRadius: 4,
-                        cursor: "pointer",
-                      }}
-                    >
-                      ✓
-                    </button>
-                    <button
-                      onClick={() => setEditingTemplateId(null)}
-                      style={{
-                        padding: "4px 8px",
-                        fontSize: 11,
-                        backgroundColor: "transparent",
-                        color: "#666",
-                        border: "1px solid #ddd",
-                        borderRadius: 4,
-                        cursor: "pointer",
-                      }}
-                    >
-                      ✕
-                    </button>
-                  </>
-                ) : (
-                  <>
+                  ) : (
                     <span
-                      onClick={() => startTemplateEdit(template)}
+                      onClick={() => startEdit(task)}
                       style={{
                         flex: 1,
-                        fontSize: 12,
+                        fontSize: 13,
                         cursor: "pointer",
+                        textDecoration: "none",
                         color: "#333",
                       }}
                     >
-                      {template.title}
+                      {task.title}
                     </span>
-                    <span style={{ fontSize: 11, color: "#888", fontFamily: "monospace" }}>
-                      {template.plannedStart}-{template.plannedEnd}
-                    </span>
+                  )}
+
+                  {!isCompleted && (
                     <button
-                      onClick={() => onDeleteTemplate(template.id)}
+                      onClick={() => onDeleteTask(task.id)}
                       style={{
                         padding: "2px 6px",
                         fontSize: 11,
@@ -411,30 +325,195 @@ function TaskGroup({
                     >
                       ✕
                     </button>
-                  </>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
 
-        <button
-          onClick={() => onAddTemplate(milestoneId)}
-          style={{
-            marginTop: 8,
-            padding: "5px 10px",
-            fontSize: 11,
-            backgroundColor: "#ff9800",
-            color: "white",
-            border: "none",
-            borderRadius: 4,
-            cursor: "pointer",
-            opacity: 0.9,
-          }}
-        >
-          + Add Focus Template
-        </button>
-      </div>
+          {/* Focus Templates Section */}
+          <div style={{ marginTop: 16, paddingTop: 12, borderTop: `1px dashed ${accentColor}` }}>
+            <div
+              style={{
+                fontSize: 12,
+                fontWeight: 600,
+                color: accentColor,
+                marginBottom: 8,
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+              }}
+            >
+              ⏱️ Focus Templates
+            </div>
+
+            {templates.length === 0 ? (
+              <p style={{ fontSize: 12, color: "#999", fontStyle: "italic", marginBottom: 8 }}>
+                No focus templates
+              </p>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {templates.map((template) => (
+                  <div
+                    key={template.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "7.2px 8px",
+                      backgroundColor: "white",
+                      borderRadius: 4,
+                      border: `1px solid ${accentColor}`,
+                    }}
+                  >
+                    {editingTemplateId === template.id ? (
+                      <>
+                        <input
+                          type="text"
+                          value={editTemplateTitle}
+                          onChange={(e) => setEditTemplateTitle(e.target.value)}
+                          placeholder="Template name"
+                          style={{
+                            flex: 1,
+                            padding: "4px 8px",
+                            fontSize: 12,
+                            border: `1px solid ${accentColor}`,
+                            borderRadius: 4,
+                            outline: "none",
+                          }}
+                        />
+                        <input
+                          type="time"
+                          value={editTemplateStart}
+                          onChange={(e) => setEditTemplateStart(e.target.value)}
+                          style={{
+                            width: 90,
+                            padding: "4px",
+                            fontSize: 12,
+                            border: `1px solid ${accentColor}`,
+                            borderRadius: 4,
+                          }}
+                        />
+                        <span style={{ fontSize: 12, color: "#999" }}>-</span>
+                        <input
+                          type="time"
+                          value={editTemplateEnd}
+                          onChange={(e) => setEditTemplateEnd(e.target.value)}
+                          style={{
+                            width: 90,
+                            padding: "4px",
+                            fontSize: 12,
+                            border: `1px solid ${accentColor}`,
+                            borderRadius: 4,
+                          }}
+                        />
+                        <button
+                          onClick={saveTemplateEdit}
+                          style={{
+                            padding: "4px 8px",
+                            fontSize: 11,
+                            backgroundColor: "#4caf50",
+                            color: "white",
+                            border: "none",
+                            borderRadius: 4,
+                            cursor: "pointer",
+                          }}
+                        >
+                          ✓
+                        </button>
+                        <button
+                          onClick={() => setEditingTemplateId(null)}
+                          style={{
+                            padding: "4px 8px",
+                            fontSize: 11,
+                            backgroundColor: "transparent",
+                            color: "#666",
+                            border: "1px solid #ddd",
+                            borderRadius: 4,
+                            cursor: "pointer",
+                          }}
+                        >
+                          ✕
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <span
+                          onClick={() => startTemplateEdit(template)}
+                          style={{
+                            flex: 1,
+                            fontSize: 12,
+                            cursor: "pointer",
+                            color: "#333",
+                          }}
+                        >
+                          {template.title}
+                        </span>
+                        <span style={{ fontSize: 11, color: "#888", fontFamily: "monospace" }}>
+                          {template.plannedStart}-{template.plannedEnd}
+                        </span>
+                        {!isCompleted && (
+                          <button
+                            onClick={() => onDeleteTemplate(template.id)}
+                            style={{
+                              padding: "2px 6px",
+                              fontSize: 11,
+                              backgroundColor: "transparent",
+                              color: "#f44336",
+                              border: "none",
+                              cursor: "pointer",
+                              opacity: 0.7,
+                            }}
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {!isCompleted && (
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 12 }}>
+              {!hideAddButton && (
+                <button
+                  onClick={() => onAddTask(milestoneId)}
+                  style={{
+                    padding: "4.95px 9.9px",
+                    fontSize: 9.9,
+                    fontWeight: 600,
+                    backgroundColor: "white",
+                    color,
+                    border: `2px dashed ${color}`,
+                    borderRadius: 6,
+                    cursor: "pointer",
+                  }}
+                >
+                  + Add Task
+                </button>
+              )}
+              <button
+                onClick={() => onAddTemplate(milestoneId)}
+                style={{
+                  padding: "4.95px 9.9px",
+                  fontSize: 9.9,
+                  fontWeight: 600,
+                  backgroundColor: "white",
+                  color,
+                  border: `2px dashed ${color}`,
+                  borderRadius: 6,
+                  cursor: "pointer",
+                }}
+              >
+                + Add Focus Template
+              </button>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -446,6 +525,8 @@ export default function MonthSetupPage() {
   const [tick, setTick] = useState(0);
   const state = useMemo(() => loadState(), [tick]);
   const plan = getMonth(state, ymSafe);
+
+  const [fireworks, setFireworks] = useState<{ key: number; colors: string[] } | null>(null);
 
   // v6: Grand Plan is mandatory - redirect if not exists
   if (!state.grandPlan) {
@@ -463,6 +544,14 @@ export default function MonthSetupPage() {
 
   // v6.1: Milestone picker modal
   const [showMilestonePicker, setShowMilestonePicker] = useState(false);
+
+  // v6.3: Add focus template modal
+  const [showAddTemplateModal, setShowAddTemplateModal] = useState(false);
+  const [addTemplateMilestoneId, setAddTemplateMilestoneId] = useState<string | null>(null);
+  const [newTemplateTitle, setNewTemplateTitle] = useState("");
+  const [newTemplateStart, setNewTemplateStart] = useState("09:00");
+  const [newTemplateEnd, setNewTemplateEnd] = useState("10:00");
+  const [addTemplateError, setAddTemplateError] = useState<string | null>(null);
 
   const mutate = (fn: (s: typeof state) => typeof state) => {
     if (plan) {
@@ -568,24 +657,65 @@ export default function MonthSetupPage() {
 
   // v6.1: Mark milestone as completed
   const handleMarkMilestoneCompleted = (milestoneId: string) => {
+    const milestone = state.grandPlan?.milestones.find((m) => m.id === milestoneId);
+    const categoryColor = milestone
+      ? state.grandPlan?.categories.find((c) => c.id === milestone.categoryId)?.color
+      : undefined;
+    const colors = categoryColor ? [categoryColor, "#FFD700", "#ffffff"] : ["#FFD700", "#ff9800", "#ffffff"];
+    setFireworks({ key: Date.now(), colors });
+
     mutate((s) => updateMilestone(s, milestoneId, { status: "COMPLETED" }));
   };
 
   // v6.3: Template handlers
   const handleAddTemplate = (milestoneId: string | null) => {
+    setAddTemplateMilestoneId(milestoneId);
+    setNewTemplateTitle("");
+    setNewTemplateStart("09:00");
+    setNewTemplateEnd("10:00");
+    setAddTemplateError(null);
+    setShowAddTemplateModal(true);
+  };
+
+  const closeAddTemplateModal = () => {
+    setShowAddTemplateModal(false);
+    setAddTemplateMilestoneId(null);
+    setNewTemplateTitle("");
+    setNewTemplateStart("09:00");
+    setNewTemplateEnd("10:00");
+    setAddTemplateError(null);
+  };
+
+  const confirmAddTemplate = () => {
     if (!plan) return;
-    const title = prompt("New focus template name:");
-    if (!title?.trim()) return;
+
+    const title = newTemplateTitle.trim();
+    if (!title) {
+      setAddTemplateError("Template name is required.");
+      return;
+    }
+
+    const startMinutes = parseTimeToMinutes(newTemplateStart);
+    const endMinutes = parseTimeToMinutes(newTemplateEnd);
+    if (startMinutes == null || endMinutes == null) {
+      setAddTemplateError("Please select a valid start and end time.");
+      return;
+    }
+    if (endMinutes <= startMinutes) {
+      setAddTemplateError("End time must be after start time.");
+      return;
+    }
 
     const newTemplate: FocusTemplate = {
       id: makeId("tpl"),
-      title: title.trim(),
-      plannedStart: "09:00",
-      plannedEnd: "10:00",
-      linkedMilestoneId: milestoneId,
+      title,
+      plannedStart: newTemplateStart,
+      plannedEnd: newTemplateEnd,
+      linkedMilestoneId: addTemplateMilestoneId,
     };
     const nextPlan: MonthPlan = { ...plan, templates: [...plan.templates, newTemplate] };
     handlePlanUpdate(nextPlan);
+    closeAddTemplateModal();
   };
 
   const handleUpdateTemplate = (templateId: string, updates: Partial<Pick<FocusTemplate, "title" | "plannedStart" | "plannedEnd">>) => {
@@ -920,6 +1050,14 @@ export default function MonthSetupPage() {
         </div>
       ) : (
         <>
+          {fireworks && (
+            <FireworksOverlay
+              key={fireworks.key}
+              colors={fireworks.colors}
+              onDone={() => setFireworks(null)}
+            />
+          )}
+
           {/* Stats & Controls */}
           <div
             style={{
@@ -979,25 +1117,24 @@ export default function MonthSetupPage() {
           </div>
 
           {/* v6.1: Unified Monthly Tasks Section */}
-          <div
+          <h3
             style={{
-              border: "2px solid #4caf50",
-              borderRadius: 12,
-              padding: 16,
-              marginBottom: 24,
-              backgroundColor: "#f1f8f4",
+              marginTop: 0,
+              marginBottom: 16,
+              color: "#333",
+              borderBottom: "2px solid #eee",
+              paddingBottom: 8,
             }}
           >
-            <h3 style={{ marginTop: 0, marginBottom: 16, color: "#2e7d32" }}>
-              Monthly Tasks
-            </h3>
+            Monthly Tasks
+          </h3>
 
-            {/* Tasks grouped by milestone */}
-            {linkedMilestones.map((milestone) => {
-              const category = state.grandPlan?.categories.find((c) => c.id === milestone.categoryId);
-              const tasks = getTasksForMilestone(milestone.id);
-              const milestoneTemplates = getTemplatesForMilestone(state, ymSafe, milestone.id);
-              return (
+          {/* Tasks grouped by milestone */}
+          {linkedMilestones.map((milestone) => {
+            const category = state.grandPlan?.categories.find((c) => c.id === milestone.categoryId);
+            const tasks = getTasksForMilestone(milestone.id);
+            const milestoneTemplates = getTemplatesForMilestone(state, ymSafe, milestone.id);
+            return (
                 <TaskGroup
                   key={milestone.id}
                   title={`[${category?.title ?? "Category"}] ${milestone.title}`}
@@ -1013,11 +1150,12 @@ export default function MonthSetupPage() {
                   onAddTemplate={handleAddTemplate}
                   onUpdateTemplate={handleUpdateTemplate}
                   onDeleteTemplate={handleDeleteTemplate}
+                  collapseStorageKey={`focustree:month-setup:collapsed:${ymSafe}:milestone:${milestone.id}`}
                 />
               );
             })}
 
-            {/* Standalone tasks section - always show for standalone templates */}
+          {/* Standalone tasks section - always show for standalone templates */}
             {(standaloneTasks.length > 0 || getStandaloneTemplates(state, ymSafe).length > 0) && (
               <TaskGroup
                 title="Standalone Tasks"
@@ -1031,46 +1169,46 @@ export default function MonthSetupPage() {
                 onAddTemplate={handleAddTemplate}
                 onUpdateTemplate={handleUpdateTemplate}
                 onDeleteTemplate={handleDeleteTemplate}
+                collapseStorageKey={`focustree:month-setup:collapsed:${ymSafe}:standalone`}
               />
             )}
 
-            {/* Action buttons */}
-            <div style={{ display: "flex", gap: 12, marginTop: 16, flexWrap: "wrap" }}>
-              {isInPeriod && state.grandPlan.milestones.length > 0 && (
-                <button
-                  onClick={() => setShowMilestonePicker(true)}
-                  style={{
-                    padding: "8px 16px",
-                    fontSize: 13,
-                    fontWeight: 600,
-                    backgroundColor: "#9c27b0",
-                    color: "white",
-                    border: "none",
-                    borderRadius: 6,
-                    cursor: "pointer",
-                  }}
-                >
-                  + Link Milestone
-                </button>
-              )}
-              {standaloneTasks.length === 0 && (
-                <button
-                  onClick={() => handleAddTask(null)}
-                  style={{
-                    padding: "8px 16px",
-                    fontSize: 13,
-                    fontWeight: 600,
-                    backgroundColor: "#607d8b",
-                    color: "white",
-                    border: "none",
-                    borderRadius: 6,
-                    cursor: "pointer",
-                  }}
-                >
-                  + Add Standalone Task
-                </button>
-              )}
-            </div>
+          {/* Action buttons */}
+          <div style={{ display: "flex", gap: 12, marginTop: 16, marginBottom: 24, flexWrap: "wrap" }}>
+            {isInPeriod && state.grandPlan.milestones.length > 0 && (
+              <button
+                onClick={() => setShowMilestonePicker(true)}
+                style={{
+                  padding: "8px 16px",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  backgroundColor: "#9c27b0",
+                  color: "white",
+                  border: "none",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                }}
+              >
+                + Link Milestone
+              </button>
+            )}
+            {standaloneTasks.length === 0 && (
+              <button
+                onClick={() => handleAddTask(null)}
+                style={{
+                  padding: "8px 16px",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  backgroundColor: "#607d8b",
+                  color: "white",
+                  border: "none",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                }}
+              >
+                + Add Standalone Task
+              </button>
+            )}
           </div>
 
           {/* v5: Close Month Button */}
@@ -1212,6 +1350,157 @@ export default function MonthSetupPage() {
                     Cancel
                   </button>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* v6.3: Add Focus Template Modal */}
+          {showAddTemplateModal && (
+            <div
+              style={{
+                position: "fixed",
+                inset: 0,
+                backgroundColor: "rgba(0, 0, 0, 0.5)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                zIndex: 1200,
+              }}
+              onClick={closeAddTemplateModal}
+            >
+              <div
+                style={{
+                  backgroundColor: "white",
+                  borderRadius: 12,
+                  padding: 24,
+                  maxWidth: 520,
+                  width: "90%",
+                  boxShadow: "0 8px 16px rgba(0,0,0,0.2)",
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                {(() => {
+                  const accentColor =
+                    addTemplateMilestoneId === null
+                      ? "#607d8b"
+                      : state.grandPlan?.categories.find(
+                          (c) => c.id === state.grandPlan?.milestones.find((m) => m.id === addTemplateMilestoneId)?.categoryId
+                        )?.color ?? "#ff9800";
+
+                  return (
+                    <>
+                      <h3 style={{ marginTop: 0, marginBottom: 16, color: accentColor }}>
+                        New Focus Template
+                      </h3>
+                <div style={{ display: "grid", gap: 12 }}>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: "#666", marginBottom: 6 }}>
+                      Template name
+                    </div>
+                    <input
+                      type="text"
+                      value={newTemplateTitle}
+                      onChange={(e) => {
+                        setNewTemplateTitle(e.target.value);
+                        setAddTemplateError(null);
+                      }}
+                      placeholder="e.g. Deep Work"
+                      autoFocus
+                      style={{
+                        width: "100%",
+                        padding: "10px 12px",
+                        borderRadius: 8,
+                        border: `1px solid ${accentColor}`,
+                        fontSize: 14,
+                        boxSizing: "border-box",
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: "#666", marginBottom: 6 }}>
+                      Hour range
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "center" }}>
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: "#777", marginBottom: 6 }}>Start</div>
+                        <input
+                          type="time"
+                          value={newTemplateStart}
+                          onChange={(e) => {
+                            setNewTemplateStart(e.target.value);
+                            setAddTemplateError(null);
+                          }}
+                          style={{
+                            width: "100%",
+                            padding: "10px 12px",
+                            borderRadius: 8,
+                            border: `1px solid ${accentColor}`,
+                            fontSize: 14,
+                            boxSizing: "border-box",
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: "#777", marginBottom: 6 }}>End</div>
+                        <input
+                          type="time"
+                          value={newTemplateEnd}
+                          onChange={(e) => {
+                            setNewTemplateEnd(e.target.value);
+                            setAddTemplateError(null);
+                          }}
+                          style={{
+                            width: "100%",
+                            padding: "10px 12px",
+                            borderRadius: 8,
+                            border: `1px solid ${accentColor}`,
+                            fontSize: 14,
+                            boxSizing: "border-box",
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  {addTemplateError && (
+                    <div style={{ color: "#d32f2f", fontSize: 13 }}>
+                      {addTemplateError}
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ display: "flex", gap: 12, justifyContent: "flex-end", marginTop: 20 }}>
+                  <button
+                    onClick={closeAddTemplateModal}
+                    style={{
+                      padding: "8px 16px",
+                      fontSize: 14,
+                      backgroundColor: "white",
+                      border: "1px solid #ddd",
+                      borderRadius: 6,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={confirmAddTemplate}
+                    style={{
+                      padding: "8px 16px",
+                      fontSize: 14,
+                      fontWeight: 600,
+                      backgroundColor: accentColor,
+                      color: "white",
+                      border: "none",
+                      borderRadius: 6,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Add Template
+                  </button>
+                </div>
+                    </>
+                  );
+                })()}
               </div>
             </div>
           )}
