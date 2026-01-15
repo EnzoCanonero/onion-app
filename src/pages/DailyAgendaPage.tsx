@@ -25,6 +25,9 @@ import {
   toggleMeetingAttended,
   toggleEmailChecked,
   toggleBureaucraticsCompleted,
+  getMilestonesInMonth,
+  getTemplatesForMilestone,
+  getStandaloneTemplates,
 } from "../app/storage";
 import { useDateNavigation } from "../contexts/DateNavigationContext";
 import TaskSelectionModal from "../components/TaskSelectionModal";
@@ -997,19 +1000,100 @@ export default function DailyAgendaPage() {
             style={{ padding: 10, fontSize: 14, lineHeight: 1.6, width: "100%", boxSizing: "border-box" }}
           />
 
-          {/* v2: Focus Sessions - Moved to bottom */}
+          {/* v6.3: Focus Sessions - Grouped by milestone */}
           <h3 style={{ marginTop: 32 }}>⏱️ Focus Sessions</h3>
           <div style={{ marginBottom: 24 }}>
-            {plan.templates.map((template) => (
-              <FocusTemplateCard
-                key={template.id}
-                template={template}
-                activeSessionId={day.activeSessionId}
-                completedSessions={state.sessions.filter((s) => s.date === dateSafe)}
-                onStartSession={startSession}
-                onEndSession={endSession}
-              />
-            ))}
+            {/* Sessions grouped by milestone */}
+            {getMilestonesInMonth(state, ym).map((milestone) => {
+              const category = state.grandPlan?.categories.find((c) => c.id === milestone.categoryId);
+              const milestoneTemplates = getTemplatesForMilestone(state, ym, milestone.id);
+              if (milestoneTemplates.length === 0) return null;
+              return (
+                <div key={milestone.id} style={{ marginBottom: 16 }}>
+                  <div
+                    style={{
+                      fontSize: 13,
+                      fontWeight: 600,
+                      color: category?.color ?? "#9c27b0",
+                      marginBottom: 8,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 10,
+                        height: 10,
+                        borderRadius: "50%",
+                        backgroundColor: category?.color ?? "#9c27b0",
+                        display: "inline-block",
+                      }}
+                    />
+                    [{category?.title ?? "Category"}] {milestone.title}
+                  </div>
+                  {milestoneTemplates.map((template) => (
+                    <FocusTemplateCard
+                      key={template.id}
+                      template={template}
+                      activeSessionId={day.activeSessionId}
+                      completedSessions={state.sessions.filter((s) => s.date === dateSafe)}
+                      onStartSession={startSession}
+                      onEndSession={endSession}
+                    />
+                  ))}
+                </div>
+              );
+            })}
+
+            {/* Standalone templates */}
+            {(() => {
+              const standaloneTemplates = getStandaloneTemplates(state, ym);
+              if (standaloneTemplates.length === 0) return null;
+              return (
+                <div style={{ marginBottom: 16 }}>
+                  <div
+                    style={{
+                      fontSize: 13,
+                      fontWeight: 600,
+                      color: "#607d8b",
+                      marginBottom: 8,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 10,
+                        height: 10,
+                        borderRadius: "50%",
+                        backgroundColor: "#607d8b",
+                        display: "inline-block",
+                      }}
+                    />
+                    Standalone Sessions
+                  </div>
+                  {standaloneTemplates.map((template) => (
+                    <FocusTemplateCard
+                      key={template.id}
+                      template={template}
+                      activeSessionId={day.activeSessionId}
+                      completedSessions={state.sessions.filter((s) => s.date === dateSafe)}
+                      onStartSession={startSession}
+                      onEndSession={endSession}
+                    />
+                  ))}
+                </div>
+              );
+            })()}
+
+            {/* Show message if no templates at all */}
+            {plan.templates.length === 0 && (
+              <p style={{ fontSize: 13, color: "#999", fontStyle: "italic" }}>
+                No focus templates defined. Add templates in Month Setup.
+              </p>
+            )}
           </div>
 
           {/* v4: Close Day Button */}

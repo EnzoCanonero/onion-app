@@ -10,6 +10,7 @@ import type {
   GrandPlan,
   Category,
   MilestoneNode,
+  FocusTemplate,
 } from "./types";
 
 const KEY = "focustree.state";
@@ -699,6 +700,7 @@ export function deleteCategory(state: AppStateV0, categoryId: string): AppStateV
   );
 
   // v6.1: Clean up linkedMilestoneId from tasks linked to deleted milestones
+  // v6.3: Also unlink templates (set to null = standalone)
   const cleanedMonths: Record<string, MonthPlan> = {};
   for (const [ym, plan] of Object.entries(state.months)) {
     const cleanedTasks = plan.tasks.map((t) => {
@@ -708,7 +710,13 @@ export function deleteCategory(state: AppStateV0, categoryId: string): AppStateV
       }
       return t;
     });
-    cleanedMonths[ym] = { ...plan, tasks: cleanedTasks };
+    const cleanedTemplates = plan.templates.map((t) => {
+      if (t.linkedMilestoneId && milestoneIds.has(t.linkedMilestoneId)) {
+        return { ...t, linkedMilestoneId: null };
+      }
+      return t;
+    });
+    cleanedMonths[ym] = { ...plan, tasks: cleanedTasks, templates: cleanedTemplates };
   }
 
   return {
@@ -822,6 +830,7 @@ export function deleteMilestone(state: AppStateV0, milestoneId: string, cascadeC
   }
 
   // v6.1: Clean up linkedMilestoneId from tasks linked to deleted milestones
+  // v6.3: Also unlink templates (set to null = standalone)
   const cleanedMonths: Record<string, MonthPlan> = {};
   for (const [ym, plan] of Object.entries(state.months)) {
     const cleanedTasks = plan.tasks.map((t) => {
@@ -831,7 +840,13 @@ export function deleteMilestone(state: AppStateV0, milestoneId: string, cascadeC
       }
       return t;
     });
-    cleanedMonths[ym] = { ...plan, tasks: cleanedTasks };
+    const cleanedTemplates = plan.templates.map((t) => {
+      if (t.linkedMilestoneId && toDelete.has(t.linkedMilestoneId)) {
+        return { ...t, linkedMilestoneId: null };
+      }
+      return t;
+    });
+    cleanedMonths[ym] = { ...plan, tasks: cleanedTasks, templates: cleanedTemplates };
   }
 
   return {
@@ -963,4 +978,19 @@ export function canCreateMonth(state: AppStateV0, ym: YM): { allowed: boolean; r
     allowed: false,
     reason: `Month ${ym} is outside the Grand Plan period (${periodStr})`,
   };
+}
+
+// v6.3: Focus template helpers for milestone grouping
+
+export function getTemplatesForMilestone(state: AppStateV0, ym: YM, milestoneId: string): FocusTemplate[] {
+  const plan = getMonth(state, ym);
+  if (!plan) return [];
+  return plan.templates.filter((t) => t.linkedMilestoneId === milestoneId);
+}
+
+export function getStandaloneTemplates(state: AppStateV0, ym: YM): FocusTemplate[] {
+  const plan = getMonth(state, ym);
+  if (!plan) return [];
+  // null or undefined = standalone (for migration)
+  return plan.templates.filter((t) => t.linkedMilestoneId === null || t.linkedMilestoneId === undefined);
 }
