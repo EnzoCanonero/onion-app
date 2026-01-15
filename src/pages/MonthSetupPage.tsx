@@ -1,7 +1,7 @@
 
 import { useMemo, useState } from "react";
 import { Navigate } from "react-router-dom";
-import type { MonthPlan, YM, TaskNode, MilestoneNode, MilestoneStatus } from "../app/types";
+import type { MonthPlan, YM, TaskNode, MilestoneNode, MilestoneStatus, FocusTemplate } from "../app/types";
 import {
   loadState,
   saveState,
@@ -16,17 +16,18 @@ import {
   deleteTaskFromMonth,
   updateTaskInMonth,
   updateMilestone,
+  getTemplatesForMilestone,
+  getStandaloneTemplates,
 } from "../app/storage";
 import { useDateNavigation } from "../contexts/DateNavigationContext";
-import FocusTemplateEditor from "../components/FocusTemplateEditor";
 
 function seedPlan(ym: YM): MonthPlan {
   return {
     ym,
     tasks: [],
     templates: [
-      { id: makeId("tpl"), title: "Deep Work A", plannedStart: "09:00", plannedEnd: "11:00" },
-      { id: makeId("tpl"), title: "Deep Work B", plannedStart: "14:00", plannedEnd: "16:00" },
+      { id: makeId("tpl"), title: "Deep Work A", plannedStart: "09:00", plannedEnd: "11:00", linkedMilestoneId: null },
+      { id: makeId("tpl"), title: "Deep Work B", plannedStart: "14:00", plannedEnd: "16:00", linkedMilestoneId: null },
     ],
     initialSnapshotTaskIds: [],
     createdAt: new Date().toISOString(),
@@ -40,10 +41,14 @@ function TaskGroup({
   tasks,
   milestoneId,
   milestoneStatus,
+  templates,
   onAddTask,
   onUpdateTask,
   onDeleteTask,
   onMarkMilestoneCompleted,
+  onAddTemplate,
+  onUpdateTemplate,
+  onDeleteTemplate,
   hideAddButton = false,
 }: {
   title: string;
@@ -51,14 +56,22 @@ function TaskGroup({
   tasks: TaskNode[];
   milestoneId: string | null;
   milestoneStatus?: MilestoneStatus;
+  templates: FocusTemplate[];
   onAddTask: (milestoneId: string | null) => void;
   onUpdateTask: (taskId: string, title: string) => void;
   onDeleteTask: (taskId: string) => void;
   onMarkMilestoneCompleted?: (milestoneId: string) => void;
+  onAddTemplate: (milestoneId: string | null) => void;
+  onUpdateTemplate: (templateId: string, updates: Partial<Pick<FocusTemplate, "title" | "plannedStart" | "plannedEnd">>) => void;
+  onDeleteTemplate: (templateId: string) => void;
   hideAddButton?: boolean;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
+  const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
+  const [editTemplateTitle, setEditTemplateTitle] = useState("");
+  const [editTemplateStart, setEditTemplateStart] = useState("");
+  const [editTemplateEnd, setEditTemplateEnd] = useState("");
 
   const startEdit = (task: TaskNode) => {
     setEditingId(task.id);
@@ -71,6 +84,27 @@ function TaskGroup({
     }
     setEditingId(null);
     setEditTitle("");
+  };
+
+  const startTemplateEdit = (template: FocusTemplate) => {
+    setEditingTemplateId(template.id);
+    setEditTemplateTitle(template.title);
+    setEditTemplateStart(template.plannedStart);
+    setEditTemplateEnd(template.plannedEnd);
+  };
+
+  const saveTemplateEdit = () => {
+    if (editingTemplateId && editTemplateTitle.trim()) {
+      onUpdateTemplate(editingTemplateId, {
+        title: editTemplateTitle.trim(),
+        plannedStart: editTemplateStart || "09:00",
+        plannedEnd: editTemplateEnd || "10:00",
+      });
+    }
+    setEditingTemplateId(null);
+    setEditTemplateTitle("");
+    setEditTemplateStart("");
+    setEditTemplateEnd("");
   };
 
   const isCompleted = milestoneStatus === "COMPLETED";
@@ -139,6 +173,7 @@ function TaskGroup({
         )}
       </div>
 
+      {/* Tasks Section */}
       {tasks.length === 0 ? (
         <p style={{ fontSize: 13, color: "#999", fontStyle: "italic", marginBottom: 8 }}>
           No tasks yet
@@ -250,6 +285,156 @@ function TaskGroup({
           + Add Task
         </button>
       )}
+
+      {/* Focus Templates Section */}
+      <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px dashed #ddd" }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "#ff9800", marginBottom: 8, display: "flex", alignItems: "center", gap: 4 }}>
+          ⏱️ Focus Templates
+        </div>
+
+        {templates.length === 0 ? (
+          <p style={{ fontSize: 12, color: "#999", fontStyle: "italic", marginBottom: 8 }}>
+            No focus templates
+          </p>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {templates.map((template) => (
+              <div
+                key={template.id}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "6px 8px",
+                  backgroundColor: "#fff8e1",
+                  borderRadius: 4,
+                  border: "1px solid #ffe0b2",
+                }}
+              >
+                {editingTemplateId === template.id ? (
+                  <>
+                    <input
+                      type="text"
+                      value={editTemplateTitle}
+                      onChange={(e) => setEditTemplateTitle(e.target.value)}
+                      placeholder="Template name"
+                      style={{
+                        flex: 1,
+                        padding: "4px 8px",
+                        fontSize: 12,
+                        border: "1px solid #ff9800",
+                        borderRadius: 4,
+                        outline: "none",
+                      }}
+                    />
+                    <input
+                      type="time"
+                      value={editTemplateStart}
+                      onChange={(e) => setEditTemplateStart(e.target.value)}
+                      style={{
+                        width: 90,
+                        padding: "4px",
+                        fontSize: 12,
+                        border: "1px solid #ff9800",
+                        borderRadius: 4,
+                      }}
+                    />
+                    <span style={{ fontSize: 12, color: "#999" }}>-</span>
+                    <input
+                      type="time"
+                      value={editTemplateEnd}
+                      onChange={(e) => setEditTemplateEnd(e.target.value)}
+                      style={{
+                        width: 90,
+                        padding: "4px",
+                        fontSize: 12,
+                        border: "1px solid #ff9800",
+                        borderRadius: 4,
+                      }}
+                    />
+                    <button
+                      onClick={saveTemplateEdit}
+                      style={{
+                        padding: "4px 8px",
+                        fontSize: 11,
+                        backgroundColor: "#4caf50",
+                        color: "white",
+                        border: "none",
+                        borderRadius: 4,
+                        cursor: "pointer",
+                      }}
+                    >
+                      ✓
+                    </button>
+                    <button
+                      onClick={() => setEditingTemplateId(null)}
+                      style={{
+                        padding: "4px 8px",
+                        fontSize: 11,
+                        backgroundColor: "transparent",
+                        color: "#666",
+                        border: "1px solid #ddd",
+                        borderRadius: 4,
+                        cursor: "pointer",
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span
+                      onClick={() => startTemplateEdit(template)}
+                      style={{
+                        flex: 1,
+                        fontSize: 12,
+                        cursor: "pointer",
+                        color: "#333",
+                      }}
+                    >
+                      {template.title}
+                    </span>
+                    <span style={{ fontSize: 11, color: "#888", fontFamily: "monospace" }}>
+                      {template.plannedStart}-{template.plannedEnd}
+                    </span>
+                    <button
+                      onClick={() => onDeleteTemplate(template.id)}
+                      style={{
+                        padding: "2px 6px",
+                        fontSize: 11,
+                        backgroundColor: "transparent",
+                        color: "#f44336",
+                        border: "none",
+                        cursor: "pointer",
+                        opacity: 0.7,
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <button
+          onClick={() => onAddTemplate(milestoneId)}
+          style={{
+            marginTop: 8,
+            padding: "5px 10px",
+            fontSize: 11,
+            backgroundColor: "#ff9800",
+            color: "white",
+            border: "none",
+            borderRadius: 4,
+            cursor: "pointer",
+            opacity: 0.9,
+          }}
+        >
+          + Add Focus Template
+        </button>
+      </div>
     </div>
   );
 }
@@ -384,6 +569,38 @@ export default function MonthSetupPage() {
   // v6.1: Mark milestone as completed
   const handleMarkMilestoneCompleted = (milestoneId: string) => {
     mutate((s) => updateMilestone(s, milestoneId, { status: "COMPLETED" }));
+  };
+
+  // v6.3: Template handlers
+  const handleAddTemplate = (milestoneId: string | null) => {
+    if (!plan) return;
+    const title = prompt("New focus template name:");
+    if (!title?.trim()) return;
+
+    const newTemplate: FocusTemplate = {
+      id: makeId("tpl"),
+      title: title.trim(),
+      plannedStart: "09:00",
+      plannedEnd: "10:00",
+      linkedMilestoneId: milestoneId,
+    };
+    const nextPlan: MonthPlan = { ...plan, templates: [...plan.templates, newTemplate] };
+    handlePlanUpdate(nextPlan);
+  };
+
+  const handleUpdateTemplate = (templateId: string, updates: Partial<Pick<FocusTemplate, "title" | "plannedStart" | "plannedEnd">>) => {
+    if (!plan) return;
+    const nextTemplates = plan.templates.map((t) =>
+      t.id === templateId ? { ...t, ...updates } : t
+    );
+    const nextPlan: MonthPlan = { ...plan, templates: nextTemplates };
+    handlePlanUpdate(nextPlan);
+  };
+
+  const handleDeleteTemplate = (templateId: string) => {
+    if (!plan) return;
+    const nextPlan: MonthPlan = { ...plan, templates: plan.templates.filter((t) => t.id !== templateId) };
+    handlePlanUpdate(nextPlan);
   };
 
   // v5: If month is closed, show read-only report view
@@ -779,6 +996,7 @@ export default function MonthSetupPage() {
             {linkedMilestones.map((milestone) => {
               const category = state.grandPlan?.categories.find((c) => c.id === milestone.categoryId);
               const tasks = getTasksForMilestone(milestone.id);
+              const milestoneTemplates = getTemplatesForMilestone(state, ymSafe, milestone.id);
               return (
                 <TaskGroup
                   key={milestone.id}
@@ -787,24 +1005,32 @@ export default function MonthSetupPage() {
                   tasks={tasks}
                   milestoneId={milestone.id}
                   milestoneStatus={milestone.status}
+                  templates={milestoneTemplates}
                   onAddTask={handleAddTask}
                   onUpdateTask={handleUpdateTask}
                   onDeleteTask={handleDeleteTask}
                   onMarkMilestoneCompleted={handleMarkMilestoneCompleted}
+                  onAddTemplate={handleAddTemplate}
+                  onUpdateTemplate={handleUpdateTemplate}
+                  onDeleteTemplate={handleDeleteTemplate}
                 />
               );
             })}
 
-            {/* Standalone tasks - only show box if there are standalone tasks */}
-            {standaloneTasks.length > 0 && (
+            {/* Standalone tasks section - always show for standalone templates */}
+            {(standaloneTasks.length > 0 || getStandaloneTemplates(state, ymSafe).length > 0) && (
               <TaskGroup
                 title="Standalone Tasks"
                 color="#607d8b"
                 tasks={standaloneTasks}
                 milestoneId={null}
+                templates={getStandaloneTemplates(state, ymSafe)}
                 onAddTask={handleAddTask}
                 onUpdateTask={handleUpdateTask}
                 onDeleteTask={handleDeleteTask}
+                onAddTemplate={handleAddTemplate}
+                onUpdateTemplate={handleUpdateTemplate}
+                onDeleteTemplate={handleDeleteTemplate}
               />
             )}
 
@@ -845,19 +1071,6 @@ export default function MonthSetupPage() {
                 </button>
               )}
             </div>
-          </div>
-
-          {/* Focus Templates Section */}
-          <div
-            style={{
-              border: "2px solid #ff9800",
-              borderRadius: 12,
-              padding: 16,
-              marginBottom: 24,
-              backgroundColor: "#fff8e1",
-            }}
-          >
-            <FocusTemplateEditor plan={plan} onUpdate={handlePlanUpdate} />
           </div>
 
           {/* v5: Close Month Button */}

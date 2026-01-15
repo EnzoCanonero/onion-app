@@ -52,6 +52,7 @@ export type FocusTemplate = {
   title: string;
   plannedStart: string; // "HH:MM"
   plannedEnd: string;   // "HH:MM"
+  linkedMilestoneId?: string | null; // v6.3: null = standalone, undefined = legacy (treat as standalone)
 };
 
 export type MonthPlan = {
