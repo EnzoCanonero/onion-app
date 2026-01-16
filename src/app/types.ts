@@ -48,6 +48,7 @@ export type GrandPlan = {
 export type TaskNode = {
   id: string;
   title: string;
+  description?: string;
   parentId: string | null;
   status: TaskStatus;
   linkedMilestoneId?: string; // v6.1: optional link to a milestone
@@ -65,7 +66,7 @@ export type MonthPlan = {
   ym: YM;
   tasks: TaskNode[];
   templates: FocusTemplate[];
-  initialSnapshotTaskIds: string[];
+  pinnedMilestoneIds: string[]; // v8: explicit milestone pins shown in Month Setup
   createdAt: string; // ISO timestamp
   isClosed?: boolean; // v5: true if month is closed (read-only report mode)
 };

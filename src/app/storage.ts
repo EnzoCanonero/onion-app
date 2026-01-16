@@ -66,6 +66,38 @@ export function loadState(): AppStateV0 {
       }
     }
 
+    // v8 migration: Remove legacy snapshot fields + add explicit month pins
+    const validMilestoneIds = new Set<string>(parsed.grandPlan?.milestones?.map((m) => m.id) ?? []);
+    for (const plan of Object.values(parsed.months ?? {})) {
+      if (!plan || typeof plan !== "object") continue;
+
+      if ("initialSnapshotTaskIds" in (plan as any)) {
+        delete (plan as any).initialSnapshotTaskIds;
+      }
+
+      const existingPins = Array.isArray((plan as any).pinnedMilestoneIds)
+        ? (plan as any).pinnedMilestoneIds.filter((id: any) => typeof id === "string")
+        : [];
+
+      // If no pins exist yet, derive them from any linked tasks/templates (legacy linking behavior)
+      const derivedPins: string[] = [];
+      const seen = new Set<string>();
+      const pushIfValid = (id: unknown) => {
+        if (typeof id !== "string" || !id) return;
+        if (seen.has(id)) return;
+        if (validMilestoneIds.size > 0 && !validMilestoneIds.has(id)) return;
+        seen.add(id);
+        derivedPins.push(id);
+      };
+
+      (plan as any).tasks?.forEach((t: any) => pushIfValid(t?.linkedMilestoneId));
+      (plan as any).templates?.forEach((t: any) => pushIfValid(t?.linkedMilestoneId));
+
+      const pinsToUse = existingPins.length > 0 ? existingPins : derivedPins;
+      (plan as any).pinnedMilestoneIds =
+        validMilestoneIds.size > 0 ? pinsToUse.filter((id: string) => validMilestoneIds.has(id)) : pinsToUse;
+    }
+
     return parsed;
   } catch {
     return emptyState;
@@ -259,7 +291,7 @@ export function updateTaskInMonth(
   state: AppStateV0,
   ym: YM,
   taskId: string,
-  updates: Partial<Pick<TaskNode, "title" | "parentId" | "status">>
+  updates: Partial<Pick<TaskNode, "title" | "description" | "parentId" | "status">>
 ): AppStateV0 {
   const plan = getMonth(state, ym);
   if (!plan) return state;
@@ -293,9 +325,7 @@ export function deleteTaskFromMonth(
   }
 
   const nextTasks = plan.tasks.filter((t) => !toDelete.has(t.id));
-  const nextSnapshot = plan.initialSnapshotTaskIds.filter((id) => !toDelete.has(id));
-
-  return upsertMonth(state, { ...plan, tasks: nextTasks, initialSnapshotTaskIds: nextSnapshot });
+  return upsertMonth(state, { ...plan, tasks: nextTasks });
 }
 
 export function reorderTaskInMonth(
@@ -703,7 +733,7 @@ export function deleteGrandPlan(state: AppStateV0): AppStateV0 {
       const { linkedMilestoneId, ...rest } = t;
       return rest as TaskNode;
     });
-    cleanedMonths[ym] = { ...plan, tasks: cleanedTasks };
+    cleanedMonths[ym] = { ...plan, tasks: cleanedTasks, pinnedMilestoneIds: [] };
   }
   return { ...state, grandPlan: undefined, months: cleanedMonths };
 }
@@ -773,7 +803,8 @@ export function deleteCategory(state: AppStateV0, categoryId: string): AppStateV
       }
       return t;
     });
-    cleanedMonths[ym] = { ...plan, tasks: cleanedTasks, templates: cleanedTemplates };
+    const nextPinned = (plan.pinnedMilestoneIds ?? []).filter((id) => !milestoneIds.has(id));
+    cleanedMonths[ym] = { ...plan, tasks: cleanedTasks, templates: cleanedTemplates, pinnedMilestoneIds: nextPinned };
   }
 
   return {
@@ -903,7 +934,8 @@ export function deleteMilestone(state: AppStateV0, milestoneId: string, cascadeC
       }
       return t;
     });
-    cleanedMonths[ym] = { ...plan, tasks: cleanedTasks, templates: cleanedTemplates };
+    const nextPinned = (plan.pinnedMilestoneIds ?? []).filter((id) => !toDelete.has(id));
+    cleanedMonths[ym] = { ...plan, tasks: cleanedTasks, templates: cleanedTemplates, pinnedMilestoneIds: nextPinned };
   }
 
   return {
@@ -970,7 +1002,9 @@ export function addTaskWithMilestone(
     linkedMilestoneId: milestoneId,
   };
 
-  const nextPlan: MonthPlan = { ...plan, tasks: [...plan.tasks, task] };
+  const pinned = Array.isArray(plan.pinnedMilestoneIds) ? plan.pinnedMilestoneIds : [];
+  const nextPinned = pinned.includes(milestoneId) ? pinned : [...pinned, milestoneId];
+  const nextPlan: MonthPlan = { ...plan, tasks: [...plan.tasks, task], pinnedMilestoneIds: nextPinned };
   return { state: upsertMonth(state, nextPlan), task };
 }
 
@@ -978,26 +1012,27 @@ export function getMilestonesInMonth(state: AppStateV0, ym: YM): MilestoneNode[]
   const plan = getMonth(state, ym);
   if (!plan || !state.grandPlan) return [];
 
-  // Get unique milestone IDs from tasks
-  const milestoneIds = new Set<string>();
-  plan.tasks.forEach((t) => {
-    if (t.linkedMilestoneId) {
-      milestoneIds.add(t.linkedMilestoneId);
-    }
-  });
+  const byId = new Map(state.grandPlan.milestones.map((m) => [m.id, m]));
 
-  // Return milestones in order
-  return state.grandPlan.milestones
-    .filter((m) => milestoneIds.has(m.id))
-    .sort((a, b) => {
-      // Sort by category order, then by milestone order
-      const catA = state.grandPlan!.categories.find((c) => c.id === a.categoryId);
-      const catB = state.grandPlan!.categories.find((c) => c.id === b.categoryId);
-      if (catA && catB && catA.order !== catB.order) {
-        return catA.order - catB.order;
-      }
-      return a.order - b.order;
-    });
+  const orderedIds: string[] = [];
+  const seen = new Set<string>();
+
+  const push = (id: unknown) => {
+    if (typeof id !== "string" || !id) return;
+    if (seen.has(id)) return;
+    if (!byId.has(id)) return;
+    seen.add(id);
+    orderedIds.push(id);
+  };
+
+  // Prefer explicit month pins first (in user order)
+  (plan.pinnedMilestoneIds ?? []).forEach((id) => push(id));
+
+  // Also include any milestones referenced by tasks/templates (legacy / safety)
+  plan.tasks.forEach((t) => push(t.linkedMilestoneId));
+  plan.templates.forEach((t) => push(t.linkedMilestoneId));
+
+  return orderedIds.map((id) => byId.get(id)!).filter(Boolean);
 }
 
 export function getTasksForMilestone(state: AppStateV0, ym: YM, milestoneId: string): TaskNode[] {
