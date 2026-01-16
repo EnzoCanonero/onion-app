@@ -1,5 +1,5 @@
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Navigate } from "react-router-dom";
 import type { MonthPlan, YM, TaskNode, MilestoneNode, MilestoneStatus, FocusTemplate } from "../app/types";
 import {
@@ -43,11 +43,8 @@ function seedPlan(ym: YM): MonthPlan {
   return {
     ym,
     tasks: [],
-    templates: [
-      { id: makeId("tpl"), title: "Deep Work A", plannedStart: "09:00", plannedEnd: "11:00", linkedMilestoneId: null },
-      { id: makeId("tpl"), title: "Deep Work B", plannedStart: "14:00", plannedEnd: "16:00", linkedMilestoneId: null },
-    ],
-    initialSnapshotTaskIds: [],
+    templates: [],
+    pinnedMilestoneIds: [],
     createdAt: new Date().toISOString(),
   };
 }
@@ -68,7 +65,8 @@ function TaskGroup({
   onUpdateTemplate,
   onDeleteTemplate,
   hideAddButton = false,
-  collapseStorageKey,
+  hideTitle = false,
+  chromeless = false,
 }: {
   title: string;
   color: string;
@@ -77,57 +75,25 @@ function TaskGroup({
   milestoneStatus?: MilestoneStatus;
   templates: FocusTemplate[];
   onAddTask: (milestoneId: string | null) => void;
-  onUpdateTask: (taskId: string, title: string) => void;
+  onUpdateTask: (taskId: string, updates: Partial<Pick<TaskNode, "title" | "description">>) => void;
   onDeleteTask: (taskId: string) => void;
   onMarkMilestoneCompleted?: (milestoneId: string) => void;
   onAddTemplate: (milestoneId: string | null) => void;
   onUpdateTemplate: (templateId: string, updates: Partial<Pick<FocusTemplate, "title" | "plannedStart" | "plannedEnd">>) => void;
   onDeleteTemplate: (templateId: string) => void;
   hideAddButton?: boolean;
-  collapseStorageKey: string;
+  hideTitle?: boolean;
+  chromeless?: boolean;
 }) {
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editTitle, setEditTitle] = useState("");
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
   const [editTemplateTitle, setEditTemplateTitle] = useState("");
   const [editTemplateStart, setEditTemplateStart] = useState("");
   const [editTemplateEnd, setEditTemplateEnd] = useState("");
-  const [collapsed, setCollapsed] = useState(() => {
-    try {
-      return window.localStorage.getItem(collapseStorageKey) === "1";
-    } catch {
-      return false;
-    }
-  });
 
-  useEffect(() => {
-    try {
-      setCollapsed(window.localStorage.getItem(collapseStorageKey) === "1");
-    } catch {
-      setCollapsed(false);
-    }
-  }, [collapseStorageKey]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(collapseStorageKey, collapsed ? "1" : "0");
-    } catch {
-      // ignore
-    }
-  }, [collapseStorageKey, collapsed]);
-
-  const startEdit = (task: TaskNode) => {
-    setEditingId(task.id);
-    setEditTitle(task.title);
-  };
-
-  const saveEdit = () => {
-    if (editingId && editTitle.trim()) {
-      onUpdateTask(editingId, editTitle.trim());
-    }
-    setEditingId(null);
-    setEditTitle("");
-  };
+  const [taskModalTaskId, setTaskModalTaskId] = useState<string | null>(null);
+  const [taskModalTitle, setTaskModalTitle] = useState("");
+  const [taskModalDescription, setTaskModalDescription] = useState("");
+  const [taskModalError, setTaskModalError] = useState<string | null>(null);
 
   const startTemplateEdit = (template: FocusTemplate) => {
     setEditingTemplateId(template.id);
@@ -153,202 +119,274 @@ function TaskGroup({
   const isCompleted = milestoneStatus === "COMPLETED";
   const accentColor = isCompleted ? "#FFD700" : color;
   const groupBackgroundColor = withHexAlpha(accentColor, "10");
+  const uiAccent = chromeless ? "#000" : accentColor;
 
-  return (
-    <div
-      style={{
-        marginBottom: 16,
+  const openTaskModal = (task: TaskNode) => {
+    setTaskModalTaskId(task.id);
+    setTaskModalTitle(task.title);
+    setTaskModalDescription(task.description ?? "");
+    setTaskModalError(null);
+  };
+
+  const closeTaskModal = () => {
+    setTaskModalTaskId(null);
+    setTaskModalTitle("");
+    setTaskModalDescription("");
+    setTaskModalError(null);
+  };
+
+  const saveTaskModal = () => {
+    if (!taskModalTaskId) return;
+    const nextTitle = taskModalTitle.trim();
+    if (!nextTitle) {
+      setTaskModalError("Title is required.");
+      return;
+    }
+    const nextDescription = taskModalDescription.trim();
+    onUpdateTask(taskModalTaskId, { title: nextTitle, description: nextDescription || undefined });
+    closeTaskModal();
+  };
+
+  useEffect(() => {
+    if (!taskModalTaskId) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeTaskModal();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [taskModalTaskId]);
+
+  const bubbleStyle: CSSProperties = chromeless
+    ? {
+        padding: 16,
+        backgroundColor: "transparent",
+        borderRadius: 14,
+        border: "2px solid #000",
+      }
+    : {
         padding: 16,
         backgroundColor: groupBackgroundColor,
-        borderRadius: 12,
+        borderRadius: 14,
         border: `2px solid ${accentColor}`,
-      }}
-    >
-      <div
-        style={{
-          fontWeight: 600,
-          marginBottom: collapsed ? 0 : 12,
-          color: accentColor,
-          fontSize: 14,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 8,
-          cursor: "pointer",
-          userSelect: "none",
-        }}
-        title={collapsed ? "Click to expand" : "Click to collapse"}
-        onClick={() => setCollapsed((v) => !v)}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span
-            style={{
-              width: 12,
-              height: 12,
-              borderRadius: "50%",
-              backgroundColor: accentColor,
-              display: "inline-block",
-            }}
-          />
-          {title}
-          {isCompleted && !collapsed && (
-            <span style={{ fontSize: 12, color: accentColor }}>✓ Completed</span>
-          )}
-        </div>
-        {/* Mark as completed button - only show for milestones that aren't completed */}
-        {milestoneId && !collapsed && !isCompleted && onMarkMilestoneCompleted && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onMarkMilestoneCompleted(milestoneId);
-            }}
-            style={{
-              padding: "4px 10px",
-              fontSize: 11,
-              fontWeight: 600,
-              backgroundColor: "white",
-              color,
-              border: `1px solid ${color}`,
-              borderRadius: 6,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-            }}
-            title="Mark this milestone as completed"
-          >
-            ★ Mark Completed
-          </button>
-        )}
-      </div>
+        boxShadow: "0 1px 0 rgba(0,0,0,0.04), 0 10px 24px rgba(0,0,0,0.06)",
+      };
 
-      {!collapsed && (
-        <>
-          {/* Tasks Section */}
-          {tasks.length === 0 ? (
-            <p style={{ fontSize: 13, color: "#999", fontStyle: "italic", marginBottom: 8 }}>
-              No tasks yet
-            </p>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {tasks.map((task) => (
-                <div
-                  key={task.id}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    padding: "7.2px 8px",
-                    backgroundColor: "white",
-                    borderRadius: 4,
-                    border: `1px solid ${accentColor}`,
-                  }}
-                >
-                  {/* Read-only status indicator */}
-                  <span
-                    style={{
-                      width: 20,
-                      height: 20,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: 14,
-                      fontWeight: 700,
-                      color:
-                        task.status === "GREEN"
-                          ? "#4caf50"
-                          : task.status === "YELLOW"
-                          ? "#ff9800"
-                          : "#ccc",
-                    }}
-                    title={
-                      task.status === "GREEN"
-                        ? "Completed"
-                        : task.status === "YELLOW"
-                        ? "In Progress"
-                        : "Not started"
-                    }
-                  >
-                    {task.status === "GREEN" ? "✓" : task.status === "YELLOW" ? "◐" : "○"}
-                  </span>
-
-                  {editingId === task.id ? (
-                    <input
-                      type="text"
-                      value={editTitle}
-                      onChange={(e) => setEditTitle(e.target.value)}
-                      onBlur={saveEdit}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") saveEdit();
-                        if (e.key === "Escape") {
-                          setEditingId(null);
-                          setEditTitle("");
-                        }
-                      }}
-                      autoFocus
-                      style={{
-                        flex: 1,
-                        padding: "4px 8px",
-                        fontSize: 13,
-                        border: `1px solid ${accentColor}`,
-                        borderRadius: 4,
-                        outline: "none",
-                      }}
-                    />
-                  ) : (
-                    <span
-                      onClick={() => startEdit(task)}
-                      style={{
-                        flex: 1,
-                        fontSize: 13,
-                        cursor: "pointer",
-                        textDecoration: "none",
-                        color: "#333",
-                      }}
-                    >
-                      {task.title}
-                    </span>
-                  )}
-
-                  {!isCompleted && (
-                    <button
-                      onClick={() => onDeleteTask(task.id)}
-                      style={{
-                        padding: "2px 6px",
-                        fontSize: 11,
-                        backgroundColor: "transparent",
-                        color: "#f44336",
-                        border: "none",
-                        cursor: "pointer",
-                        opacity: 0.7,
-                      }}
-                    >
-                      ✕
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Focus Templates Section */}
-          <div style={{ marginTop: 16, paddingTop: 12, borderTop: `1px dashed ${accentColor}` }}>
-            <div
+  return (
+    <div style={{ marginBottom: 16 }}>
+      {!hideTitle ? (
+        <div
+          style={{
+            fontWeight: 600,
+            marginBottom: 12,
+            color: uiAccent,
+            fontSize: 14,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 8,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {!chromeless && (
+              <span
+                style={{
+                  width: 12,
+                  height: 12,
+                  borderRadius: "50%",
+                  backgroundColor: accentColor,
+                  display: "inline-block",
+                }}
+              />
+            )}
+            {title}
+            {isCompleted && (
+              <span style={{ fontSize: 12, color: uiAccent }}>✓ Completed</span>
+            )}
+          </div>
+          {/* Mark as completed button - only show for milestones that aren't completed */}
+          {milestoneId && !isCompleted && onMarkMilestoneCompleted && (
+            <button
+              onClick={() => onMarkMilestoneCompleted(milestoneId)}
               style={{
-                fontSize: 12,
+                padding: "4px 10px",
+                fontSize: 11,
                 fontWeight: 600,
-                color: accentColor,
-                marginBottom: 8,
+                backgroundColor: "white",
+                color,
+                border: `1px solid ${color}`,
+                borderRadius: 6,
+                cursor: "pointer",
                 display: "flex",
                 alignItems: "center",
                 gap: 4,
               }}
+              title="Mark this milestone as completed"
             >
-              ⏱️ Focus Templates
-            </div>
+              ★ Mark Completed
+            </button>
+          )}
+        </div>
+      ) : isCompleted || (milestoneId && !isCompleted && onMarkMilestoneCompleted) ? (
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginBottom: 12 }}>
+          {isCompleted && (
+            <span style={{ fontSize: 12, fontWeight: 700, color: uiAccent }}>✓ Completed</span>
+          )}
+          {milestoneId && !isCompleted && onMarkMilestoneCompleted && (
+            <button
+              onClick={() => onMarkMilestoneCompleted(milestoneId)}
+              style={{
+                padding: "4px 10px",
+                fontSize: 11,
+                fontWeight: 700,
+                backgroundColor: "white",
+                color,
+                border: `1px solid ${color}`,
+                borderRadius: 6,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+              }}
+              title="Mark this milestone as completed"
+            >
+              ★ Mark Completed
+            </button>
+          )}
+        </div>
+      ) : null}
 
+      <div style={{ display: "flex", gap: 16, alignItems: "stretch", flexWrap: "wrap" }}>
+        {/* Tasks (left bubble) */}
+        <div style={{ ...bubbleStyle, flex: "3 1 420px", minWidth: 320, display: "flex", flexDirection: "column" }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: uiAccent, display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+            ✅ Tasks
+            <span style={{ fontSize: 11, opacity: 0.6, fontWeight: 600 }}>({tasks.length})</span>
+          </div>
+
+          <div style={{ flex: "1 1 auto" }}>
+            {tasks.length === 0 ? (
+              <p style={{ fontSize: 13, color: "#999", fontStyle: "italic", margin: 0 }}>
+                No tasks yet
+              </p>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {tasks.map((task) => (
+                  <div
+                    key={task.id}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") openTaskModal(task);
+                    }}
+                    onClick={() => openTaskModal(task)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: chromeless ? "6px 0" : "7.2px 8px",
+                      backgroundColor: chromeless ? "transparent" : "white",
+                      borderRadius: chromeless ? 0 : 4,
+                      border: chromeless ? "none" : `1px solid ${accentColor}`,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {!chromeless && (
+                      <span
+                        style={{
+                          width: 20,
+                          height: 20,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          fontSize: 14,
+                          fontWeight: 700,
+                          color:
+                            task.status === "GREEN"
+                              ? "#4caf50"
+                              : task.status === "YELLOW"
+                              ? "#ff9800"
+                              : "#ccc",
+                        }}
+                        title={
+                          task.status === "GREEN"
+                            ? "Completed"
+                            : task.status === "YELLOW"
+                            ? "In Progress"
+                            : "Not started"
+                        }
+                      >
+                        {task.status === "GREEN" ? "✓" : task.status === "YELLOW" ? "◐" : "○"}
+                      </span>
+                    )}
+
+                    <span
+                      style={{
+                        flex: 1,
+                        fontSize: 13,
+                        textDecoration: "none",
+                        color: chromeless ? "#000" : "#333",
+                      }}
+                    >
+                      {task.title}
+                    </span>
+
+                    {!isCompleted && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDeleteTask(task.id);
+                        }}
+                        style={{
+                          padding: "2px 6px",
+                          fontSize: 11,
+                          backgroundColor: "transparent",
+                          color: "#f44336",
+                          border: "none",
+                          cursor: "pointer",
+                          opacity: 0.7,
+                        }}
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {!isCompleted && !hideAddButton && (
+            <div style={{ marginTop: "auto", paddingTop: 10 }}>
+              <button
+                onClick={() => onAddTask(milestoneId)}
+                style={{
+                  padding: "4.95px 9.9px",
+                  fontSize: 9.9,
+                  fontWeight: 700,
+                  backgroundColor: "white",
+                  color: chromeless ? "#000" : color,
+                  border: chromeless ? "2px solid #000" : `2px solid ${color}`,
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                + Add Task
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Focus Templates (right bubble) */}
+        <div style={{ ...bubbleStyle, flex: "2 1 320px", minWidth: 280, display: "flex", flexDirection: "column" }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: uiAccent, display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+            ⏱️ Focus Templates
+            <span style={{ fontSize: 11, opacity: 0.6, fontWeight: 600 }}>({templates.length})</span>
+          </div>
+
+          <div style={{ flex: "1 1 auto" }}>
             {templates.length === 0 ? (
-              <p style={{ fontSize: 12, color: "#999", fontStyle: "italic", marginBottom: 8 }}>
+              <p style={{ fontSize: 12, color: "#999", fontStyle: "italic", margin: 0 }}>
                 No focus templates
               </p>
             ) : (
@@ -360,10 +398,11 @@ function TaskGroup({
                       display: "flex",
                       alignItems: "center",
                       gap: 8,
-                      padding: "7.2px 8px",
-                      backgroundColor: "white",
-                      borderRadius: 4,
-                      border: `1px solid ${accentColor}`,
+                      padding: chromeless ? "6px 0" : "7.2px 8px",
+                      backgroundColor: chromeless ? "transparent" : "white",
+                      borderRadius: chromeless ? 0 : 4,
+                      border: chromeless ? "none" : `1px solid ${accentColor}`,
+                      flexWrap: "wrap",
                     }}
                   >
                     {editingTemplateId === template.id ? (
@@ -374,10 +413,11 @@ function TaskGroup({
                           onChange={(e) => setEditTemplateTitle(e.target.value)}
                           placeholder="Template name"
                           style={{
-                            flex: 1,
+                            flex: "1 1 160px",
+                            minWidth: 140,
                             padding: "4px 8px",
                             fontSize: 12,
-                            border: `1px solid ${accentColor}`,
+                            border: `1px solid ${uiAccent}`,
                             borderRadius: 4,
                             outline: "none",
                           }}
@@ -387,10 +427,10 @@ function TaskGroup({
                           value={editTemplateStart}
                           onChange={(e) => setEditTemplateStart(e.target.value)}
                           style={{
-                            width: 90,
+                            width: 92,
                             padding: "4px",
                             fontSize: 12,
-                            border: `1px solid ${accentColor}`,
+                            border: `1px solid ${uiAccent}`,
                             borderRadius: 4,
                           }}
                         />
@@ -400,10 +440,10 @@ function TaskGroup({
                           value={editTemplateEnd}
                           onChange={(e) => setEditTemplateEnd(e.target.value)}
                           style={{
-                            width: 90,
+                            width: 92,
                             padding: "4px",
                             fontSize: 12,
-                            border: `1px solid ${accentColor}`,
+                            border: `1px solid ${uiAccent}`,
                             borderRadius: 4,
                           }}
                         />
@@ -441,15 +481,22 @@ function TaskGroup({
                         <span
                           onClick={() => startTemplateEdit(template)}
                           style={{
-                            flex: 1,
+                            flex: "1 1 160px",
+                            minWidth: 140,
                             fontSize: 12,
                             cursor: "pointer",
-                            color: "#333",
+                            color: chromeless ? "#000" : "#333",
                           }}
                         >
                           {template.title}
                         </span>
-                        <span style={{ fontSize: 11, color: "#888", fontFamily: "monospace" }}>
+                        <span
+                          style={{
+                            fontSize: 11,
+                            color: chromeless ? "#000" : "#888",
+                            fontFamily: "monospace",
+                          }}
+                        >
                           {template.plannedStart}-{template.plannedEnd}
                         </span>
                         {!isCompleted && (
@@ -477,42 +524,158 @@ function TaskGroup({
           </div>
 
           {!isCompleted && (
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 12 }}>
-              {!hideAddButton && (
-                <button
-                  onClick={() => onAddTask(milestoneId)}
-                  style={{
-                    padding: "4.95px 9.9px",
-                    fontSize: 9.9,
-                    fontWeight: 600,
-                    backgroundColor: "white",
-                    color,
-                    border: `2px dashed ${color}`,
-                    borderRadius: 6,
-                    cursor: "pointer",
-                  }}
-                >
-                  + Add Task
-                </button>
-              )}
+            <div style={{ marginTop: "auto", paddingTop: 10 }}>
               <button
                 onClick={() => onAddTemplate(milestoneId)}
                 style={{
                   padding: "4.95px 9.9px",
                   fontSize: 9.9,
-                  fontWeight: 600,
+                  fontWeight: 700,
                   backgroundColor: "white",
-                  color,
-                  border: `2px dashed ${color}`,
+                  color: chromeless ? "#000" : color,
+                  border: chromeless ? "2px solid #000" : `2px solid ${color}`,
                   borderRadius: 6,
                   cursor: "pointer",
+                  whiteSpace: "nowrap",
                 }}
               >
                 + Add Focus Template
               </button>
             </div>
           )}
-        </>
+        </div>
+      </div>
+
+      {taskModalTaskId && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1200,
+            padding: 16,
+          }}
+          onClick={closeTaskModal}
+        >
+          <div
+            style={{
+              backgroundColor: "white",
+              borderRadius: 12,
+              padding: 18,
+              maxWidth: 560,
+              width: "100%",
+              maxHeight: "90vh",
+              overflow: "auto",
+              boxShadow: "0 8px 16px rgba(0,0,0,0.2)",
+              border: `2px solid ${uiAccent}`,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+              <div style={{ fontWeight: 800, fontSize: 14, color: uiAccent }}>Task</div>
+              <button
+                onClick={closeTaskModal}
+                style={{
+                  padding: "4px 8px",
+                  fontSize: 18,
+                  backgroundColor: "transparent",
+                  border: "none",
+                  cursor: "pointer",
+                  color: "#666",
+                  lineHeight: 1,
+                }}
+                title="Close"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ display: "block", marginBottom: 6, fontWeight: 600, fontSize: 12, color: "#333" }}>
+                Title
+              </label>
+              <input
+                type="text"
+                value={taskModalTitle}
+                onChange={(e) => setTaskModalTitle(e.target.value)}
+                autoFocus
+                style={{
+                  width: "100%",
+                  padding: 10,
+                  fontSize: 14,
+                  border: `1px solid ${uiAccent}`,
+                  borderRadius: 6,
+                  boxSizing: "border-box",
+                  outline: "none",
+                }}
+              />
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ display: "block", marginBottom: 6, fontWeight: 600, fontSize: 12, color: "#333" }}>
+                Description
+              </label>
+              <textarea
+                value={taskModalDescription}
+                onChange={(e) => setTaskModalDescription(e.target.value)}
+                rows={6}
+                style={{
+                  width: "100%",
+                  padding: 10,
+                  fontSize: 13,
+                  border: `1px solid ${uiAccent}`,
+                  borderRadius: 6,
+                  boxSizing: "border-box",
+                  outline: "none",
+                  resize: "vertical",
+                  fontFamily: "inherit",
+                }}
+              />
+            </div>
+
+            {taskModalError && (
+              <div style={{ marginBottom: 10, color: "#f44336", fontSize: 12, fontWeight: 600 }}>
+                {taskModalError}
+              </div>
+            )}
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <button
+                onClick={closeTaskModal}
+                style={{
+                  padding: "8px 12px",
+                  fontSize: 13,
+                  fontWeight: 700,
+                  backgroundColor: "white",
+                  color: "#666",
+                  border: "1px solid #ddd",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveTaskModal}
+                style={{
+                  padding: "8px 12px",
+                  fontSize: 13,
+                  fontWeight: 800,
+                  backgroundColor: uiAccent,
+                  color: "white",
+                  border: "none",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                }}
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -536,14 +699,46 @@ export default function MonthSetupPage() {
   // v6: Check if month is within Grand Plan period
   const isInPeriod = isMonthInGrandPlanPeriod(state, ymSafe);
 
-  // v2: Undo history (last 10 operations)
-  const [history, setHistory] = useState<MonthPlan[]>([]);
-
   // v5: Close month modal
   const [showCloseModal, setShowCloseModal] = useState(false);
 
   // v6.1: Milestone picker modal
   const [showMilestonePicker, setShowMilestonePicker] = useState(false);
+
+  // v8: Pin navigation (null = Standalone)
+  const selectedPinStorageKey = `focustree:month-setup:selected-pin:${ymSafe}`;
+  const [selectedMilestoneId, setSelectedMilestoneId] = useState<string | null>(() => {
+    try {
+      const raw = window.localStorage.getItem(selectedPinStorageKey);
+      if (!raw || raw === "standalone") return null;
+      if (raw.startsWith("milestone:")) return raw.slice("milestone:".length) || null;
+      return null;
+    } catch {
+      return null;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(selectedPinStorageKey);
+      if (!raw || raw === "standalone") setSelectedMilestoneId(null);
+      else if (raw.startsWith("milestone:")) setSelectedMilestoneId(raw.slice("milestone:".length) || null);
+      else setSelectedMilestoneId(null);
+    } catch {
+      setSelectedMilestoneId(null);
+    }
+  }, [selectedPinStorageKey]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        selectedPinStorageKey,
+        selectedMilestoneId ? `milestone:${selectedMilestoneId}` : "standalone"
+      );
+    } catch {
+      // ignore
+    }
+  }, [selectedPinStorageKey, selectedMilestoneId]);
 
   // v6.3: Add focus template modal
   const [showAddTemplateModal, setShowAddTemplateModal] = useState(false);
@@ -554,9 +749,6 @@ export default function MonthSetupPage() {
   const [addTemplateError, setAddTemplateError] = useState<string | null>(null);
 
   const mutate = (fn: (s: typeof state) => typeof state) => {
-    if (plan) {
-      setHistory((h) => [...h, plan].slice(-10));
-    }
     const next = fn(state);
     saveState(next);
     setTick((x) => x + 1);
@@ -569,28 +761,7 @@ export default function MonthSetupPage() {
   };
 
   const handlePlanUpdate = (updatedPlan: MonthPlan) => {
-    if (plan) {
-      setHistory((h) => [...h, plan].slice(-10));
-    }
     saveState(upsertMonth(state, updatedPlan));
-    setTick((x) => x + 1);
-  };
-
-  const handleUndo = () => {
-    if (history.length === 0) return;
-    const previousPlan = history[history.length - 1];
-    saveState(upsertMonth(state, previousPlan));
-    setHistory((h) => h.slice(0, -1));
-    setTick((x) => x + 1);
-  };
-
-  const resetSnapshot = () => {
-    if (!plan) return;
-    const message = `This will update your baseline to include all ${plan.tasks.length} current tasks. Metrics will reset. Continue?`;
-    if (!confirm(message)) return;
-    const next: MonthPlan = { ...plan, initialSnapshotTaskIds: plan.tasks.map((t) => t.id) };
-    setHistory((h) => [...h, plan].slice(-10));
-    saveState(upsertMonth(state, next));
     setTick((x) => x + 1);
   };
 
@@ -629,29 +800,54 @@ export default function MonthSetupPage() {
     }
   };
 
-  const handleUpdateTask = (taskId: string, title: string) => {
-    mutate((s) => updateTaskInMonth(s, ymSafe, taskId, { title }));
+  const handleUpdateTask = (taskId: string, updates: Partial<Pick<TaskNode, "title" | "description">>) => {
+    mutate((s) => updateTaskInMonth(s, ymSafe, taskId, updates));
   };
 
   const handleDeleteTask = (taskId: string) => {
     mutate((s) => deleteTaskFromMonth(s, ymSafe, taskId));
   };
 
-  // v6.1: Get milestones currently linked (have tasks)
-  const linkedMilestones = getMilestonesInMonth(state, ymSafe);
+  // v8: Milestones pinned to this month (shown as "pins" at the top)
+  const pinnedMilestones = getMilestonesInMonth(state, ymSafe);
+  const pinnedIdsKey = (plan?.pinnedMilestoneIds ?? []).join("|");
+
+  useEffect(() => {
+    if (!plan) return;
+    try {
+      const raw = window.localStorage.getItem(selectedPinStorageKey);
+      if (raw == null && plan.pinnedMilestoneIds.length > 0) {
+        setSelectedMilestoneId(plan.pinnedMilestoneIds[0] ?? null);
+      }
+    } catch {
+      // ignore
+    }
+  }, [selectedPinStorageKey, pinnedIdsKey]);
+
+  useEffect(() => {
+    if (!plan) return;
+    if (selectedMilestoneId && !plan.pinnedMilestoneIds.includes(selectedMilestoneId)) {
+      setSelectedMilestoneId(plan.pinnedMilestoneIds[0] ?? null);
+    }
+  }, [pinnedIdsKey, selectedMilestoneId]);
 
   // v6.1: Get standalone tasks (no linkedMilestoneId)
   const standaloneTasks = plan?.tasks.filter((t) => !t.linkedMilestoneId) ?? [];
+  const standaloneTemplates = getStandaloneTemplates(state, ymSafe);
 
   // v6.1: Get tasks for a specific milestone
   const getTasksForMilestone = (milestoneId: string) => {
     return plan?.tasks.filter((t) => t.linkedMilestoneId === milestoneId) ?? [];
   };
 
-  // v6.1: Add milestone to work on this month (by creating a placeholder task)
-  const handleLinkMilestone = (milestone: MilestoneNode) => {
-    // Add a placeholder task for this milestone
-    mutate((s) => addTaskWithMilestone(s, ymSafe, `Work on: ${milestone.title}`, milestone.id).state);
+  // v8: Pin milestone to this month board (no automatic task creation)
+  const handlePinMilestone = (milestone: MilestoneNode) => {
+    if (!plan) return;
+    const nextPinned = plan.pinnedMilestoneIds.includes(milestone.id)
+      ? plan.pinnedMilestoneIds
+      : [...plan.pinnedMilestoneIds, milestone.id];
+    handlePlanUpdate({ ...plan, pinnedMilestoneIds: nextPinned });
+    setSelectedMilestoneId(milestone.id);
     setShowMilestonePicker(false);
   };
 
@@ -706,17 +902,23 @@ export default function MonthSetupPage() {
       return;
     }
 
-    const newTemplate: FocusTemplate = {
-      id: makeId("tpl"),
-      title,
-      plannedStart: newTemplateStart,
-      plannedEnd: newTemplateEnd,
-      linkedMilestoneId: addTemplateMilestoneId,
-    };
-    const nextPlan: MonthPlan = { ...plan, templates: [...plan.templates, newTemplate] };
-    handlePlanUpdate(nextPlan);
-    closeAddTemplateModal();
-  };
+	    const newTemplate: FocusTemplate = {
+	      id: makeId("tpl"),
+	      title,
+	      plannedStart: newTemplateStart,
+	      plannedEnd: newTemplateEnd,
+	      linkedMilestoneId: addTemplateMilestoneId,
+	    };
+	    const nextPinnedMilestoneIds =
+	      typeof addTemplateMilestoneId === "string" && addTemplateMilestoneId
+	        ? plan.pinnedMilestoneIds.includes(addTemplateMilestoneId)
+	          ? plan.pinnedMilestoneIds
+	          : [...plan.pinnedMilestoneIds, addTemplateMilestoneId]
+	        : plan.pinnedMilestoneIds;
+	    const nextPlan: MonthPlan = { ...plan, templates: [...plan.templates, newTemplate], pinnedMilestoneIds: nextPinnedMilestoneIds };
+	    handlePlanUpdate(nextPlan);
+	    closeAddTemplateModal();
+	  };
 
   const handleUpdateTemplate = (templateId: string, updates: Partial<Pick<FocusTemplate, "title" | "plannedStart" | "plannedEnd">>) => {
     if (!plan) return;
@@ -736,13 +938,8 @@ export default function MonthSetupPage() {
   // v5: If month is closed, show read-only report view
   if (plan?.isClosed) {
     // Calculate all metrics
-    const snapshotSet = new Set(plan.initialSnapshotTaskIds);
-    const snapshotCount = plan.initialSnapshotTaskIds.length;
-    const currentCount = plan.tasks.length;
-    const addedCount = Math.max(0, currentCount - snapshotCount);
-
-    const snapshotGreen = plan.tasks.filter((t) => snapshotSet.has(t.id) && t.status === "GREEN").length;
-    const addedGreen = plan.tasks.filter((t) => !snapshotSet.has(t.id) && t.status === "GREEN").length;
+    const tasksAddedCount = plan.tasks.length;
+    const tasksCompletedCount = plan.tasks.filter((t) => t.status === "GREEN").length;
 
     const sessions = state.sessions.filter((s) => s.ym === ymSafe && s.endedAt && typeof s.actualMinutes === "number");
 
@@ -755,8 +952,7 @@ export default function MonthSetupPage() {
     const totalSessions = sessions.length;
     const totalMinutes = sessions.reduce((a, b) => a + (b.actualMinutes ?? 0), 0);
 
-    const completionRate = snapshotCount > 0 ? Math.round((snapshotGreen / snapshotCount) * 100) : 0;
-    const totalGreen = plan.tasks.filter((t) => t.status === "GREEN").length;
+    const completionRate = tasksAddedCount > 0 ? Math.round((tasksCompletedCount / tasksAddedCount) * 100) : 0;
     const avgSessionDuration = totalSessions > 0 ? Math.round(totalMinutes / totalSessions) : 0;
 
     const daysWithSessions = new Set(
@@ -801,54 +997,50 @@ export default function MonthSetupPage() {
             marginBottom: 24,
             backgroundColor: "#f1f8f4",
           }}>
-            <h3 style={{ marginTop: 0, marginBottom: 16, color: "#2e7d32" }}>Task Completion</h3>
-            <div style={{ display: "grid", gap: 12 }}>
-              <div style={{
-                padding: "12px",
-                backgroundColor: "white",
+	            <h3 style={{ marginTop: 0, marginBottom: 16, color: "#2e7d32" }}>Task Completion</h3>
+	            <div style={{ display: "grid", gap: 12 }}>
+	              <div style={{
+	                padding: "12px",
+	                backgroundColor: "white",
                 borderRadius: 8,
                 border: "1px solid #c8e6c9",
               }}>
                 <div style={{ fontSize: 14, marginBottom: 4, color: "#666" }}>Completion Rate</div>
-                <div style={{ fontSize: 24, fontWeight: 700, color: "#2e7d32" }}>
-                  {completionRate}%
-                </div>
-                <div style={{ fontSize: 13, color: "#666", marginTop: 4 }}>
-                  {snapshotGreen} / {snapshotCount} tasks
-                </div>
-              </div>
+	                <div style={{ fontSize: 24, fontWeight: 700, color: "#2e7d32" }}>
+	                  {completionRate}%
+	                </div>
+	                <div style={{ fontSize: 13, color: "#666", marginTop: 4 }}>
+	                  {tasksCompletedCount} / {tasksAddedCount} tasks
+	                </div>
+	              </div>
 
-              <div style={{
-                padding: "12px",
+	              <div style={{
+	                padding: "12px",
                 backgroundColor: "white",
                 borderRadius: 8,
                 border: "1px solid #c8e6c9",
               }}>
-                <div style={{ fontSize: 14, marginBottom: 4, color: "#666" }}>Total Completed Tasks</div>
-                <div style={{ fontSize: 24, fontWeight: 700, color: "#2e7d32" }}>
-                  {totalGreen}
-                </div>
-                <div style={{ fontSize: 13, color: "#666", marginTop: 4 }}>
-                  Snapshot: {snapshotGreen} + Added: {addedGreen}
-                </div>
-              </div>
+	                <div style={{ fontSize: 14, marginBottom: 4, color: "#666" }}>Tasks Added</div>
+	                <div style={{ fontSize: 24, fontWeight: 700, color: "#2e7d32" }}>
+	                  {tasksAddedCount}
+	                </div>
+	                <div style={{ fontSize: 13, color: "#666", marginTop: 4 }}>total tasks in this month plan</div>
+	              </div>
 
-              <div style={{
-                padding: "12px",
-                backgroundColor: "white",
+	              <div style={{
+	                padding: "12px",
+	                backgroundColor: "white",
                 borderRadius: 8,
                 border: "1px solid #c8e6c9",
               }}>
-                <div style={{ fontSize: 13, color: "#666", marginBottom: 8 }}>Breakdown</div>
-                <div style={{ fontSize: 13, color: "#555" }}>
-                  Snapshot GREEN: <strong>{snapshotGreen}</strong> / {snapshotCount}
-                </div>
-                <div style={{ fontSize: 13, color: "#555" }}>
-                  Added GREEN: <strong>{addedGreen}</strong> / {addedCount}
-                </div>
-              </div>
-            </div>
-          </div>
+	                <div style={{ fontSize: 14, marginBottom: 4, color: "#666" }}>Tasks Completed</div>
+	                <div style={{ fontSize: 24, fontWeight: 700, color: "#2e7d32" }}>
+	                  {tasksCompletedCount}
+	                </div>
+	                <div style={{ fontSize: 13, color: "#666", marginTop: 4 }}>completed (GREEN) tasks</div>
+	              </div>
+	            </div>
+	          </div>
 
           {/* Focus Sessions Summary */}
           <div style={{
@@ -1069,146 +1261,195 @@ export default function MonthSetupPage() {
               marginBottom: 24,
             }}
           >
-            {/* Stats */}
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-              <span style={{ fontSize: 14, color: "#666" }}>
-                Snapshot: <strong>{plan.initialSnapshotTaskIds.length}</strong>
-              </span>
-              <span style={{ color: "#ddd" }}>|</span>
-              <span style={{ fontSize: 14, color: "#666" }}>
-                Current: <strong>{plan.tasks.length}</strong>
-              </span>
-            </div>
+	            {/* Stats */}
+	            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+	              <span style={{ fontSize: 14, color: "#666" }}>
+	                Tasks: <strong>{plan.tasks.length}</strong>
+	              </span>
+	              <span style={{ color: "#ddd" }}>|</span>
+	              <span style={{ fontSize: 14, color: "#666" }}>
+	                Completed: <strong>{plan.tasks.filter((t) => t.status === "GREEN").length}</strong>
+	              </span>
+	            </div>
+	          </div>
 
-            {/* Action Buttons */}
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button
-                onClick={handleUndo}
-                disabled={history.length === 0}
-                style={{
-                  padding: "6px 12px",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  backgroundColor: history.length > 0 ? "#ff9800" : "#ddd",
-                  color: "white",
-                  border: "none",
-                  borderRadius: 6,
-                  cursor: history.length > 0 ? "pointer" : "not-allowed",
-                }}
-              >
-                Undo ({history.length})
-              </button>
-              <button
-                onClick={resetSnapshot}
-                style={{
-                  padding: "6px 12px",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  backgroundColor: "#f44336",
-                  color: "white",
-                  border: "none",
-                  borderRadius: 6,
-                  cursor: "pointer",
-                }}
-              >
-                Reset Snapshot
-              </button>
-            </div>
-          </div>
-
-          {/* v6.1: Unified Monthly Tasks Section */}
-          <h3
+          {/* v8: Month Setup "board" with pins */}
+          <div
             style={{
-              marginTop: 0,
-              marginBottom: 16,
-              color: "#333",
-              borderBottom: "2px solid #eee",
-              paddingBottom: 8,
+              border: "1px solid #eee",
+              borderRadius: 12,
+              overflow: "hidden",
+              backgroundColor: "white",
+              boxShadow: "0 6px 14px rgba(0,0,0,0.06)",
+              marginBottom: 24,
             }}
           >
-            Monthly Tasks
-          </h3>
+            {/* Pins bar */}
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                alignItems: "center",
+                flexWrap: "wrap",
+                padding: 12,
+                borderBottom: "1px solid #eee",
+                backgroundColor: "white",
+              }}
+            >
+              <div style={{ fontSize: 12, fontWeight: 800, color: "#666", marginRight: 4 }}>📌 Pins</div>
 
-          {/* Tasks grouped by milestone */}
-          {linkedMilestones.map((milestone) => {
-            const category = state.grandPlan?.categories.find((c) => c.id === milestone.categoryId);
-            const tasks = getTasksForMilestone(milestone.id);
-            const milestoneTemplates = getTemplatesForMilestone(state, ymSafe, milestone.id);
-            return (
-                <TaskGroup
-                  key={milestone.id}
-                  title={`[${category?.title ?? "Category"}] ${milestone.title}`}
-                  color={category?.color ?? "#9c27b0"}
-                  tasks={tasks}
-                  milestoneId={milestone.id}
-                  milestoneStatus={milestone.status}
-                  templates={milestoneTemplates}
-                  onAddTask={handleAddTask}
-                  onUpdateTask={handleUpdateTask}
-                  onDeleteTask={handleDeleteTask}
-                  onMarkMilestoneCompleted={handleMarkMilestoneCompleted}
-                  onAddTemplate={handleAddTemplate}
-                  onUpdateTemplate={handleUpdateTemplate}
-                  onDeleteTemplate={handleDeleteTemplate}
-                  collapseStorageKey={`focustree:month-setup:collapsed:${ymSafe}:milestone:${milestone.id}`}
-                />
-              );
-            })}
-
-          {/* Standalone tasks section - always show for standalone templates */}
-            {(standaloneTasks.length > 0 || getStandaloneTemplates(state, ymSafe).length > 0) && (
-              <TaskGroup
-                title="Standalone Tasks"
-                color="#607d8b"
-                tasks={standaloneTasks}
-                milestoneId={null}
-                templates={getStandaloneTemplates(state, ymSafe)}
-                onAddTask={handleAddTask}
-                onUpdateTask={handleUpdateTask}
-                onDeleteTask={handleDeleteTask}
-                onAddTemplate={handleAddTemplate}
-                onUpdateTemplate={handleUpdateTemplate}
-                onDeleteTemplate={handleDeleteTemplate}
-                collapseStorageKey={`focustree:month-setup:collapsed:${ymSafe}:standalone`}
-              />
-            )}
-
-          {/* Action buttons */}
-          <div style={{ display: "flex", gap: 12, marginTop: 16, marginBottom: 24, flexWrap: "wrap" }}>
-            {isInPeriod && state.grandPlan.milestones.length > 0 && (
               <button
-                onClick={() => setShowMilestonePicker(true)}
+                onClick={() => setSelectedMilestoneId(null)}
                 style={{
-                  padding: "8px 16px",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  backgroundColor: "#9c27b0",
-                  color: "white",
-                  border: "none",
-                  borderRadius: 6,
+                  padding: "6px 10px",
+                  fontSize: 12,
+                  fontWeight: 800,
+                  backgroundColor: selectedMilestoneId === null ? "#00000010" : "white",
+                  color: "#000",
+                  border: selectedMilestoneId === null ? "2px solid #000" : "1px solid #ddd",
+                  borderRadius: 999,
                   cursor: "pointer",
+                  whiteSpace: "nowrap",
                 }}
+                title="Standalone (not linked to a milestone)"
               >
-                + Link Milestone
+                Standalone
               </button>
-            )}
-            {standaloneTasks.length === 0 && (
-              <button
-                onClick={() => handleAddTask(null)}
-                style={{
-                  padding: "8px 16px",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  backgroundColor: "#607d8b",
-                  color: "white",
-                  border: "none",
-                  borderRadius: 6,
-                  cursor: "pointer",
-                }}
-              >
-                + Add Standalone Task
-              </button>
-            )}
+
+              {pinnedMilestones.map((milestone) => {
+                const category = state.grandPlan?.categories.find((c) => c.id === milestone.categoryId);
+                const baseColor = category?.color ?? "#9c27b0";
+                const pinColor = milestone.status === "COMPLETED" ? "#FFD700" : baseColor;
+                const active = selectedMilestoneId === milestone.id;
+                return (
+                  <button
+                    key={milestone.id}
+                    onClick={() => setSelectedMilestoneId(milestone.id)}
+                    style={{
+                      padding: "6px 10px",
+                      fontSize: 12,
+                      fontWeight: 800,
+                      backgroundColor: active ? `${pinColor}10` : "white",
+                      color: "#333",
+                      border: active ? `2px solid ${pinColor}` : `1px solid ${pinColor}`,
+                      borderRadius: 999,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      whiteSpace: "nowrap",
+                      maxWidth: 240,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                    title={`${category?.title ?? "Category"} · ${milestone.title}`}
+                  >
+                    <span
+                      style={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: "50%",
+                        backgroundColor: pinColor,
+                        display: "inline-block",
+                        flex: "0 0 auto",
+                      }}
+                    />
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{milestone.title}</span>
+                    {milestone.status === "COMPLETED" && <span style={{ fontSize: 11, opacity: 0.7 }}>✓</span>}
+                  </button>
+                );
+              })}
+
+              <div style={{ flex: "1 1 auto" }} />
+
+              {isInPeriod && state.grandPlan.milestones.length > 0 && (
+                <button
+                  onClick={() => setShowMilestonePicker(true)}
+                  style={{
+                    padding: "6px 10px",
+                    fontSize: 12,
+                    fontWeight: 800,
+                    backgroundColor: "white",
+                    color: "#333",
+                    border: "2px dashed #bbb",
+                    borderRadius: 10,
+                    cursor: "pointer",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  + Pin Milestone
+                </button>
+              )}
+            </div>
+
+            {/* Board content */}
+            <div
+              style={{
+                padding: 16,
+                backgroundColor: "#fafafa",
+                backgroundImage:
+                  "radial-gradient(circle at 1px 1px, rgba(0,0,0,0.06) 1px, transparent 0)",
+                backgroundSize: "18px 18px",
+              }}
+            >
+              {pinnedMilestones.length === 0 && standaloneTasks.length === 0 && standaloneTemplates.length === 0 && (
+                <div
+                  style={{
+                    padding: 12,
+                    border: "1px dashed #ddd",
+                    borderRadius: 10,
+                    backgroundColor: "rgba(255,255,255,0.95)",
+                    marginBottom: 12,
+                  }}
+                >
+                  <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4, color: "#333" }}>
+                    Welcome to your Month Plan
+                  </div>
+                  <div style={{ fontSize: 13, color: "#666", lineHeight: 1.6 }}>
+                    Pin one or more milestones from your Grand Plan (top right), or start with standalone tasks and focus templates.
+                  </div>
+                </div>
+              )}
+
+              {(() => {
+                const milestone = selectedMilestoneId
+                  ? state.grandPlan?.milestones.find((m) => m.id === selectedMilestoneId) ?? null
+                  : null;
+                const category = milestone
+                  ? state.grandPlan?.categories.find((c) => c.id === milestone.categoryId) ?? null
+                  : null;
+
+                const title = milestone
+                  ? `[${category?.title ?? "Category"}] ${milestone.title}`
+                  : "Standalone";
+
+                const color = milestone ? category?.color ?? "#9c27b0" : "#000";
+                const tasks = milestone ? getTasksForMilestone(milestone.id) : standaloneTasks;
+                const templates = milestone
+                  ? getTemplatesForMilestone(state, ymSafe, milestone.id)
+                  : standaloneTemplates;
+
+	                return (
+	                  <TaskGroup
+	                    title={title}
+	                    color={color}
+	                    tasks={tasks}
+	                    milestoneId={milestone ? milestone.id : null}
+	                    milestoneStatus={milestone?.status}
+	                    templates={templates}
+	                    onAddTask={handleAddTask}
+	                    onUpdateTask={handleUpdateTask}
+	                    onDeleteTask={handleDeleteTask}
+	                    onMarkMilestoneCompleted={milestone ? handleMarkMilestoneCompleted : undefined}
+	                    onAddTemplate={handleAddTemplate}
+	                    onUpdateTemplate={handleUpdateTemplate}
+	                    onDeleteTemplate={handleDeleteTemplate}
+	                    hideTitle
+	                    chromeless={!milestone}
+	                  />
+	                );
+	              })()}
+            </div>
           </div>
 
           {/* v5: Close Month Button */}
@@ -1260,9 +1501,9 @@ export default function MonthSetupPage() {
                 }}
                 onClick={(e) => e.stopPropagation()}
               >
-                <h3 style={{ marginTop: 0, marginBottom: 16 }}>Select Milestone to Work On</h3>
+                <h3 style={{ marginTop: 0, marginBottom: 16 }}>Pin a Milestone</h3>
                 <p style={{ fontSize: 13, color: "#666", marginBottom: 16 }}>
-                  Choose a milestone from your Grand Plan. A task will be created under it.
+                  Choose a milestone from your Grand Plan to pin it to this month. Then add tasks and focus templates in the board.
                 </p>
 
                 {state.grandPlan.categories
@@ -1274,10 +1515,10 @@ export default function MonthSetupPage() {
                     );
                     if (milestones.length === 0) return null;
 
-                    // Filter out already linked milestones and completed milestones
-                    const linkedIds = new Set(linkedMilestones.map((m) => m.id));
+                    // Filter out already pinned milestones and completed milestones
+                    const pinnedIds = new Set(plan.pinnedMilestoneIds);
                     const available = milestones.filter(
-                      (m) => !linkedIds.has(m.id) && m.status !== "COMPLETED"
+                      (m) => !pinnedIds.has(m.id) && m.status !== "COMPLETED"
                     );
 
                     if (available.length === 0) return null;
@@ -1297,7 +1538,7 @@ export default function MonthSetupPage() {
                         {available.map((milestone) => (
                           <button
                             key={milestone.id}
-                            onClick={() => handleLinkMilestone(milestone)}
+                            onClick={() => handlePinMilestone(milestone)}
                             style={{
                               display: "block",
                               width: "100%",
@@ -1379,13 +1620,13 @@ export default function MonthSetupPage() {
                 }}
                 onClick={(e) => e.stopPropagation()}
               >
-                {(() => {
-                  const accentColor =
-                    addTemplateMilestoneId === null
-                      ? "#607d8b"
-                      : state.grandPlan?.categories.find(
-                          (c) => c.id === state.grandPlan?.milestones.find((m) => m.id === addTemplateMilestoneId)?.categoryId
-                        )?.color ?? "#ff9800";
+	                {(() => {
+	                  const accentColor =
+	                    addTemplateMilestoneId === null
+	                      ? "#000"
+	                      : state.grandPlan?.categories.find(
+	                          (c) => c.id === state.grandPlan?.milestones.find((m) => m.id === addTemplateMilestoneId)?.categoryId
+	                        )?.color ?? "#ff9800";
 
                   return (
                     <>
