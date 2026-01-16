@@ -4,6 +4,8 @@ export type DateISO = `${number}-${string}-${string}`; // e.g. "2025-12-17"
 
 export type TaskStatus = "NONE" | "YELLOW" | "GREEN";
 
+export type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+
 // v7: Daily reminders (editable quick checks)
 export type DailyReminderTemplate = {
   id: string;
@@ -59,6 +61,7 @@ export type FocusTemplate = {
   title: string;
   plannedStart: string; // "HH:MM"
   plannedEnd: string;   // "HH:MM"
+  daysOfWeek?: Weekday[]; // optional: when undefined/empty, available any day
   linkedMilestoneId?: string | null; // v6.3: null = standalone, undefined = legacy (treat as standalone)
 };
 
