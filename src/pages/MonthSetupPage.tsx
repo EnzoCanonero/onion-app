@@ -1,7 +1,7 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Navigate } from "react-router-dom";
-import type { MonthPlan, YM, TaskNode, MilestoneNode, MilestoneStatus, FocusTemplate } from "../app/types";
+import type { MonthPlan, YM, TaskNode, MilestoneNode, MilestoneStatus, FocusTemplate, Weekday } from "../app/types";
 import {
   loadState,
   saveState,
@@ -19,6 +19,7 @@ import {
   getTemplatesForMilestone,
   getStandaloneTemplates,
 } from "../app/storage";
+import { MON_FRI, WEEKDAY_ORDER, WEEKDAY_SHORT, formatWeekdays, sortWeekdays } from "../app/weekdays";
 import { useDateNavigation } from "../contexts/DateNavigationContext";
 import FireworksOverlay from "../components/FireworksOverlay";
 
@@ -79,7 +80,10 @@ function TaskGroup({
   onDeleteTask: (taskId: string) => void;
   onMarkMilestoneCompleted?: (milestoneId: string) => void;
   onAddTemplate: (milestoneId: string | null) => void;
-  onUpdateTemplate: (templateId: string, updates: Partial<Pick<FocusTemplate, "title" | "plannedStart" | "plannedEnd">>) => void;
+  onUpdateTemplate: (
+    templateId: string,
+    updates: Partial<Pick<FocusTemplate, "title" | "plannedStart" | "plannedEnd" | "daysOfWeek">>
+  ) => void;
   onDeleteTemplate: (templateId: string) => void;
   hideAddButton?: boolean;
   hideTitle?: boolean;
@@ -89,6 +93,7 @@ function TaskGroup({
   const [editTemplateTitle, setEditTemplateTitle] = useState("");
   const [editTemplateStart, setEditTemplateStart] = useState("");
   const [editTemplateEnd, setEditTemplateEnd] = useState("");
+  const [editTemplateDays, setEditTemplateDays] = useState<Weekday[]>([]);
 
   const [taskModalTaskId, setTaskModalTaskId] = useState<string | null>(null);
   const [taskModalTitle, setTaskModalTitle] = useState("");
@@ -100,6 +105,7 @@ function TaskGroup({
     setEditTemplateTitle(template.title);
     setEditTemplateStart(template.plannedStart);
     setEditTemplateEnd(template.plannedEnd);
+    setEditTemplateDays(template.daysOfWeek ? [...template.daysOfWeek] : []);
   };
 
   const saveTemplateEdit = () => {
@@ -108,12 +114,21 @@ function TaskGroup({
         title: editTemplateTitle.trim(),
         plannedStart: editTemplateStart || "09:00",
         plannedEnd: editTemplateEnd || "10:00",
+        daysOfWeek: editTemplateDays.length > 0 ? editTemplateDays : undefined,
       });
     }
     setEditingTemplateId(null);
     setEditTemplateTitle("");
     setEditTemplateStart("");
     setEditTemplateEnd("");
+    setEditTemplateDays([]);
+  };
+
+  const toggleTemplateDay = (day: Weekday) => {
+    setEditTemplateDays((prev) => {
+      if (prev.includes(day)) return prev.filter((d) => d !== day);
+      return sortWeekdays([...prev, day]);
+    });
   };
 
   const isCompleted = milestoneStatus === "COMPLETED";
@@ -447,34 +462,95 @@ function TaskGroup({
                             borderRadius: 4,
                           }}
                         />
-                        <button
-                          onClick={saveTemplateEdit}
-                          style={{
-                            padding: "4px 8px",
-                            fontSize: 11,
-                            backgroundColor: "#4caf50",
-                            color: "white",
-                            border: "none",
-                            borderRadius: 4,
-                            cursor: "pointer",
-                          }}
-                        >
-                          ✓
-                        </button>
-                        <button
-                          onClick={() => setEditingTemplateId(null)}
-                          style={{
-                            padding: "4px 8px",
-                            fontSize: 11,
-                            backgroundColor: "transparent",
-                            color: "#666",
-                            border: "1px solid #ddd",
-                            borderRadius: 4,
-                            cursor: "pointer",
-                          }}
-                        >
-                          ✕
-                        </button>
+                        <div style={{ flexBasis: "100%", display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginTop: 4 }}>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#666" }}>Days:</span>
+                          {WEEKDAY_ORDER.map((day) => {
+                            const isSelected = editTemplateDays.includes(day);
+                            return (
+                              <button
+                                key={day}
+                                type="button"
+                                onClick={() => toggleTemplateDay(day)}
+                                style={{
+                                  padding: "4px 8px",
+                                  fontSize: 11,
+                                  fontWeight: 800,
+                                  backgroundColor: isSelected ? uiAccent : "white",
+                                  color: isSelected ? "white" : uiAccent,
+                                  border: `1px solid ${uiAccent}`,
+                                  borderRadius: 999,
+                                  cursor: "pointer",
+                                }}
+                                title={WEEKDAY_SHORT[day]}
+                              >
+                                {WEEKDAY_SHORT[day]}
+                              </button>
+                            );
+                          })}
+                          <button
+                            type="button"
+                            onClick={() => setEditTemplateDays([...MON_FRI])}
+                            style={{
+                              padding: "4px 8px",
+                              fontSize: 11,
+                              fontWeight: 800,
+                              backgroundColor: "white",
+                              color: uiAccent,
+                              border: `1px dashed ${uiAccent}`,
+                              borderRadius: 999,
+                              cursor: "pointer",
+                            }}
+                          >
+                            Mon–Fri
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditTemplateDays([])}
+                            style={{
+                              padding: "4px 8px",
+                              fontSize: 11,
+                              fontWeight: 800,
+                              backgroundColor: "white",
+                              color: uiAccent,
+                              border: `1px dashed ${uiAccent}`,
+                              borderRadius: 999,
+                              cursor: "pointer",
+                            }}
+                          >
+                            Any
+                          </button>
+                        </div>
+
+                        <div style={{ flexBasis: "100%", display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
+                          <button
+                            onClick={saveTemplateEdit}
+                            style={{
+                              padding: "4px 8px",
+                              fontSize: 11,
+                              backgroundColor: "#4caf50",
+                              color: "white",
+                              border: "none",
+                              borderRadius: 4,
+                              cursor: "pointer",
+                            }}
+                          >
+                            ✓
+                          </button>
+                          <button
+                            onClick={() => setEditingTemplateId(null)}
+                            style={{
+                              padding: "4px 8px",
+                              fontSize: 11,
+                              backgroundColor: "transparent",
+                              color: "#666",
+                              border: "1px solid #ddd",
+                              borderRadius: 4,
+                              cursor: "pointer",
+                            }}
+                          >
+                            ✕
+                          </button>
+                        </div>
                       </>
                     ) : (
                       <>
@@ -494,7 +570,21 @@ function TaskGroup({
                           style={{
                             fontSize: 11,
                             color: chromeless ? "#000" : "#888",
+                            flex: "1 1 140px",
+                            minWidth: 120,
+                            textAlign: "center",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {formatWeekdays(template.daysOfWeek)}
+                        </span>
+                        <span
+                          style={{
+                            fontSize: 11,
+                            color: chromeless ? "#000" : "#888",
                             fontFamily: "monospace",
+                            flex: "0 0 auto",
+                            whiteSpace: "nowrap",
                           }}
                         >
                           {template.plannedStart}-{template.plannedEnd}
@@ -746,6 +836,7 @@ export default function MonthSetupPage() {
   const [newTemplateTitle, setNewTemplateTitle] = useState("");
   const [newTemplateStart, setNewTemplateStart] = useState("09:00");
   const [newTemplateEnd, setNewTemplateEnd] = useState("10:00");
+  const [newTemplateDays, setNewTemplateDays] = useState<Weekday[]>([...MON_FRI]);
   const [addTemplateError, setAddTemplateError] = useState<string | null>(null);
 
   const mutate = (fn: (s: typeof state) => typeof state) => {
@@ -864,11 +955,19 @@ export default function MonthSetupPage() {
   };
 
   // v6.3: Template handlers
+  const toggleNewTemplateDay = (day: Weekday) => {
+    setNewTemplateDays((prev) => {
+      if (prev.includes(day)) return prev.filter((d) => d !== day);
+      return sortWeekdays([...prev, day]);
+    });
+  };
+
   const handleAddTemplate = (milestoneId: string | null) => {
     setAddTemplateMilestoneId(milestoneId);
     setNewTemplateTitle("");
     setNewTemplateStart("09:00");
     setNewTemplateEnd("10:00");
+    setNewTemplateDays([...MON_FRI]);
     setAddTemplateError(null);
     setShowAddTemplateModal(true);
   };
@@ -879,6 +978,7 @@ export default function MonthSetupPage() {
     setNewTemplateTitle("");
     setNewTemplateStart("09:00");
     setNewTemplateEnd("10:00");
+    setNewTemplateDays([...MON_FRI]);
     setAddTemplateError(null);
   };
 
@@ -902,13 +1002,14 @@ export default function MonthSetupPage() {
       return;
     }
 
-	    const newTemplate: FocusTemplate = {
-	      id: makeId("tpl"),
-	      title,
-	      plannedStart: newTemplateStart,
-	      plannedEnd: newTemplateEnd,
-	      linkedMilestoneId: addTemplateMilestoneId,
-	    };
+		    const newTemplate: FocusTemplate = {
+		      id: makeId("tpl"),
+		      title,
+		      plannedStart: newTemplateStart,
+		      plannedEnd: newTemplateEnd,
+          daysOfWeek: newTemplateDays.length > 0 ? newTemplateDays : undefined,
+		      linkedMilestoneId: addTemplateMilestoneId,
+		    };
 	    const nextPinnedMilestoneIds =
 	      typeof addTemplateMilestoneId === "string" && addTemplateMilestoneId
 	        ? plan.pinnedMilestoneIds.includes(addTemplateMilestoneId)
@@ -920,7 +1021,10 @@ export default function MonthSetupPage() {
 	    closeAddTemplateModal();
 	  };
 
-  const handleUpdateTemplate = (templateId: string, updates: Partial<Pick<FocusTemplate, "title" | "plannedStart" | "plannedEnd">>) => {
+  const handleUpdateTemplate = (
+    templateId: string,
+    updates: Partial<Pick<FocusTemplate, "title" | "plannedStart" | "plannedEnd" | "daysOfWeek">>
+  ) => {
     if (!plan) return;
     const nextTemplates = plan.templates.map((t) =>
       t.id === templateId ? { ...t, ...updates } : t
@@ -1657,10 +1761,10 @@ export default function MonthSetupPage() {
                       }}
                     />
                   </div>
-                  <div>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: "#666", marginBottom: 6 }}>
-                      Hour range
-                    </div>
+	                  <div>
+	                    <div style={{ fontSize: 12, fontWeight: 600, color: "#666", marginBottom: 6 }}>
+	                      Hour range
+	                    </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "center" }}>
                       <div>
                         <div style={{ fontSize: 11, fontWeight: 600, color: "#777", marginBottom: 6 }}>Start</div>
@@ -1700,13 +1804,78 @@ export default function MonthSetupPage() {
                           }}
                         />
                       </div>
-                    </div>
-                  </div>
-                  {addTemplateError && (
-                    <div style={{ color: "#d32f2f", fontSize: 13 }}>
-                      {addTemplateError}
-                    </div>
-                  )}
+	                    </div>
+	                  </div>
+	                  <div>
+	                    <div style={{ fontSize: 12, fontWeight: 600, color: "#666", marginBottom: 6 }}>
+	                      Days of week
+	                    </div>
+	                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+	                      {WEEKDAY_ORDER.map((day) => {
+	                        const isSelected = newTemplateDays.includes(day);
+	                        return (
+	                          <button
+	                            key={day}
+	                            type="button"
+	                            onClick={() => toggleNewTemplateDay(day)}
+	                            style={{
+	                              padding: "6px 10px",
+	                              fontSize: 12,
+	                              fontWeight: 800,
+	                              backgroundColor: isSelected ? accentColor : "white",
+	                              color: isSelected ? "white" : accentColor,
+	                              border: `1px solid ${accentColor}`,
+	                              borderRadius: 999,
+	                              cursor: "pointer",
+	                            }}
+	                            title={WEEKDAY_SHORT[day]}
+	                          >
+	                            {WEEKDAY_SHORT[day]}
+	                          </button>
+	                        );
+	                      })}
+	                      <button
+	                        type="button"
+	                        onClick={() => setNewTemplateDays([...MON_FRI])}
+	                        style={{
+	                          padding: "6px 10px",
+	                          fontSize: 12,
+	                          fontWeight: 800,
+	                          backgroundColor: "white",
+	                          color: accentColor,
+	                          border: `1px dashed ${accentColor}`,
+	                          borderRadius: 999,
+	                          cursor: "pointer",
+	                        }}
+	                      >
+	                        Mon–Fri (default)
+	                      </button>
+	                      <button
+	                        type="button"
+	                        onClick={() => setNewTemplateDays([])}
+	                        style={{
+	                          padding: "6px 10px",
+	                          fontSize: 12,
+	                          fontWeight: 800,
+	                          backgroundColor: "white",
+	                          color: accentColor,
+	                          border: `1px dashed ${accentColor}`,
+	                          borderRadius: 999,
+	                          cursor: "pointer",
+	                        }}
+	                      >
+	                        Any day
+	                      </button>
+	                    </div>
+	                    <div style={{ marginTop: 6, fontSize: 11, color: "#777" }}>
+	                      Applies: {formatWeekdays(newTemplateDays)}
+	                    </div>
+	                  </div>
+	                  {addTemplateError && (
+	                    <div style={{ color: "#d32f2f", fontSize: 13 }}>
+	                      {addTemplateError}
+	                    </div>
+	                  )}
                 </div>
 
                 <div style={{ display: "flex", gap: 12, justifyContent: "flex-end", marginTop: 20 }}>

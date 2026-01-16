@@ -13,6 +13,7 @@ import type {
   FocusTemplate,
   DailyReminderTemplate,
 } from "./types";
+import { normalizeWeekdays } from "./weekdays";
 
 const KEY = "focustree.state";
 
@@ -96,6 +97,19 @@ export function loadState(): AppStateV0 {
       const pinsToUse = existingPins.length > 0 ? existingPins : derivedPins;
       (plan as any).pinnedMilestoneIds =
         validMilestoneIds.size > 0 ? pinsToUse.filter((id: string) => validMilestoneIds.has(id)) : pinsToUse;
+
+      // v9 migration: Normalize template weekday scheduling
+      if (Array.isArray((plan as any).templates)) {
+        (plan as any).templates.forEach((t: any) => {
+          const normalized = normalizeWeekdays(t?.daysOfWeek);
+          if (normalized === undefined) return;
+          if (normalized.length === 0) {
+            delete t.daysOfWeek;
+          } else {
+            t.daysOfWeek = normalized;
+          }
+        });
+      }
     }
 
     return parsed;
