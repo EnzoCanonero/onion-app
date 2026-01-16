@@ -1,5 +1,6 @@
 import { useMemo, useState, useEffect } from "react";
 import type { FocusTemplate, ProductivitySession } from "../app/types";
+import { formatWeekdays } from "../app/weekdays";
 
 type FocusTemplateCardProps = {
   template: FocusTemplate;
@@ -93,7 +94,7 @@ export default function FocusTemplateCard({
         <div>
           <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>{template.title}</div>
           <div style={{ fontSize: 13, color: "#666" }}>
-            📅 Planned: {template.plannedStart} - {template.plannedEnd} ({plannedMinutes} min)
+            📅 Planned: {template.plannedStart} - {template.plannedEnd} ({plannedMinutes} min) · 🗓 {formatWeekdays(template.daysOfWeek)}
           </div>
         </div>
 

@@ -29,6 +29,7 @@ import {
   getTemplatesForMilestone,
   getStandaloneTemplates,
 } from "../app/storage";
+import { dayOfWeekFromDateISO, isTemplateScheduledForWeekday } from "../app/weekdays";
 import { useDateNavigation } from "../contexts/DateNavigationContext";
 import TaskSelectionModal from "../components/TaskSelectionModal";
 import FocusTemplateCard from "../components/FocusTemplateCard";
@@ -39,6 +40,7 @@ export default function DailyAgendaPage() {
   const { selectedDate } = useDateNavigation();  // From context
   const dateSafe = selectedDate;
   const ym = ymFromDate(dateSafe);
+  const weekday = dayOfWeekFromDateISO(dateSafe);
 
   const [tick, setTick] = useState(0);
   const [showTaskModal, setShowTaskModal] = useState(false);
@@ -1144,7 +1146,9 @@ export default function DailyAgendaPage() {
             {/* Sessions grouped by milestone */}
             {getMilestonesInMonth(state, ym).map((milestone) => {
               const category = state.grandPlan?.categories.find((c) => c.id === milestone.categoryId);
-              const milestoneTemplates = getTemplatesForMilestone(state, ym, milestone.id);
+              const milestoneTemplates = getTemplatesForMilestone(state, ym, milestone.id).filter((t) =>
+                isTemplateScheduledForWeekday(t.daysOfWeek, weekday)
+              );
               if (milestoneTemplates.length === 0) return null;
               return (
                 <div key={milestone.id} style={{ marginBottom: 16 }}>
@@ -1186,7 +1190,9 @@ export default function DailyAgendaPage() {
 
             {/* Standalone templates */}
             {(() => {
-              const standaloneTemplates = getStandaloneTemplates(state, ym);
+              const standaloneTemplates = getStandaloneTemplates(state, ym).filter((t) =>
+                isTemplateScheduledForWeekday(t.daysOfWeek, weekday)
+              );
               if (standaloneTemplates.length === 0) return null;
               return (
                 <div style={{ marginBottom: 16 }}>
@@ -1232,6 +1238,14 @@ export default function DailyAgendaPage() {
                 No focus templates defined. Add templates in Month Setup.
               </p>
             )}
+
+            {/* Show message if templates exist, but none are scheduled for today */}
+            {plan.templates.length > 0 &&
+              plan.templates.filter((t) => isTemplateScheduledForWeekday(t.daysOfWeek, weekday)).length === 0 && (
+                <p style={{ fontSize: 13, color: "#999", fontStyle: "italic" }}>
+                  No focus templates scheduled for today. Edit templates in Month Setup to assign weekdays.
+                </p>
+              )}
           </div>
 
           {/* v4: Close Day Button */}
