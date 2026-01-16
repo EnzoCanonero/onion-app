@@ -40,7 +40,7 @@ function Header() {
 export default function App() {
   return (
     <DateNavigationProvider>
-      <div style={{ fontFamily: "system-ui, sans-serif", maxWidth: 960, margin: "0 auto", padding: 16 }}>
+      <div style={{ fontFamily: "system-ui, sans-serif", width: "100%", margin: 0, padding: 16, boxSizing: "border-box" }}>
         <Header />
         <hr style={{ margin: "16px 0" }} />
 

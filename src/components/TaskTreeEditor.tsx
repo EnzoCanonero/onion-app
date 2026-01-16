@@ -74,9 +74,7 @@ export default function TaskTreeEditor({ plan, onUpdate }: TaskTreeEditorProps) 
     findChildren(task.id);
 
     nextTasks = plan.tasks.filter((t) => !toDelete.has(t.id));
-    const nextSnapshot = plan.initialSnapshotTaskIds.filter((id) => !toDelete.has(id));
-
-    onUpdate({ ...plan, tasks: nextTasks, initialSnapshotTaskIds: nextSnapshot });
+    onUpdate({ ...plan, tasks: nextTasks });
   };
 
   const handleDragStart = (e: React.DragEvent, taskId: string) => {
