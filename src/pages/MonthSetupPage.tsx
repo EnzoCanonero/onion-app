@@ -50,6 +50,57 @@ function seedPlan(ym: YM): MonthPlan {
   };
 }
 
+function PinGlyph({ color }: { color: string }) {
+  return (
+    <span
+      aria-hidden
+      style={{
+        position: "relative",
+        width: 14,
+        height: 16,
+        flex: "0 0 auto",
+        transform: "rotate(-18deg)",
+      }}
+    >
+      <span
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 3,
+          width: 8,
+          height: 8,
+          borderRadius: "50%",
+          backgroundColor: color,
+          boxShadow: "0 1px 2px rgba(0,0,0,0.25)",
+        }}
+      />
+      <span
+        style={{
+          position: "absolute",
+          top: 7,
+          left: 6,
+          width: 2,
+          height: 6,
+          borderRadius: 2,
+          backgroundColor: color,
+        }}
+      />
+      <span
+        style={{
+          position: "absolute",
+          top: 12,
+          left: 4,
+          width: 0,
+          height: 0,
+          borderLeft: "3px solid transparent",
+          borderRight: "3px solid transparent",
+          borderTop: `4px solid ${color}`,
+        }}
+      />
+    </span>
+  );
+}
+
 // Component for editing tasks under a milestone group
 function TaskGroup({
   title,
@@ -1517,27 +1568,30 @@ export default function MonthSetupPage() {
                 padding: 12,
                 borderBottom: "1px solid #eee",
                 backgroundColor: "white",
-              }}
-            >
-              <div style={{ fontSize: 12, fontWeight: 800, color: "#666", marginRight: 4 }}>📌 Pins</div>
-
-              <button
-                onClick={() => setSelectedMilestoneId(null)}
-                style={{
-                  padding: "6px 10px",
-                  fontSize: 12,
-                  fontWeight: 800,
-                  backgroundColor: selectedMilestoneId === null ? "#00000010" : "white",
-                  color: "#000",
-                  border: selectedMilestoneId === null ? "2px solid #000" : "1px solid #ddd",
-                  borderRadius: 999,
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
-                }}
-                title="Standalone (not linked to a milestone)"
-              >
-                Standalone
-              </button>
+	              }}
+	            >
+	              <button
+	                onClick={() => setSelectedMilestoneId(null)}
+	                style={{
+	                  padding: "8px 12px",
+	                  fontSize: 12,
+	                  fontWeight: 800,
+	                  backgroundColor: selectedMilestoneId === null ? "#00000010" : "white",
+	                  color: "#111",
+	                  border: selectedMilestoneId === null ? "2px solid #111" : "1px solid #ddd",
+	                  borderRadius: 12,
+	                  cursor: "pointer",
+	                  whiteSpace: "nowrap",
+	                  display: "flex",
+	                  alignItems: "center",
+	                  gap: 8,
+	                  boxShadow: selectedMilestoneId === null ? "0 8px 18px rgba(0,0,0,0.10)" : "0 2px 8px rgba(0,0,0,0.06)",
+	                }}
+	                title="Standalone (not linked to a milestone)"
+	              >
+	                <PinGlyph color="#111" />
+	                Standalone
+	              </button>
 
               {pinnedMilestones.map((milestone) => {
                 const category = state.grandPlan?.categories.find((c) => c.id === milestone.categoryId);
@@ -1545,42 +1599,35 @@ export default function MonthSetupPage() {
                 const pinColor = milestone.status === "COMPLETED" ? "#FFD700" : baseColor;
                 const active = selectedMilestoneId === milestone.id;
                 return (
-                  <button
-                    key={milestone.id}
-                    onClick={() => setSelectedMilestoneId(milestone.id)}
-                    style={{
-                      padding: "6px 10px",
-                      fontSize: 12,
-                      fontWeight: 800,
-                      backgroundColor: active ? `${pinColor}10` : "white",
-                      color: "#333",
-                      border: active ? `2px solid ${pinColor}` : `1px solid ${pinColor}`,
-                      borderRadius: 999,
-                      cursor: "pointer",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 6,
-                      whiteSpace: "nowrap",
-                      maxWidth: 240,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                    }}
-                    title={`${category?.title ?? "Category"} · ${milestone.title}`}
-                  >
-                    <span
-                      style={{
-                        width: 8,
-                        height: 8,
-                        borderRadius: "50%",
-                        backgroundColor: pinColor,
-                        display: "inline-block",
-                        flex: "0 0 auto",
-                      }}
-                    />
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{milestone.title}</span>
-                    {milestone.status === "COMPLETED" && <span style={{ fontSize: 11, opacity: 0.7 }}>✓</span>}
-                  </button>
-                );
+	                  <button
+	                    key={milestone.id}
+	                    onClick={() => setSelectedMilestoneId(milestone.id)}
+	                    style={{
+	                      padding: "8px 12px",
+	                      fontSize: 12,
+	                      fontWeight: 800,
+	                      backgroundColor: active ? withHexAlpha(pinColor, "12") : "white",
+	                      color: "#333",
+	                      border: active ? `2px solid ${pinColor}` : `1px solid ${pinColor}`,
+	                      borderRadius: 12,
+	                      cursor: "pointer",
+	                      display: "flex",
+	                      alignItems: "center",
+	                      gap: 8,
+	                      whiteSpace: "nowrap",
+	                      maxWidth: 240,
+	                      overflow: "hidden",
+	                      textOverflow: "ellipsis",
+	                      boxShadow: active ? `0 8px 18px ${withHexAlpha(pinColor, "26")}` : `0 2px 8px ${withHexAlpha(pinColor, "14")}`,
+	                      transform: active ? "translateY(-1px)" : "none",
+	                    }}
+	                    title={`${category?.title ?? "Category"} · ${milestone.title}`}
+	                  >
+	                    <PinGlyph color={pinColor} />
+	                    <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{milestone.title}</span>
+	                    {milestone.status === "COMPLETED" && <span style={{ fontSize: 11, opacity: 0.7 }}>✓</span>}
+	                  </button>
+	                );
               })}
 
               <div style={{ flex: "1 1 auto" }} />
