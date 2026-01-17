@@ -60,6 +60,11 @@ export type TaskNode = {
   id: string;
   title: string;
   description?: string;
+  notes?: string;
+  boardX?: number;
+  boardY?: number;
+  boardW?: number;
+  boardH?: number;
   parentId: string | null;
   status: TaskStatus;
   linkedMilestoneId?: string; // v6.1: optional link to a milestone
@@ -82,6 +87,8 @@ export type MonthPlan = {
   pinnedMilestoneIds: string[]; // v8: explicit milestone pins shown in Month Setup
   createdAt: string; // ISO timestamp
   isClosed?: boolean; // v5: true if month is closed (read-only report mode)
+  boardByScope?: Record<string, { width: number; height: number }>;
+  taskLinksByScope?: Record<string, { from: string; to: string }[]>;
 };
 
 export type ProductivitySession = {

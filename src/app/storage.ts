@@ -321,7 +321,7 @@ export function updateTaskInMonth(
   state: AppStateV0,
   ym: YM,
   taskId: string,
-  updates: Partial<Pick<TaskNode, "title" | "description" | "parentId" | "status">>
+  updates: Partial<Pick<TaskNode, "title" | "description" | "notes" | "boardX" | "boardY" | "boardW" | "boardH" | "parentId" | "status">>
 ): AppStateV0 {
   const plan = getMonth(state, ym);
   if (!plan) return state;
