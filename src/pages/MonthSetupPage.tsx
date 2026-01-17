@@ -22,6 +22,7 @@ import {
 import { MON_FRI, WEEKDAY_ORDER, WEEKDAY_SHORT, formatWeekdays, sortWeekdays } from "../app/weekdays";
 import { useDateNavigation } from "../contexts/DateNavigationContext";
 import FireworksOverlay from "../components/FireworksOverlay";
+import { APP_MAIN_COLOR } from "../app/theme";
 
 function parseTimeToMinutes(time: string): number | null {
   const parts = time.split(":").map((x) => Number(x));
@@ -2188,7 +2189,7 @@ export default function MonthSetupPage() {
 
 		                  {pinnedMilestones.map((milestone) => {
 	                    const category = state.grandPlan?.categories.find((c) => c.id === milestone.categoryId);
-	                    const baseColor = category?.color ?? "#9c27b0";
+		                    const baseColor = category?.color ?? APP_MAIN_COLOR;
 	                    const pinColor = milestone.status === "COMPLETED" ? "#FFD700" : baseColor;
 	                    const active = selectedMilestoneId === milestone.id;
 	                    return (
@@ -2293,7 +2294,7 @@ export default function MonthSetupPage() {
                   ? `[${category?.title ?? "Category"}] ${milestone.title}`
                   : "Standalone";
 
-	                const color = milestone ? category?.color ?? "#9c27b0" : "#000";
+		                const color = milestone ? category?.color ?? APP_MAIN_COLOR : "#000";
 	                const tasks = milestone ? getTasksForMilestone(milestone.id) : standaloneTasks;
 	                const templates = milestone
 	                  ? getTemplatesForMilestone(state, ymSafe, milestone.id)
