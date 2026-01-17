@@ -1,5 +1,5 @@
 
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { Navigate } from "react-router-dom";
 import type { MonthPlan, YM, TaskNode, MilestoneNode, MilestoneStatus, FocusTemplate, Weekday } from "../app/types";
 import {
@@ -109,6 +109,11 @@ function TaskGroup({
   milestoneId,
   milestoneStatus,
   templates,
+  boardSize,
+  onUpdateBoardSize,
+  links,
+  onUpdateLinks,
+  zoomStorageKey,
   onAddTask,
   onUpdateTask,
   onDeleteTask,
@@ -126,8 +131,16 @@ function TaskGroup({
   milestoneId: string | null;
   milestoneStatus?: MilestoneStatus;
   templates: FocusTemplate[];
+  boardSize: { width: number; height: number };
+  onUpdateBoardSize: (next: { width: number; height: number }) => void;
+  links: { from: string; to: string }[];
+  onUpdateLinks: (next: { from: string; to: string }[]) => void;
+  zoomStorageKey: string;
   onAddTask: (milestoneId: string | null) => void;
-  onUpdateTask: (taskId: string, updates: Partial<Pick<TaskNode, "title" | "description">>) => void;
+  onUpdateTask: (
+    taskId: string,
+    updates: Partial<Pick<TaskNode, "title" | "description" | "notes" | "boardX" | "boardY" | "boardW" | "boardH">>
+  ) => void;
   onDeleteTask: (taskId: string) => void;
   onMarkMilestoneCompleted?: (milestoneId: string) => void;
   onAddTemplate: (milestoneId: string | null) => void;
@@ -149,6 +162,7 @@ function TaskGroup({
   const [taskModalTaskId, setTaskModalTaskId] = useState<string | null>(null);
   const [taskModalTitle, setTaskModalTitle] = useState("");
   const [taskModalDescription, setTaskModalDescription] = useState("");
+  const [taskModalNotes, setTaskModalNotes] = useState("");
   const [taskModalError, setTaskModalError] = useState<string | null>(null);
 
   const suspendInfoStorageKey = "focustree.templateSuspendInfo.dismissed";
@@ -194,13 +208,164 @@ function TaskGroup({
 
   const isCompleted = milestoneStatus === "COMPLETED";
   const accentColor = isCompleted ? "#FFD700" : color;
-  const groupBackgroundColor = withHexAlpha(accentColor, "10");
   const uiAccent = chromeless ? "#000" : accentColor;
+  const noteBorderColor = chromeless ? "#000" : accentColor;
+  const noteBackgroundColor = chromeless ? "rgba(255,255,255,0.96)" : "#fffde7";
+  const canEditBoard = !isCompleted;
+
+  useEffect(() => {
+    if (!isCompleted) return;
+    setEditingTemplateId(null);
+  }, [isCompleted]);
+
+  const baseBoardWidth = Math.max(800, boardSize.width);
+  const baseBoardHeight = Math.max(600, boardSize.height);
+
+  type TaskRect = { x: number; y: number; w: number; h: number };
+  type TaskPointerState = {
+    taskId: string;
+    pointerId: number;
+    zoom: number;
+    startClientX: number;
+    startClientY: number;
+    originX: number;
+    originY: number;
+    w: number;
+    h: number;
+    canDrag: boolean;
+    moved: boolean;
+  };
+  type ResizePointerState = {
+    taskId: string;
+    pointerId: number;
+    zoom: number;
+    startClientX: number;
+    startClientY: number;
+    originW: number;
+    originH: number;
+    x: number;
+    y: number;
+    moved: boolean;
+  };
+
+  const [isLinkMode, setIsLinkMode] = useState(false);
+  const [linkFromTaskId, setLinkFromTaskId] = useState<string | null>(null);
+
+  const [boardZoom, setBoardZoom] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(zoomStorageKey);
+      const n = raw ? Number(raw) : 1;
+      if (!Number.isFinite(n)) return 1;
+      return Math.max(0.5, Math.min(2, n));
+    } catch {
+      return 1;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(zoomStorageKey, String(boardZoom));
+    } catch {
+      // ignore
+    }
+  }, [zoomStorageKey, boardZoom]);
+
+  const taskPointerRef = useRef<TaskPointerState | null>(null);
+  const resizePointerRef = useRef<ResizePointerState | null>(null);
+
+  const [dragPreview, setDragPreview] = useState<{ taskId: string; x: number; y: number } | null>(null);
+  const [resizePreview, setResizePreview] = useState<{ taskId: string; w: number; h: number } | null>(null);
+
+  useEffect(() => {
+    if (!isLinkMode) setLinkFromTaskId(null);
+  }, [isLinkMode]);
+
+  const taskRectsById = useMemo(() => {
+    const DEFAULT_W = 260;
+    const DEFAULT_H = 180;
+    const GAP = 26;
+    const START_X = 28;
+    const START_Y = 28;
+
+    const cols = Math.max(1, Math.floor((Math.max(320, boardSize.width) - START_X * 2) / (DEFAULT_W + GAP)));
+    const map = new Map<string, TaskRect>();
+
+    tasks.forEach((task, idx) => {
+      let w = typeof task.boardW === "number" && Number.isFinite(task.boardW) ? task.boardW : DEFAULT_W;
+      let h = typeof task.boardH === "number" && Number.isFinite(task.boardH) ? task.boardH : DEFAULT_H;
+
+      let x =
+        typeof task.boardX === "number" && Number.isFinite(task.boardX)
+          ? task.boardX
+          : START_X + (idx % cols) * (DEFAULT_W + GAP);
+      let y =
+        typeof task.boardY === "number" && Number.isFinite(task.boardY)
+          ? task.boardY
+          : START_Y + Math.floor(idx / cols) * (DEFAULT_H + GAP);
+
+      if (dragPreview?.taskId === task.id) {
+        x = dragPreview.x;
+        y = dragPreview.y;
+      }
+      if (resizePreview?.taskId === task.id) {
+        w = resizePreview.w;
+        h = resizePreview.h;
+      }
+
+      w = Math.max(160, Math.min(720, w));
+      h = Math.max(110, Math.min(640, h));
+      x = Math.max(0, x);
+      y = Math.max(0, y);
+
+      map.set(task.id, { x, y, w, h });
+    });
+
+    return map;
+  }, [tasks, boardSize.width, dragPreview, resizePreview]);
+
+  const extendBoardToFit = (rect: TaskRect) => {
+    const PAD = 160;
+    const neededW = Math.max(boardSize.width, rect.x + rect.w + PAD);
+    const neededH = Math.max(boardSize.height, rect.y + rect.h + PAD);
+    if (neededW <= boardSize.width && neededH <= boardSize.height) return;
+
+    const roundTo = (value: number, step: number) => Math.ceil(value / step) * step;
+    onUpdateBoardSize({
+      width: roundTo(neededW, 200),
+      height: roundTo(neededH, 200),
+    });
+  };
+
+  const handleExtendBoardClick = () => {
+    onUpdateBoardSize({ width: boardSize.width + 800, height: boardSize.height + 600 });
+  };
+
+  const handleLinkTaskClick = (taskId: string) => {
+    if (!canEditBoard) return;
+    if (!isLinkMode) return;
+
+    if (!linkFromTaskId) {
+      setLinkFromTaskId(taskId);
+      return;
+    }
+
+    if (linkFromTaskId === taskId) {
+      setLinkFromTaskId(null);
+      return;
+    }
+
+    const [a, b] = linkFromTaskId < taskId ? [linkFromTaskId, taskId] : [taskId, linkFromTaskId];
+    const exists = links.some((l) => l.from === a && l.to === b);
+    const next = exists ? links.filter((l) => !(l.from === a && l.to === b)) : [...links, { from: a, to: b }];
+    onUpdateLinks(next);
+    setLinkFromTaskId(null);
+  };
 
   const openTaskModal = (task: TaskNode) => {
     setTaskModalTaskId(task.id);
     setTaskModalTitle(task.title);
     setTaskModalDescription(task.description ?? "");
+    setTaskModalNotes(task.notes ?? "");
     setTaskModalError(null);
   };
 
@@ -208,20 +373,189 @@ function TaskGroup({
     setTaskModalTaskId(null);
     setTaskModalTitle("");
     setTaskModalDescription("");
+    setTaskModalNotes("");
     setTaskModalError(null);
   };
 
   const saveTaskModal = () => {
     if (!taskModalTaskId) return;
+    if (isCompleted) {
+      closeTaskModal();
+      return;
+    }
     const nextTitle = taskModalTitle.trim();
     if (!nextTitle) {
       setTaskModalError("Title is required.");
       return;
     }
     const nextDescription = taskModalDescription.trim();
-    onUpdateTask(taskModalTaskId, { title: nextTitle, description: nextDescription || undefined });
+    const nextNotes = taskModalNotes.trim();
+    onUpdateTask(taskModalTaskId, {
+      title: nextTitle,
+      description: nextDescription || undefined,
+      notes: nextNotes || undefined,
+    });
     closeTaskModal();
   };
+
+	  const handleTaskPointerDown = (e: ReactPointerEvent<HTMLDivElement>, taskId: string) => {
+	    if (e.button !== 0) return;
+	    const rect = taskRectsById.get(taskId);
+	    if (!rect) return;
+
+	    taskPointerRef.current = {
+	      taskId,
+	      pointerId: e.pointerId,
+	      zoom: boardZoom,
+	      startClientX: e.clientX,
+	      startClientY: e.clientY,
+	      originX: rect.x,
+	      originY: rect.y,
+	      w: rect.w,
+      h: rect.h,
+      canDrag: canEditBoard && !isLinkMode,
+      moved: false,
+    };
+
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+
+    if (canEditBoard && !isLinkMode) {
+      e.preventDefault();
+    }
+  };
+
+	  const handleTaskPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+	    const st = taskPointerRef.current;
+	    if (!st || st.pointerId !== e.pointerId) return;
+	    if (!st.canDrag) return;
+
+	    const rawDx = e.clientX - st.startClientX;
+	    const rawDy = e.clientY - st.startClientY;
+	    const dist = Math.hypot(rawDx, rawDy);
+
+	    if (!st.moved && dist < 3) return;
+	    st.moved = true;
+
+	    const zoom = Number.isFinite(st.zoom) && st.zoom > 0 ? st.zoom : 1;
+	    const dx = rawDx / zoom;
+	    const dy = rawDy / zoom;
+	    const nextX = Math.max(0, st.originX + dx);
+	    const nextY = Math.max(0, st.originY + dy);
+	    setDragPreview({ taskId: st.taskId, x: nextX, y: nextY });
+	  };
+
+	  const handleTaskPointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+	    const st = taskPointerRef.current;
+	    if (!st || st.pointerId !== e.pointerId) return;
+
+    taskPointerRef.current = null;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+
+	    const rawDx = e.clientX - st.startClientX;
+	    const rawDy = e.clientY - st.startClientY;
+	    const dist = Math.hypot(rawDx, rawDy);
+	    const moved = st.canDrag && (st.moved || dist >= 3);
+
+	    if (moved) {
+	      const zoom = Number.isFinite(st.zoom) && st.zoom > 0 ? st.zoom : 1;
+	      const dx = rawDx / zoom;
+	      const dy = rawDy / zoom;
+	      const nextX = Math.max(0, st.originX + dx);
+	      const nextY = Math.max(0, st.originY + dy);
+	      setDragPreview(null);
+	      onUpdateTask(st.taskId, { boardX: nextX, boardY: nextY });
+	      extendBoardToFit({ x: nextX, y: nextY, w: st.w, h: st.h });
+	      return;
+	    }
+
+    setDragPreview(null);
+    if (isLinkMode) {
+      handleLinkTaskClick(st.taskId);
+      return;
+    }
+
+    const task = tasks.find((t) => t.id === st.taskId);
+    if (task) openTaskModal(task);
+  };
+
+	  const handleResizePointerDown = (e: ReactPointerEvent<HTMLDivElement>, taskId: string) => {
+	    if (!canEditBoard) return;
+	    if (isLinkMode) return;
+	    const rect = taskRectsById.get(taskId);
+    if (!rect) return;
+
+    e.stopPropagation();
+    e.preventDefault();
+
+	    resizePointerRef.current = {
+	      taskId,
+	      pointerId: e.pointerId,
+	      zoom: boardZoom,
+	      startClientX: e.clientX,
+	      startClientY: e.clientY,
+	      originW: rect.w,
+	      originH: rect.h,
+      x: rect.x,
+      y: rect.y,
+      moved: false,
+    };
+
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+  };
+
+	  const handleResizePointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+	    const st = resizePointerRef.current;
+	    if (!st || st.pointerId !== e.pointerId) return;
+
+	    const rawDx = e.clientX - st.startClientX;
+	    const rawDy = e.clientY - st.startClientY;
+	    const dist = Math.hypot(rawDx, rawDy);
+	    if (!st.moved && dist < 2) return;
+	    st.moved = true;
+
+	    const zoom = Number.isFinite(st.zoom) && st.zoom > 0 ? st.zoom : 1;
+	    const dx = rawDx / zoom;
+	    const dy = rawDy / zoom;
+	    const nextW = Math.max(160, Math.min(720, st.originW + dx));
+	    const nextH = Math.max(110, Math.min(640, st.originH + dy));
+	    setResizePreview({ taskId: st.taskId, w: nextW, h: nextH });
+	  };
+
+	  const handleResizePointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+	    const st = resizePointerRef.current;
+	    if (!st || st.pointerId !== e.pointerId) return;
+
+    resizePointerRef.current = null;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+
+	    const rawDx = e.clientX - st.startClientX;
+	    const rawDy = e.clientY - st.startClientY;
+	    const zoom = Number.isFinite(st.zoom) && st.zoom > 0 ? st.zoom : 1;
+	    const dx = rawDx / zoom;
+	    const dy = rawDy / zoom;
+	    const nextW = Math.max(160, Math.min(720, st.originW + dx));
+	    const nextH = Math.max(110, Math.min(640, st.originH + dy));
+	    setResizePreview(null);
+
+	    onUpdateTask(st.taskId, { boardW: nextW, boardH: nextH });
+	    extendBoardToFit({ x: st.x, y: st.y, w: nextW, h: nextH });
+	  };
 
   useEffect(() => {
     if (!taskModalTaskId) return;
@@ -232,20 +566,14 @@ function TaskGroup({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [taskModalTaskId]);
 
-  const bubbleStyle: CSSProperties = chromeless
-    ? {
-        padding: 16,
-        backgroundColor: "transparent",
-        borderRadius: 14,
-        border: "2px solid #000",
-      }
-    : {
-        padding: 16,
-        backgroundColor: groupBackgroundColor,
-        borderRadius: 14,
-        border: `2px solid ${accentColor}`,
-        boxShadow: "0 1px 0 rgba(0,0,0,0.04), 0 10px 24px rgba(0,0,0,0.06)",
-      };
+  const focusBoxStyle: CSSProperties = {
+    marginTop: 18,
+    padding: 16,
+    backgroundColor: "transparent",
+    borderRadius: 0,
+    border: "none",
+    boxShadow: "none",
+  };
 
   return (
     <div style={{ marginBottom: 16 }}>
@@ -303,187 +631,407 @@ function TaskGroup({
           )}
         </div>
       ) : isCompleted || (milestoneId && !isCompleted && onMarkMilestoneCompleted) ? (
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginBottom: 12 }}>
-          {isCompleted && (
-            <span style={{ fontSize: 12, fontWeight: 700, color: uiAccent }}>✓ Completed</span>
-          )}
-          {milestoneId && !isCompleted && onMarkMilestoneCompleted && (
-            <button
-              onClick={() => onMarkMilestoneCompleted(milestoneId)}
-              style={{
-                padding: "4px 10px",
-                fontSize: 11,
-                fontWeight: 700,
-                backgroundColor: "white",
-                color,
-                border: `1px solid ${color}`,
-                borderRadius: 6,
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                gap: 4,
-              }}
-              title="Mark this milestone as completed"
-            >
-              ★ Mark Completed
-            </button>
-          )}
-        </div>
+        null
       ) : null}
 
-      <div style={{ display: "flex", gap: 16, alignItems: "stretch", flexWrap: "wrap" }}>
-        {/* Tasks (left bubble) */}
-        <div style={{ ...bubbleStyle, flex: "3 1 420px", minWidth: 320, display: "flex", flexDirection: "column" }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: uiAccent, display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-            ✅ Tasks
-            <span style={{ fontSize: 11, opacity: 0.6, fontWeight: 600 }}>({tasks.length})</span>
-          </div>
-
-          <div style={{ flex: "1 1 auto" }}>
-            {tasks.length === 0 ? (
-              <p style={{ fontSize: 13, color: "#999", fontStyle: "italic", margin: 0 }}>
-                No tasks yet
-              </p>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {tasks.map((task) => (
-                  <div
-                    key={task.id}
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") openTaskModal(task);
-                    }}
-                    onClick={() => openTaskModal(task)}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                      padding: chromeless ? "6px 0" : "7.2px 8px",
-                      backgroundColor: chromeless ? "transparent" : "white",
-                      borderRadius: chromeless ? 0 : 4,
-                      border: chromeless ? "none" : `1px solid ${accentColor}`,
-                      cursor: "pointer",
-                    }}
-                  >
-                    {!chromeless && (
-                      <span
-                        style={{
-                          width: 20,
-                          height: 20,
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          fontSize: 14,
-                          fontWeight: 700,
-                          color:
-                            task.status === "GREEN"
-                              ? "#4caf50"
-                              : task.status === "YELLOW"
-                              ? "#ff9800"
-                              : "#ccc",
-                        }}
-                        title={
-                          task.status === "GREEN"
-                            ? "Completed"
-                            : task.status === "YELLOW"
-                            ? "In Progress"
-                            : "Not started"
-                        }
-                      >
-                        {task.status === "GREEN" ? "✓" : task.status === "YELLOW" ? "◐" : "○"}
-                      </span>
-                    )}
-
-                    <span
-                      style={{
-                        flex: 1,
-                        fontSize: 13,
-                        textDecoration: "none",
-                        color: chromeless ? "#000" : "#333",
-                      }}
-                    >
-                      {task.title}
-                    </span>
-
-                    {!isCompleted && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (window.confirm(`Delete task "${task.title}"?`)) {
-                            onDeleteTask(task.id);
-                          }
-                        }}
-                        style={{
-                          padding: "2px 6px",
-                          fontSize: 11,
-                          backgroundColor: "transparent",
-                          color: "#f44336",
-                          border: "none",
-                          cursor: "pointer",
-                          opacity: 0.7,
-                        }}
-                      >
-                        ✕
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {!isCompleted && !hideAddButton && (
-            <div style={{ marginTop: "auto", paddingTop: 10 }}>
+      <div>
+        {/* Tasks whiteboard */}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 12,
+            flexWrap: "wrap",
+            marginBottom: 10,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {!isCompleted && !hideAddButton && (
               <button
                 onClick={() => onAddTask(milestoneId)}
                 style={{
-                  padding: "4.95px 9.9px",
-                  fontSize: 9.9,
-                  fontWeight: 700,
+                  padding: "8px 12px",
+                  fontSize: 12,
+                  fontWeight: 900,
                   backgroundColor: "white",
-                  color: chromeless ? "#000" : color,
-                  border: chromeless ? "2px solid #000" : `2px solid ${color}`,
-                  borderRadius: 6,
+                  color: noteBorderColor,
+                  border: `2px solid ${noteBorderColor}`,
+                  borderRadius: 10,
                   cursor: "pointer",
                   whiteSpace: "nowrap",
                 }}
               >
                 + Add Task
               </button>
-            </div>
-          )}
+            )}
+
+            {!isCompleted && (
+              <button
+                onClick={() => setIsLinkMode((v) => !v)}
+                style={{
+                  padding: "8px 12px",
+                  fontSize: 12,
+                  fontWeight: 900,
+                  backgroundColor: isLinkMode ? "#f4433612" : "white",
+                  color: "#f44336",
+                  border: isLinkMode ? "2px solid #f44336" : "2px dashed #f44336",
+                  borderRadius: 10,
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+                title="Create red links between tasks"
+              >
+                {isLinkMode ? "Done Linking" : "Link Tasks"}
+              </button>
+            )}
+
+            {!isCompleted && (
+              <button
+                onClick={handleExtendBoardClick}
+                style={{
+                  padding: "8px 12px",
+                  fontSize: 12,
+                  fontWeight: 900,
+                  backgroundColor: "white",
+                  color: "#333",
+                  border: "2px dashed #bbb",
+                  borderRadius: 10,
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+                title="Add more whiteboard space"
+              >
+                Extend Board
+              </button>
+            )}
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {isCompleted ? (
+              <span
+                style={{
+                  padding: "8px 12px",
+                  fontSize: 12,
+                  fontWeight: 900,
+                  backgroundColor: "#fff8e1",
+                  color: "#8d6e63",
+                  border: "2px solid #FFD700",
+                  borderRadius: 10,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                ✓ Completed
+              </span>
+            ) : milestoneId && onMarkMilestoneCompleted ? (
+              <button
+                onClick={() => onMarkMilestoneCompleted(milestoneId)}
+                style={{
+                  padding: "8px 12px",
+                  fontSize: 12,
+                  fontWeight: 900,
+                  backgroundColor: "white",
+                  color: noteBorderColor,
+                  border: `2px solid ${noteBorderColor}`,
+                  borderRadius: 10,
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+                title="Mark this milestone as completed"
+              >
+                <span style={{ color: "#FFD700" }}>★</span> Mark Completed
+              </button>
+            ) : null}
+          </div>
         </div>
 
-        {/* Focus Templates (right bubble) */}
-        <div style={{ ...bubbleStyle, flex: "2 1 320px", minWidth: 280, display: "flex", flexDirection: "column" }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: uiAccent, display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+        {isLinkMode && !isCompleted && (
+          <div style={{ marginBottom: 10, fontSize: 12, fontWeight: 800, color: "#f44336" }}>
+            {linkFromTaskId
+              ? "Click another task to create a red link (click the same task to cancel)."
+              : "Click a task, then click another to create a red link."}
+          </div>
+        )}
+
+	        <div
+	          style={{
+	            border: `2px solid ${noteBorderColor}`,
+	            borderRadius: 16,
+	            backgroundColor: "rgba(255,255,255,0.86)",
+	            boxShadow: "0 2px 0 rgba(0,0,0,0.05), 0 14px 26px rgba(0,0,0,0.08)",
+	            overflow: "hidden",
+	            position: "relative",
+	          }}
+	        >
+	          <div style={{ position: "absolute", top: 12, right: 12, zIndex: 20, display: "flex", flexDirection: "column", gap: 8 }}>
+	            <button
+	              type="button"
+	              onClick={() =>
+	                setBoardZoom((z) => {
+	                  const next = Math.round((z + 0.1) * 10) / 10;
+	                  return Math.max(0.5, Math.min(2, next));
+	                })
+	              }
+	              aria-label="Zoom in"
+	              title="Zoom in"
+	              style={{
+	                width: 34,
+	                height: 34,
+	                borderRadius: 10,
+	                backgroundColor: "white",
+	                color: noteBorderColor,
+	                border: `2px solid ${noteBorderColor}`,
+	                fontSize: 18,
+	                fontWeight: 900,
+	                lineHeight: 1,
+	                cursor: "pointer",
+	              }}
+	            >
+	              +
+	            </button>
+	            <button
+	              type="button"
+	              onClick={() =>
+	                setBoardZoom((z) => {
+	                  const next = Math.round((z - 0.1) * 10) / 10;
+	                  return Math.max(0.5, Math.min(2, next));
+	                })
+	              }
+	              aria-label="Zoom out"
+	              title="Zoom out"
+	              style={{
+	                width: 34,
+	                height: 34,
+	                borderRadius: 10,
+	                backgroundColor: "white",
+	                color: noteBorderColor,
+	                border: `2px solid ${noteBorderColor}`,
+	                fontSize: 18,
+	                fontWeight: 900,
+	                lineHeight: 1,
+	                cursor: "pointer",
+	              }}
+	            >
+	              −
+	            </button>
+	          </div>
+	          <div style={{ overflow: "auto", height: "min(100vh, 1230px)", minHeight: 520 }}>
+	            <div style={{ position: "relative", width: baseBoardWidth * boardZoom, height: baseBoardHeight * boardZoom }}>
+	              <div
+	                style={{
+	                  position: "absolute",
+	                  left: 0,
+	                  top: 0,
+	                  width: baseBoardWidth,
+	                  height: baseBoardHeight,
+	                  transform: `scale(${boardZoom})`,
+	                  transformOrigin: "0 0",
+	                  backgroundColor: "white",
+	                  backgroundImage:
+	                    "radial-gradient(circle at 1px 1px, rgba(0,0,0,0.08) 1px, transparent 0)",
+	                  backgroundSize: "24px 24px",
+	                }}
+	              >
+	                {/* Links layer */}
+	                <svg
+	                  width={baseBoardWidth}
+	                  height={baseBoardHeight}
+	                  style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 1 }}
+	                >
+	                  {links.map((l) => {
+	                    const a = taskRectsById.get(l.from);
+	                    const b = taskRectsById.get(l.to);
+	                    if (!a || !b) return null;
+	                    const x1 = a.x + a.w / 2;
+	                    const y1 = a.y + a.h / 2;
+	                    const x2 = b.x + b.w / 2;
+	                    const y2 = b.y + b.h / 2;
+	                    return (
+	                      <line
+	                        key={`${l.from}:${l.to}`}
+	                        x1={x1}
+	                        y1={y1}
+	                        x2={x2}
+	                        y2={y2}
+	                        stroke="#f44336"
+	                        strokeWidth={2}
+	                        opacity={0.9}
+	                      />
+	                    );
+	                  })}
+	                </svg>
+
+	                {tasks.map((task) => {
+	                const rect = taskRectsById.get(task.id);
+	                if (!rect) return null;
+
+                const statusGlyph = task.status === "GREEN" ? "✓" : task.status === "YELLOW" ? "◐" : "○";
+                const statusColor = task.status === "GREEN" ? "#4caf50" : task.status === "YELLOW" ? "#ff9800" : "#999";
+                const description = (task.description ?? "").trim();
+
+                const isLinkSelected = isLinkMode && linkFromTaskId === task.id;
+                const border = isLinkSelected ? "2px dashed #f44336" : `2px solid ${noteBorderColor}`;
+                const isDragging = dragPreview?.taskId === task.id;
+
+                return (
+                  <div
+                    key={task.id}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key !== "Enter" && e.key !== " ") return;
+                      e.preventDefault();
+                      if (isLinkMode) handleLinkTaskClick(task.id);
+                      else openTaskModal(task);
+                    }}
+                    onPointerDown={(e) => handleTaskPointerDown(e, task.id)}
+                    onPointerMove={handleTaskPointerMove}
+                    onPointerUp={handleTaskPointerUp}
+                    style={{
+                      position: "absolute",
+                      left: rect.x,
+                      top: rect.y,
+                      width: rect.w,
+                      height: rect.h,
+                      padding: "12px 12px 20px",
+                      boxSizing: "border-box",
+                      borderRadius: 14,
+                      backgroundColor: noteBackgroundColor,
+                      backgroundImage: "linear-gradient(180deg, rgba(255,255,255,0.55), rgba(0,0,0,0.02))",
+                      border,
+                      boxShadow: isDragging
+                        ? "0 4px 0 rgba(0,0,0,0.06), 0 20px 34px rgba(0,0,0,0.18)"
+                        : "0 2px 0 rgba(0,0,0,0.05), 0 12px 22px rgba(0,0,0,0.10)",
+                      cursor: isLinkMode ? "crosshair" : canEditBoard ? "grab" : "pointer",
+                      userSelect: "none",
+                      overflow: "hidden",
+                      zIndex: isDragging ? 5 : 2,
+                    }}
+                    title={isLinkMode ? "Click to link" : task.title}
+                  >
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                      <div
+                        style={{
+                          flex: 1,
+                          fontWeight: 900,
+                          fontSize: 13,
+                          color: "#222",
+                          lineHeight: 1.2,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {task.title}
+                      </div>
+
+                      {!isCompleted && (
+                        <button
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (!window.confirm(`Delete task "${task.title}"?`)) return;
+                            const nextLinks = links.filter((l) => l.from !== task.id && l.to !== task.id);
+                            if (nextLinks.length !== links.length) onUpdateLinks(nextLinks);
+                            onDeleteTask(task.id);
+                          }}
+                          style={{
+                            padding: "2px 8px",
+                            fontSize: 12,
+                            backgroundColor: "transparent",
+                            color: "#f44336",
+                            border: "none",
+                            cursor: "pointer",
+                            opacity: 0.85,
+                            lineHeight: 1,
+                          }}
+                          title="Delete task"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+
+                    <div
+                      style={{
+                        marginTop: 8,
+                        fontSize: 12,
+                        color: description ? "#444" : "#888",
+                        fontStyle: description ? "normal" : "italic",
+                        lineHeight: 1.35,
+                        display: "-webkit-box",
+                        WebkitLineClamp: 4,
+                        WebkitBoxOrient: "vertical",
+                        overflow: "hidden",
+                        whiteSpace: "pre-wrap",
+                      }}
+                    >
+                      {description || "Add a short description…"}
+                    </div>
+
+                    <div style={{ position: "absolute", bottom: 8, left: 12, fontSize: 12, fontWeight: 900, color: statusColor }}>
+                      {statusGlyph}
+                    </div>
+
+                    {!isCompleted && !isLinkMode && (
+                      <div
+                        onPointerDown={(e) => handleResizePointerDown(e, task.id)}
+                        onPointerMove={handleResizePointerMove}
+                        onPointerUp={handleResizePointerUp}
+                        style={{
+                          position: "absolute",
+                          right: 6,
+                          bottom: 6,
+                          width: 16,
+                          height: 16,
+                          cursor: "se-resize",
+                          opacity: 0.7,
+                          borderRight: `2px solid ${noteBorderColor}`,
+                          borderBottom: `2px solid ${noteBorderColor}`,
+                          borderRadius: 2,
+                        }}
+                        title="Resize"
+                      />
+                    )}
+                  </div>
+                );
+	                })}
+	              </div>
+	            </div>
+	          </div>
+	        </div>
+
+        {/* Focus Templates (bottom box) */}
+        <div style={focusBoxStyle}>
+          <div style={{ fontSize: 14, fontWeight: 800, color: uiAccent, display: "flex", alignItems: "center", gap: 6, marginBottom: 12 }}>
             ⏱️ Focus Templates
-            <span style={{ fontSize: 11, opacity: 0.6, fontWeight: 600 }}>({templates.length})</span>
           </div>
 
           <div style={{ flex: "1 1 auto" }}>
             {templates.length === 0 ? (
-              <p style={{ fontSize: 12, color: "#999", fontStyle: "italic", margin: 0 }}>
+              <p style={{ fontSize: 14, color: "#999", fontStyle: "italic", margin: 0 }}>
                 No focus templates
               </p>
             ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {templates.map((template) => (
-	                  <div
-	                    key={template.id}
-	                    style={{
-	                      display: "flex",
-	                      alignItems: "center",
-	                      gap: 8,
-	                      padding: chromeless ? "6px 0" : "7.2px 8px",
-	                      backgroundColor: chromeless ? "transparent" : "white",
-	                      borderRadius: chromeless ? 0 : 4,
-	                      border: chromeless ? "none" : `1px solid ${accentColor}`,
-	                      opacity: template.isSuspended ? 0.55 : 1,
-	                      flexWrap: "wrap",
-	                    }}
-	                  >
+			                  <div
+			                    key={template.id}
+			                    style={{
+			                      display: "flex",
+			                      alignItems: "center",
+			                      gap: 12,
+			                      padding: "12px 12px",
+			                      backgroundColor: "transparent",
+			                      borderRadius: 0,
+			                      border: "none",
+			                      opacity: template.isSuspended ? 0.55 : 1,
+		                      flexWrap: "wrap",
+		                    }}
+		                  >
                     {editingTemplateId === template.id ? (
                       <>
                         <input
@@ -491,57 +1039,57 @@ function TaskGroup({
                           value={editTemplateTitle}
                           onChange={(e) => setEditTemplateTitle(e.target.value)}
                           placeholder="Template name"
-                          style={{
-                            flex: "1 1 160px",
-                            minWidth: 140,
-                            padding: "4px 8px",
-                            fontSize: 12,
-                            border: `1px solid ${uiAccent}`,
-                            borderRadius: 4,
-                            outline: "none",
-                          }}
-                        />
+	                          style={{
+	                            flex: "1 1 160px",
+	                            minWidth: 140,
+	                            padding: "7px 12px",
+	                            fontSize: 14,
+	                            border: `1px solid ${uiAccent}`,
+	                            borderRadius: 4,
+	                            outline: "none",
+	                          }}
+	                        />
                         <input
                           type="time"
                           value={editTemplateStart}
                           onChange={(e) => setEditTemplateStart(e.target.value)}
-                          style={{
-                            width: 92,
-                            padding: "4px",
-                            fontSize: 12,
-                            border: `1px solid ${uiAccent}`,
-                            borderRadius: 4,
-                          }}
-                        />
-                        <span style={{ fontSize: 12, color: "#999" }}>-</span>
-                        <input
-                          type="time"
-                          value={editTemplateEnd}
-                          onChange={(e) => setEditTemplateEnd(e.target.value)}
-                          style={{
-                            width: 92,
-                            padding: "4px",
-                            fontSize: 12,
-                            border: `1px solid ${uiAccent}`,
-                            borderRadius: 4,
-                          }}
-                        />
-                        <div style={{ flexBasis: "100%", display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginTop: 4 }}>
-                          <span style={{ fontSize: 11, fontWeight: 700, color: "#666" }}>Days:</span>
-                          {WEEKDAY_ORDER.map((day) => {
-                            const isSelected = editTemplateDays.includes(day);
-                            return (
-                              <button
-                                key={day}
-                                type="button"
-                                onClick={() => toggleTemplateDay(day)}
-                                style={{
-                                  padding: "4px 8px",
-                                  fontSize: 11,
-                                  fontWeight: 800,
-                                  backgroundColor: isSelected ? uiAccent : "white",
-                                  color: isSelected ? "white" : uiAccent,
-                                  border: `1px solid ${uiAccent}`,
+	                          style={{
+	                            width: 92,
+	                            padding: "7px 10px",
+	                            fontSize: 14,
+	                            border: `1px solid ${uiAccent}`,
+	                            borderRadius: 4,
+	                          }}
+	                        />
+	                        <span style={{ fontSize: 13, color: "#999" }}>-</span>
+	                        <input
+	                          type="time"
+	                          value={editTemplateEnd}
+	                          onChange={(e) => setEditTemplateEnd(e.target.value)}
+	                          style={{
+	                            width: 92,
+	                            padding: "7px 10px",
+	                            fontSize: 14,
+	                            border: `1px solid ${uiAccent}`,
+	                            borderRadius: 4,
+	                          }}
+	                        />
+	                        <div style={{ flexBasis: "100%", display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginTop: 4 }}>
+	                          <span style={{ fontSize: 13, fontWeight: 800, color: "#666" }}>Days:</span>
+	                          {WEEKDAY_ORDER.map((day) => {
+	                            const isSelected = editTemplateDays.includes(day);
+	                            return (
+	                              <button
+	                                key={day}
+	                                type="button"
+	                                onClick={() => toggleTemplateDay(day)}
+	                                style={{
+	                                  padding: "5px 10px",
+	                                  fontSize: 13,
+	                                  fontWeight: 800,
+	                                  backgroundColor: isSelected ? uiAccent : "white",
+	                                  color: isSelected ? "white" : uiAccent,
+	                                  border: `1px solid ${uiAccent}`,
                                   borderRadius: 999,
                                   cursor: "pointer",
                                 }}
@@ -551,32 +1099,32 @@ function TaskGroup({
                               </button>
                             );
                           })}
-                          <button
-                            type="button"
-                            onClick={() => setEditTemplateDays([...MON_FRI])}
-                            style={{
-                              padding: "4px 8px",
-                              fontSize: 11,
-                              fontWeight: 800,
-                              backgroundColor: "white",
-                              color: uiAccent,
-                              border: `1px dashed ${uiAccent}`,
+	                          <button
+	                            type="button"
+	                            onClick={() => setEditTemplateDays([...MON_FRI])}
+	                            style={{
+	                              padding: "5px 10px",
+	                              fontSize: 13,
+	                              fontWeight: 800,
+	                              backgroundColor: "white",
+	                              color: uiAccent,
+	                              border: `1px dashed ${uiAccent}`,
                               borderRadius: 999,
                               cursor: "pointer",
                             }}
                           >
                             Mon–Fri
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => setEditTemplateDays([])}
-                            style={{
-                              padding: "4px 8px",
-                              fontSize: 11,
-                              fontWeight: 800,
-                              backgroundColor: "white",
-                              color: uiAccent,
-                              border: `1px dashed ${uiAccent}`,
+	                          <button
+	                            type="button"
+	                            onClick={() => setEditTemplateDays([])}
+	                            style={{
+	                              padding: "5px 10px",
+	                              fontSize: 13,
+	                              fontWeight: 800,
+	                              backgroundColor: "white",
+	                              color: uiAccent,
+	                              border: `1px dashed ${uiAccent}`,
                               borderRadius: 999,
                               cursor: "pointer",
                             }}
@@ -586,28 +1134,28 @@ function TaskGroup({
                         </div>
 
                         <div style={{ flexBasis: "100%", display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
-                          <button
-                            onClick={saveTemplateEdit}
-                            style={{
-                              padding: "4px 8px",
-                              fontSize: 11,
-                              backgroundColor: "#4caf50",
-                              color: "white",
-                              border: "none",
+	                          <button
+	                            onClick={saveTemplateEdit}
+	                            style={{
+	                              padding: "7px 12px",
+	                              fontSize: 13,
+	                              backgroundColor: "#4caf50",
+	                              color: "white",
+	                              border: "none",
                               borderRadius: 4,
                               cursor: "pointer",
                             }}
                           >
                             ✓
                           </button>
-                          <button
-                            onClick={() => setEditingTemplateId(null)}
-                            style={{
-                              padding: "4px 8px",
-                              fontSize: 11,
-                              backgroundColor: "transparent",
-                              color: "#666",
-                              border: "1px solid #ddd",
+	                          <button
+	                            onClick={() => setEditingTemplateId(null)}
+	                            style={{
+	                              padding: "7px 12px",
+	                              fontSize: 13,
+	                              backgroundColor: "transparent",
+	                              color: "#666",
+	                              border: "1px solid #ddd",
                               borderRadius: 4,
                               cursor: "pointer",
                             }}
@@ -619,43 +1167,47 @@ function TaskGroup({
                     ) : (
                       <>
                         <span
-                          onClick={() => startTemplateEdit(template)}
-                          style={{
-                            flex: "1 1 160px",
-                            minWidth: 140,
-                            fontSize: 12,
-                            cursor: "pointer",
-                            color: chromeless ? "#000" : "#333",
+                          onClick={() => {
+                            if (isCompleted) return;
+                            startTemplateEdit(template);
                           }}
+	                          style={{
+	                            flex: "1 1 160px",
+	                            minWidth: 140,
+	                            fontSize: 14,
+	                            cursor: isCompleted ? "default" : "pointer",
+	                            color: chromeless ? "#000" : "#333",
+	                            fontWeight: 800,
+	                          }}
                         >
                           {template.title}
                         </span>
                         <span
-                          style={{
-                            fontSize: 11,
-                            color: chromeless ? "#000" : "#888",
-                            flex: "1 1 140px",
-                            minWidth: 120,
-                            textAlign: "center",
+	                          style={{
+	                            fontSize: 13,
+	                            color: chromeless ? "#000" : "#888",
+	                            flex: "1 1 140px",
+	                            minWidth: 120,
+	                            textAlign: "center",
                             whiteSpace: "nowrap",
                           }}
                         >
                           {formatWeekdays(template.daysOfWeek)}
                         </span>
                         <span
-                          style={{
-                            fontSize: 11,
-                            color: chromeless ? "#000" : "#888",
-                            fontFamily: "monospace",
-                            flex: "0 0 auto",
-                            whiteSpace: "nowrap",
+	                          style={{
+	                            fontSize: 13,
+	                            color: chromeless ? "#000" : "#888",
+	                            fontFamily: "monospace",
+	                            flex: "0 0 auto",
+	                            whiteSpace: "nowrap",
                           }}
-	                        >
-	                          {template.plannedStart}-{template.plannedEnd}
-	                        </span>
-	                        {!isCompleted && (
-	                          <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
-	                            <button
+		                        >
+		                          {template.plannedStart}-{template.plannedEnd}
+		                        </span>
+		                        {!isCompleted && (
+		                          <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+		                            <button
 	                              onClick={(e) => {
 	                                e.stopPropagation();
 	                                const nextSuspended = !template.isSuspended;
@@ -668,39 +1220,39 @@ function TaskGroup({
 	                                }
 	                              }}
 	                              title={template.isSuspended ? "Resume focus template" : "Suspend focus template"}
-	                              style={{
-	                                padding: "2px 6px",
-	                                fontSize: 11,
-	                                backgroundColor: "transparent",
-	                                color: template.isSuspended ? "#2e7d32" : "#f9a825",
-	                                border: "none",
-	                                cursor: "pointer",
-	                                opacity: 0.8,
-	                              }}
-	                            >
-	                              {template.isSuspended ? "▶" : "⏸"}
-	                            </button>
-	                            <button
+			                              style={{
+			                                padding: "4px 10px",
+			                                fontSize: 13,
+			                                backgroundColor: "transparent",
+			                                color: template.isSuspended ? "#2e7d32" : "#f9a825",
+			                                border: "none",
+		                                cursor: "pointer",
+		                                opacity: 0.8,
+		                              }}
+		                            >
+		                              {template.isSuspended ? "▶" : "⏸"}
+		                            </button>
+		                            <button
 	                              onClick={(e) => {
 	                                e.stopPropagation();
 	                                if (window.confirm(`Delete focus template "${template.title}"?`)) {
 	                                  onDeleteTemplate(template.id);
 	                                }
 	                              }}
-	                              style={{
-	                                padding: "2px 6px",
-	                                fontSize: 11,
-	                                backgroundColor: "transparent",
-	                                color: "#f44336",
-	                                border: "none",
-	                                cursor: "pointer",
-	                                opacity: 0.7,
-	                              }}
-	                            >
-	                              ✕
-	                            </button>
-	                          </div>
-	                        )}
+			                              style={{
+			                                padding: "4px 10px",
+			                                fontSize: 13,
+			                                backgroundColor: "transparent",
+			                                color: "#f44336",
+			                                border: "none",
+		                                cursor: "pointer",
+		                                opacity: 0.7,
+		                              }}
+		                            >
+		                              ✕
+		                            </button>
+		                          </div>
+		                        )}
 	                      </>
 	                    )}
 	                  </div>
@@ -782,11 +1334,11 @@ function TaskGroup({
 	            </div>
 	          )}
 
-	          {!isCompleted && (
-	            <div style={{ marginTop: "auto", paddingTop: 10 }}>
-	              <button
-	                onClick={() => onAddTemplate(milestoneId)}
-	                style={{
+          {!isCompleted && (
+            <div style={{ marginTop: 12 }}>
+              <button
+                onClick={() => onAddTemplate(milestoneId)}
+                style={{
                   padding: "4.95px 9.9px",
                   fontSize: 9.9,
                   fontWeight: 700,
@@ -805,40 +1357,39 @@ function TaskGroup({
         </div>
       </div>
 
-      {taskModalTaskId && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            backgroundColor: "rgba(0, 0, 0, 0.5)",
+	      {taskModalTaskId && (
+	        <div
+	          style={{
+	            position: "fixed",
+	            inset: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.45)",
             display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
+            alignItems: "stretch",
+            justifyContent: "stretch",
             zIndex: 1200,
-            padding: 16,
+            padding: 0,
           }}
           onClick={closeTaskModal}
         >
           <div
             style={{
-              backgroundColor: "white",
-              borderRadius: 12,
-              padding: 18,
-              maxWidth: 560,
+              backgroundColor: noteBackgroundColor,
+              backgroundImage: "linear-gradient(180deg, rgba(255,255,255,0.65), rgba(0,0,0,0.02))",
+              borderRadius: 0,
+              padding: 24,
               width: "100%",
-              maxHeight: "90vh",
+              height: "100%",
               overflow: "auto",
-              boxShadow: "0 8px 16px rgba(0,0,0,0.2)",
-              border: `2px solid ${uiAccent}`,
+              boxShadow: "0 14px 60px rgba(0,0,0,0.35)",
+              border: `3px solid ${noteBorderColor}`,
             }}
             onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
-              <div style={{ fontWeight: 800, fontSize: 14, color: uiAccent }}>Task</div>
-              <button
-                onClick={closeTaskModal}
-                style={{
-                  padding: "4px 8px",
+	          >
+	            <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "flex-start", marginBottom: 14 }}>
+	              <button
+	                onClick={closeTaskModal}
+	                style={{
+	                  padding: "4px 8px",
                   fontSize: 18,
                   backgroundColor: "transparent",
                   border: "none",
@@ -852,48 +1403,79 @@ function TaskGroup({
               </button>
             </div>
 
-            <div style={{ marginBottom: 12 }}>
-              <label style={{ display: "block", marginBottom: 6, fontWeight: 600, fontSize: 12, color: "#333" }}>
-                Title
-              </label>
-              <input
-                type="text"
-                value={taskModalTitle}
-                onChange={(e) => setTaskModalTitle(e.target.value)}
-                autoFocus
-                style={{
-                  width: "100%",
-                  padding: 10,
-                  fontSize: 14,
-                  border: `1px solid ${uiAccent}`,
-                  borderRadius: 6,
-                  boxSizing: "border-box",
-                  outline: "none",
-                }}
-              />
-            </div>
+	            <div style={{ marginBottom: 12 }}>
+	              <label style={{ display: "block", marginBottom: 6, fontWeight: 600, fontSize: 12, color: "#333" }}>
+	                Title
+	              </label>
+	              <input
+	                type="text"
+	                value={taskModalTitle}
+	                onChange={(e) => setTaskModalTitle(e.target.value)}
+	                readOnly={isCompleted}
+	                autoFocus
+	                style={{
+	                  width: "100%",
+	                  padding: 10,
+	                  fontSize: 14,
+	                  backgroundColor: isCompleted ? "rgba(255,255,255,0.55)" : "white",
+	                  border: `1px solid ${noteBorderColor}`,
+	                  borderRadius: 6,
+	                  boxSizing: "border-box",
+	                  outline: "none",
+	                  cursor: isCompleted ? "default" : "text",
+	                }}
+	              />
+	            </div>
 
             <div style={{ marginBottom: 12 }}>
               <label style={{ display: "block", marginBottom: 6, fontWeight: 600, fontSize: 12, color: "#333" }}>
-                Description
+                Short Description
               </label>
-              <textarea
-                value={taskModalDescription}
-                onChange={(e) => setTaskModalDescription(e.target.value)}
-                rows={6}
-                style={{
-                  width: "100%",
-                  padding: 10,
-                  fontSize: 13,
-                  border: `1px solid ${uiAccent}`,
-                  borderRadius: 6,
-                  boxSizing: "border-box",
-                  outline: "none",
-                  resize: "vertical",
-                  fontFamily: "inherit",
-                }}
-              />
-            </div>
+	              <textarea
+	                value={taskModalDescription}
+	                onChange={(e) => setTaskModalDescription(e.target.value)}
+	                readOnly={isCompleted}
+	                rows={4}
+	                style={{
+	                  width: "100%",
+	                  padding: 10,
+	                  fontSize: 13,
+	                  backgroundColor: isCompleted ? "rgba(255,255,255,0.55)" : "white",
+	                  border: `1px solid ${noteBorderColor}`,
+	                  borderRadius: 6,
+	                  boxSizing: "border-box",
+	                  outline: "none",
+	                  resize: "vertical",
+	                  fontFamily: "inherit",
+	                  cursor: isCompleted ? "default" : "text",
+	                }}
+	              />
+	            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ display: "block", marginBottom: 6, fontWeight: 600, fontSize: 12, color: "#333" }}>
+                Notes / Comments
+              </label>
+	              <textarea
+	                value={taskModalNotes}
+	                onChange={(e) => setTaskModalNotes(e.target.value)}
+	                readOnly={isCompleted}
+	                rows={14}
+	                style={{
+	                  width: "100%",
+	                  padding: 10,
+	                  fontSize: 13,
+	                  backgroundColor: isCompleted ? "rgba(255,255,255,0.55)" : "white",
+	                  border: `1px solid ${noteBorderColor}`,
+	                  borderRadius: 6,
+	                  boxSizing: "border-box",
+	                  outline: "none",
+	                  resize: "vertical",
+	                  fontFamily: "inherit",
+	                  cursor: isCompleted ? "default" : "text",
+	                }}
+	              />
+	            </div>
 
             {taskModalError && (
               <div style={{ marginBottom: 10, color: "#f44336", fontSize: 12, fontWeight: 600 }}>
@@ -901,41 +1483,43 @@ function TaskGroup({
               </div>
             )}
 
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-              <button
-                onClick={closeTaskModal}
-                style={{
-                  padding: "8px 12px",
+	            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+	              <button
+	                onClick={closeTaskModal}
+	                style={{
+	                  padding: "8px 12px",
                   fontSize: 13,
                   fontWeight: 700,
                   backgroundColor: "white",
                   color: "#666",
                   border: "1px solid #ddd",
                   borderRadius: 8,
-                  cursor: "pointer",
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={saveTaskModal}
-                style={{
-                  padding: "8px 12px",
-                  fontSize: 13,
-                  fontWeight: 800,
-                  backgroundColor: uiAccent,
-                  color: "white",
-                  border: "none",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                }}
-              >
-                Save
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+	                  cursor: "pointer",
+	                }}
+	              >
+	                {isCompleted ? "Close" : "Cancel"}
+	              </button>
+	              {!isCompleted && (
+	                <button
+	                  onClick={saveTaskModal}
+	                  style={{
+	                    padding: "8px 12px",
+	                    fontSize: 13,
+	                    fontWeight: 800,
+	                    backgroundColor: noteBorderColor,
+	                    color: "white",
+	                    border: "none",
+	                    borderRadius: 8,
+	                    cursor: "pointer",
+	                  }}
+	                >
+	                  Save
+	                </button>
+	              )}
+	            </div>
+	          </div>
+	        </div>
+	      )}
     </div>
   );
 }
@@ -963,6 +1547,9 @@ export default function MonthSetupPage() {
 
   // v6.1: Milestone picker modal
   const [showMilestonePicker, setShowMilestonePicker] = useState(false);
+
+  // v9.3: Confirm milestone completion
+  const [confirmCompleteMilestoneId, setConfirmCompleteMilestoneId] = useState<string | null>(null);
 
   // v8: Pin navigation (null = Standalone)
   const selectedPinStorageKey = `focustree:month-setup:selected-pin:${ymSafe}`;
@@ -1009,19 +1596,22 @@ export default function MonthSetupPage() {
   const [addTemplateError, setAddTemplateError] = useState<string | null>(null);
 
   const mutate = (fn: (s: typeof state) => typeof state) => {
-    const next = fn(state);
+    const current = loadState();
+    const next = fn(current);
     saveState(next);
     setTick((x) => x + 1);
   };
 
   const create = () => {
-    const next = upsertMonth(state, seedPlan(ymSafe));
+    const current = loadState();
+    const next = upsertMonth(current, seedPlan(ymSafe));
     saveState(next);
     setTick((x) => x + 1);
   };
 
   const handlePlanUpdate = (updatedPlan: MonthPlan) => {
-    saveState(upsertMonth(state, updatedPlan));
+    const current = loadState();
+    saveState(upsertMonth(current, updatedPlan));
     setTick((x) => x + 1);
   };
 
@@ -1060,7 +1650,10 @@ export default function MonthSetupPage() {
     }
   };
 
-  const handleUpdateTask = (taskId: string, updates: Partial<Pick<TaskNode, "title" | "description">>) => {
+  const handleUpdateTask = (
+    taskId: string,
+    updates: Partial<Pick<TaskNode, "title" | "description" | "notes" | "boardX" | "boardY" | "boardW" | "boardH">>
+  ) => {
     mutate((s) => updateTaskInMonth(s, ymSafe, taskId, updates));
   };
 
@@ -1113,6 +1706,14 @@ export default function MonthSetupPage() {
 
   // v6.1: Mark milestone as completed
   const handleMarkMilestoneCompleted = (milestoneId: string) => {
+    setConfirmCompleteMilestoneId(milestoneId);
+  };
+
+  const confirmMarkMilestoneCompleted = () => {
+    if (!confirmCompleteMilestoneId) return;
+    const milestoneId = confirmCompleteMilestoneId;
+    setConfirmCompleteMilestoneId(null);
+
     const milestone = state.grandPlan?.milestones.find((m) => m.id === milestoneId);
     const categoryColor = milestone
       ? state.grandPlan?.categories.find((c) => c.id === milestone.categoryId)?.color
@@ -1557,85 +2158,91 @@ export default function MonthSetupPage() {
               boxShadow: "0 6px 14px rgba(0,0,0,0.06)",
               marginBottom: 24,
             }}
-          >
-            {/* Pins bar */}
-            <div
-              style={{
-                display: "flex",
-                gap: 8,
-                alignItems: "center",
-                flexWrap: "wrap",
-                padding: 12,
-                borderBottom: "1px solid #eee",
-                backgroundColor: "white",
+	          >
+	            {/* Pins bar */}
+	            <div
+	              style={{
+	                display: "flex",
+	                alignItems: "center",
+	                gap: 12,
+	                padding: 12,
+	                borderBottom: "1px solid #eee",
+	                backgroundColor: "white",
 	              }}
 	            >
-	              <button
-	                onClick={() => setSelectedMilestoneId(null)}
-	                style={{
-	                  padding: "8px 12px",
-	                  fontSize: 12,
-	                  fontWeight: 800,
-	                  backgroundColor: selectedMilestoneId === null ? "#00000010" : "white",
-	                  color: "#111",
-	                  border: selectedMilestoneId === null ? "2px solid #111" : "1px solid #ddd",
-	                  borderRadius: 12,
-	                  cursor: "pointer",
-	                  whiteSpace: "nowrap",
-	                  display: "flex",
-	                  alignItems: "center",
-	                  gap: 8,
-	                  boxShadow: selectedMilestoneId === null ? "0 8px 18px rgba(0,0,0,0.10)" : "0 2px 8px rgba(0,0,0,0.06)",
-	                }}
-	                title="Standalone (not linked to a milestone)"
-	              >
-	                <PinGlyph color="#111" />
-	                Standalone
-	              </button>
-
-              {pinnedMilestones.map((milestone) => {
-                const category = state.grandPlan?.categories.find((c) => c.id === milestone.categoryId);
-                const baseColor = category?.color ?? "#9c27b0";
-                const pinColor = milestone.status === "COMPLETED" ? "#FFD700" : baseColor;
-                const active = selectedMilestoneId === milestone.id;
-                return (
+	              <div style={{ flex: "1 1 auto", minWidth: 0, overflowX: "auto", overflowY: "hidden", paddingBottom: 2 }}>
+	                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "nowrap", width: "max-content" }}>
 	                  <button
-	                    key={milestone.id}
-	                    onClick={() => setSelectedMilestoneId(milestone.id)}
+	                    onClick={() => setSelectedMilestoneId(null)}
 	                    style={{
 	                      padding: "8px 12px",
 	                      fontSize: 12,
 	                      fontWeight: 800,
-	                      backgroundColor: active ? withHexAlpha(pinColor, "12") : "white",
-	                      color: "#333",
-	                      border: active ? `2px solid ${pinColor}` : `1px solid ${pinColor}`,
+	                      backgroundColor: selectedMilestoneId === null ? "#00000010" : "white",
+	                      color: "#111",
+	                      border: selectedMilestoneId === null ? "2px solid #111" : "1px solid #ddd",
 	                      borderRadius: 12,
 	                      cursor: "pointer",
+	                      whiteSpace: "nowrap",
 	                      display: "flex",
 	                      alignItems: "center",
 	                      gap: 8,
-	                      whiteSpace: "nowrap",
-	                      maxWidth: 240,
-	                      overflow: "hidden",
-	                      textOverflow: "ellipsis",
-	                      boxShadow: active ? `0 8px 18px ${withHexAlpha(pinColor, "26")}` : `0 2px 8px ${withHexAlpha(pinColor, "14")}`,
-	                      transform: active ? "translateY(-1px)" : "none",
+	                      boxShadow:
+	                        selectedMilestoneId === null ? "0 8px 18px rgba(0,0,0,0.10)" : "0 2px 8px rgba(0,0,0,0.06)",
+	                      flex: "0 0 auto",
 	                    }}
-	                    title={`${category?.title ?? "Category"} · ${milestone.title}`}
+	                    title="Standalone (not linked to a milestone)"
 	                  >
-	                    <PinGlyph color={pinColor} />
-	                    <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{milestone.title}</span>
-	                    {milestone.status === "COMPLETED" && <span style={{ fontSize: 11, opacity: 0.7 }}>✓</span>}
+	                    <PinGlyph color="#111" />
+	                    Standalone
 	                  </button>
-	                );
-              })}
 
-              <div style={{ flex: "1 1 auto" }} />
+	                  {pinnedMilestones.map((milestone) => {
+	                    const category = state.grandPlan?.categories.find((c) => c.id === milestone.categoryId);
+	                    const baseColor = category?.color ?? "#9c27b0";
+	                    const pinColor = milestone.status === "COMPLETED" ? "#FFD700" : baseColor;
+	                    const active = selectedMilestoneId === milestone.id;
+	                    return (
+	                      <button
+	                        key={milestone.id}
+	                        onClick={() => setSelectedMilestoneId(milestone.id)}
+	                        style={{
+	                          padding: "8px 12px",
+	                          fontSize: 12,
+	                          fontWeight: 800,
+	                          backgroundColor: active ? withHexAlpha(pinColor, "12") : "white",
+	                          color: "#333",
+	                          border: active ? `2px solid ${pinColor}` : `1px solid ${pinColor}`,
+	                          borderRadius: 12,
+	                          cursor: "pointer",
+	                          display: "flex",
+	                          alignItems: "center",
+	                          gap: 8,
+	                          whiteSpace: "nowrap",
+	                          maxWidth: 240,
+	                          overflow: "hidden",
+	                          textOverflow: "ellipsis",
+	                          boxShadow: active
+	                            ? `0 8px 18px ${withHexAlpha(pinColor, "26")}`
+	                            : `0 2px 8px ${withHexAlpha(pinColor, "14")}`,
+	                          transform: active ? "translateY(-1px)" : "none",
+	                          flex: "0 0 auto",
+	                        }}
+	                        title={`${category?.title ?? "Category"} · ${milestone.title}`}
+	                      >
+	                        <PinGlyph color={pinColor} />
+	                        <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{milestone.title}</span>
+	                        {milestone.status === "COMPLETED" && <span style={{ fontSize: 11, opacity: 0.7 }}>✓</span>}
+	                      </button>
+	                    );
+	                  })}
+	                </div>
+	              </div>
 
-              {isInPeriod && state.grandPlan.milestones.length > 0 && (
-                <button
-                  onClick={() => setShowMilestonePicker(true)}
-                  style={{
+	              {isInPeriod && state.grandPlan.milestones.length > 0 && (
+	                <button
+	                  onClick={() => setShowMilestonePicker(true)}
+	                  style={{
                     padding: "6px 10px",
                     fontSize: 12,
                     fontWeight: 800,
@@ -1645,12 +2252,12 @@ export default function MonthSetupPage() {
                     borderRadius: 10,
                     cursor: "pointer",
                     whiteSpace: "nowrap",
-                  }}
-                >
-                  + Pin Milestone
-                </button>
-              )}
-            </div>
+	                  }}
+	                >
+	                  + Pin Milestone
+	                </button>
+	              )}
+	            </div>
 
             {/* Board content */}
             <div
@@ -1681,37 +2288,66 @@ export default function MonthSetupPage() {
                 </div>
               )}
 
-              {(() => {
-                const milestone = selectedMilestoneId
-                  ? state.grandPlan?.milestones.find((m) => m.id === selectedMilestoneId) ?? null
-                  : null;
-                const category = milestone
-                  ? state.grandPlan?.categories.find((c) => c.id === milestone.categoryId) ?? null
-                  : null;
+	              {(() => {
+	                const milestone = selectedMilestoneId
+	                  ? state.grandPlan?.milestones.find((m) => m.id === selectedMilestoneId) ?? null
+	                  : null;
+	                const category = milestone
+	                  ? state.grandPlan?.categories.find((c) => c.id === milestone.categoryId) ?? null
+	                  : null;
 
                 const title = milestone
                   ? `[${category?.title ?? "Category"}] ${milestone.title}`
                   : "Standalone";
 
-                const color = milestone ? category?.color ?? "#9c27b0" : "#000";
-                const tasks = milestone ? getTasksForMilestone(milestone.id) : standaloneTasks;
-                const templates = milestone
-                  ? getTemplatesForMilestone(state, ymSafe, milestone.id)
-                  : standaloneTemplates;
+	                const color = milestone ? category?.color ?? "#9c27b0" : "#000";
+	                const tasks = milestone ? getTasksForMilestone(milestone.id) : standaloneTasks;
+	                const templates = milestone
+	                  ? getTemplatesForMilestone(state, ymSafe, milestone.id)
+	                  : standaloneTemplates;
 
-	                return (
-	                  <TaskGroup
-	                    title={title}
-	                    color={color}
-	                    tasks={tasks}
-	                    milestoneId={milestone ? milestone.id : null}
-	                    milestoneStatus={milestone?.status}
-	                    templates={templates}
-	                    onAddTask={handleAddTask}
-	                    onUpdateTask={handleUpdateTask}
-	                    onDeleteTask={handleDeleteTask}
-	                    onMarkMilestoneCompleted={milestone ? handleMarkMilestoneCompleted : undefined}
-	                    onAddTemplate={handleAddTemplate}
+		                const scopeKey = milestone ? `milestone:${milestone.id}` : "standalone";
+		                const zoomStorageKey = `focustree:month-setup:board-zoom:${ymSafe}:${scopeKey}`;
+		                const defaultBoardSize = { width: 2400, height: 1400 };
+		                const boardSize = plan.boardByScope?.[scopeKey] ?? defaultBoardSize;
+		                const links = plan.taskLinksByScope?.[scopeKey] ?? [];
+
+	                const handleUpdateBoardSize = (next: { width: number; height: number }) => {
+	                  mutate((s0) => {
+	                    const plan0 = getMonth(s0, ymSafe);
+	                    if (!plan0) return s0;
+	                    const nextBoardByScope = { ...(plan0.boardByScope ?? {}), [scopeKey]: next };
+	                    return upsertMonth(s0, { ...plan0, boardByScope: nextBoardByScope });
+	                  });
+	                };
+
+	                const handleUpdateLinks = (next: { from: string; to: string }[]) => {
+	                  mutate((s0) => {
+	                    const plan0 = getMonth(s0, ymSafe);
+	                    if (!plan0) return s0;
+	                    const nextLinksByScope = { ...(plan0.taskLinksByScope ?? {}), [scopeKey]: next };
+	                    return upsertMonth(s0, { ...plan0, taskLinksByScope: nextLinksByScope });
+	                  });
+	                };
+
+		                return (
+		                  <TaskGroup
+		                    title={title}
+		                    color={color}
+		                    tasks={tasks}
+		                    milestoneId={milestone ? milestone.id : null}
+		                    milestoneStatus={milestone?.status}
+		                    templates={templates}
+		                    boardSize={boardSize}
+		                    onUpdateBoardSize={handleUpdateBoardSize}
+			                    links={links}
+			                    onUpdateLinks={handleUpdateLinks}
+			                    zoomStorageKey={zoomStorageKey}
+			                    onAddTask={handleAddTask}
+			                    onUpdateTask={handleUpdateTask}
+			                    onDeleteTask={handleDeleteTask}
+		                    onMarkMilestoneCompleted={milestone ? handleMarkMilestoneCompleted : undefined}
+		                    onAddTemplate={handleAddTemplate}
 	                    onUpdateTemplate={handleUpdateTemplate}
 	                    onDeleteTemplate={handleDeleteTemplate}
 	                    hideTitle
@@ -1865,9 +2501,9 @@ export default function MonthSetupPage() {
             </div>
           )}
 
-          {/* v6.3: Add Focus Template Modal */}
-          {showAddTemplateModal && (
-            <div
+	          {/* v6.3: Add Focus Template Modal */}
+	          {showAddTemplateModal && (
+	            <div
               style={{
                 position: "fixed",
                 inset: 0,
@@ -2078,13 +2714,97 @@ export default function MonthSetupPage() {
                   );
                 })()}
               </div>
-            </div>
-          )}
+	            </div>
+	          )}
 
-          {/* v5: Close Month Confirmation Modal */}
-          {showCloseModal && (
-            <div
-              style={{
+	          {/* v9.3: Milestone Completion Confirmation Modal */}
+	          {confirmCompleteMilestoneId && (
+	            <div
+	              style={{
+	                position: "fixed",
+	                inset: 0,
+	                backgroundColor: "rgba(0, 0, 0, 0.5)",
+	                display: "flex",
+	                alignItems: "center",
+	                justifyContent: "center",
+	                zIndex: 1300,
+	              }}
+	              onClick={() => setConfirmCompleteMilestoneId(null)}
+	            >
+	              <div
+	                style={{
+	                  backgroundColor: "white",
+	                  borderRadius: 12,
+	                  padding: 24,
+	                  maxWidth: 560,
+	                  width: "90%",
+	                  boxShadow: "0 10px 40px rgba(0,0,0,0.3)",
+	                }}
+	                onClick={(e) => e.stopPropagation()}
+	              >
+	                {(() => {
+	                  const milestone = state.grandPlan?.milestones.find((m) => m.id === confirmCompleteMilestoneId) ?? null;
+	                  const category = milestone
+	                    ? state.grandPlan?.categories.find((c) => c.id === milestone.categoryId) ?? null
+	                    : null;
+	                  const accentColor = category?.color ?? "#FFD700";
+	                  const title = milestone?.title ?? "this milestone";
+
+	                  return (
+	                    <>
+	                      <h3 style={{ marginTop: 0, marginBottom: 12, color: accentColor }}>Complete milestone?</h3>
+	                      <p style={{ marginTop: 0, marginBottom: 14, color: "#555", lineHeight: 1.6 }}>
+	                        Mark “{title}” as completed? After this, this milestone becomes read-only.
+	                      </p>
+	                      <ul style={{ margin: 0, paddingLeft: 18, color: "#666", fontSize: 13, lineHeight: 1.7 }}>
+	                        <li>Month Setup: no add/delete/move/link/resize/edit for its tasks or focus templates.</li>
+	                        <li>Daily page: its tasks can’t be selected anymore.</li>
+	                        <li>Daily page: its focus templates stop appearing (past focus data stays saved).</li>
+	                      </ul>
+	                      <div style={{ display: "flex", gap: 12, justifyContent: "flex-end", marginTop: 20 }}>
+	                        <button
+	                          onClick={() => setConfirmCompleteMilestoneId(null)}
+	                          style={{
+	                            padding: "8px 16px",
+	                            fontSize: 14,
+	                            backgroundColor: "white",
+	                            border: "1px solid #ddd",
+	                            borderRadius: 6,
+	                            cursor: "pointer",
+	                          }}
+	                        >
+	                          Cancel
+	                        </button>
+	                        <button
+	                          onClick={confirmMarkMilestoneCompleted}
+	                          style={{
+	                            padding: "8px 16px",
+	                            fontSize: 14,
+	                            fontWeight: 800,
+	                            backgroundColor: "white",
+	                            color: accentColor,
+	                            border: `2px solid ${accentColor}`,
+	                            borderRadius: 6,
+	                            cursor: "pointer",
+	                            display: "flex",
+	                            alignItems: "center",
+	                            gap: 6,
+	                          }}
+	                        >
+	                          <span style={{ color: "#FFD700" }}>★</span> Mark Completed
+	                        </button>
+	                      </div>
+	                    </>
+	                  );
+	                })()}
+	              </div>
+	            </div>
+	          )}
+
+	          {/* v5: Close Month Confirmation Modal */}
+	          {showCloseModal && (
+	            <div
+	              style={{
                 position: "fixed",
                 inset: 0,
                 backgroundColor: "rgba(0, 0, 0, 0.5)",
