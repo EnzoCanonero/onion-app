@@ -357,32 +357,18 @@ export default function GrandPlanPage() {
                 setShowEditModal(true);
               }}
               style={{
-                padding: "6px 12px",
-                fontSize: 13,
-                fontWeight: 600,
-                backgroundColor: "#2196f3",
-                color: "white",
-                border: "none",
+                padding: "6px 10px",
+                fontSize: 14,
+                backgroundColor: "white",
+                border: "1px solid #ddd",
                 borderRadius: 6,
                 cursor: "pointer",
+                opacity: 0.9,
               }}
+              title="Edit Grand Plan"
+              aria-label="Edit Grand Plan"
             >
-              Edit Settings
-            </button>
-            <button
-              onClick={() => setShowDeleteConfirm(true)}
-              style={{
-                padding: "6px 12px",
-                fontSize: 13,
-                fontWeight: 600,
-                backgroundColor: "#f44336",
-                color: "white",
-                border: "none",
-                borderRadius: 6,
-                cursor: "pointer",
-              }}
-            >
-              Delete
+              ✏️
             </button>
           </div>
         </div>
@@ -446,23 +432,71 @@ export default function GrandPlanPage() {
         </button>
       </div>
 
-      {/* Category Content */}
-      {activeCategory ? (
-        <div
-          style={{
-            border: `2px solid ${activeCategory.color}`,
-            borderRadius: 12,
-            padding: 20,
-            backgroundColor: `${activeCategory.color}10`,
-            minHeight: 300,
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-            <h3 style={{ margin: 0, color: activeCategory.color }}>{activeCategory.title}</h3>
-            <button
-              onClick={() => handleDeleteCategory(activeCategory.id)}
-              style={{
-                padding: "4px 8px",
+	      {/* Category Content */}
+	      {activeCategory ? (
+	        <div
+	          style={{
+	            border: "2px solid #eee",
+	            borderRadius: 12,
+	            padding: 20,
+	            backgroundColor: "#fbfaf7",
+	            backgroundImage:
+	              "radial-gradient(circle at 1px 1px, rgba(0,0,0,0.06) 1px, transparent 0)",
+	            backgroundSize: "24px 24px",
+	            minHeight: 300,
+	          }}
+	        >
+	          <div
+	            style={{
+	              display: "flex",
+	              justifyContent: "space-between",
+	              alignItems: "center",
+	              marginBottom: 16,
+	              gap: 12,
+	              flexWrap: "wrap",
+	            }}
+	          >
+	            <button
+	              onClick={() => handleAddMilestone(null)}
+	              style={{
+	                padding: "8px 16px",
+	                fontSize: 13,
+	                fontWeight: 600,
+	                backgroundColor: "white",
+	                color: activeCategory.color,
+	                border: `2px dashed ${activeCategory.color}`,
+	                borderRadius: 6,
+	                cursor: "pointer",
+	              }}
+	            >
+	              + Add another goal
+	            </button>
+	            <div
+	              style={{
+	                display: "flex",
+	                gap: 16,
+	                justifyContent: "center",
+	                fontSize: 12,
+	                color: "#666",
+	                alignItems: "center",
+	                flex: "1 1 auto",
+	                whiteSpace: "nowrap",
+	              }}
+	            >
+	              <span>
+	                <span style={{ color: "#9e9e9e", fontWeight: 700 }}>○</span> Not Started
+	              </span>
+	              <span>
+	                <span style={{ color: "#ff9800", fontWeight: 700 }}>◐</span> In Progress
+	              </span>
+	              <span>
+	                <span style={{ color: "#4caf50", fontWeight: 700 }}>✓</span> Completed
+	              </span>
+	            </div>
+	            <button
+	              onClick={() => handleDeleteCategory(activeCategory.id)}
+	              style={{
+	                padding: "4px 8px",
                 fontSize: 12,
                 backgroundColor: "#f44336",
                 color: "white",
@@ -574,6 +608,28 @@ export default function GrandPlanPage() {
                   boxSizing: "border-box",
                 }}
               />
+            </div>
+
+            <div style={{ marginBottom: 24, paddingTop: 16, borderTop: "1px solid #eee" }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#f44336", marginBottom: 8 }}>Danger zone</div>
+              <button
+                onClick={() => {
+                  setShowEditModal(false);
+                  setShowDeleteConfirm(true);
+                }}
+                style={{
+                  padding: "8px 16px",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  backgroundColor: "white",
+                  color: "#f44336",
+                  border: "2px solid #f44336",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                }}
+              >
+                🗑 Delete Grand Plan
+              </button>
             </div>
 
             <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
