@@ -392,38 +392,42 @@ export default function GrandPlanPage() {
       <div
         style={{
           display: "flex",
-          gap: 8,
+          gap: 12,
           marginBottom: 24,
-          flexWrap: "wrap",
           alignItems: "center",
           borderBottom: "2px solid #eee",
           paddingBottom: 12,
         }}
       >
-        {sortedCategories.map((cat) => (
-          <button
-            key={cat.id}
-            onClick={() => setSelectedCategoryId(cat.id)}
-            onDoubleClick={() => {
-              setEditingCategory(cat);
-              setNewCategoryTitle(cat.title);
-              setNewCategoryColor(cat.color);
-            }}
-            style={{
-              padding: "8px 16px",
-              fontSize: 14,
-              fontWeight: 600,
-              backgroundColor: selectedCategoryId === cat.id ? cat.color : "white",
-              color: selectedCategoryId === cat.id ? "white" : cat.color,
-              border: `2px solid ${cat.color}`,
-              borderRadius: 20,
-              cursor: "pointer",
-              transition: "all 0.2s",
-            }}
-          >
-            {cat.title}
-          </button>
-        ))}
+        <div style={{ flex: "1 1 auto", minWidth: 0, overflowX: "auto", overflowY: "hidden", paddingBottom: 2 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "nowrap", width: "max-content" }}>
+            {sortedCategories.map((cat) => (
+              <button
+                key={cat.id}
+                onClick={() => setSelectedCategoryId(cat.id)}
+                onDoubleClick={() => {
+                  setEditingCategory(cat);
+                  setNewCategoryTitle(cat.title);
+                  setNewCategoryColor(cat.color);
+                }}
+                style={{
+                  padding: "8px 16px",
+                  fontSize: 14,
+                  fontWeight: 600,
+                  backgroundColor: selectedCategoryId === cat.id ? cat.color : "white",
+                  color: selectedCategoryId === cat.id ? "white" : cat.color,
+                  border: `2px solid ${cat.color}`,
+                  borderRadius: 20,
+                  cursor: "pointer",
+                  transition: "all 0.2s",
+                  flex: "0 0 auto",
+                }}
+              >
+                {cat.title}
+              </button>
+            ))}
+          </div>
+        </div>
         <button
           onClick={() => setShowAddCategory(true)}
           style={{
@@ -435,6 +439,7 @@ export default function GrandPlanPage() {
             border: "2px dashed #ccc",
             borderRadius: 20,
             cursor: "pointer",
+            flex: "0 0 auto",
           }}
         >
           + Add Category
