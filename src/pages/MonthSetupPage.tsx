@@ -35,6 +35,12 @@ function parseTimeToMinutes(time: string): number | null {
 
 function withHexAlpha(color: string, alphaHex: string): string {
   const normalizedAlpha = /^[0-9a-fA-F]{2}$/.test(alphaHex) ? alphaHex : "10";
+  if (/^#[0-9a-fA-F]{3}$/.test(color)) {
+    const r = color[1];
+    const g = color[2];
+    const b = color[3];
+    return `#${r}${r}${g}${g}${b}${b}${normalizedAlpha}`;
+  }
   if (/^#[0-9a-fA-F]{6}$/.test(color)) return `${color}${normalizedAlpha}`;
   if (/^#[0-9a-fA-F]{8}$/.test(color)) return `${color.slice(0, 7)}${normalizedAlpha}`;
   return color;
@@ -820,21 +826,18 @@ function TaskGroup({
 	          </div>
 	          <div style={{ overflow: "auto", height: "min(100vh, 1230px)", minHeight: 520 }}>
 	            <div style={{ position: "relative", width: baseBoardWidth * boardZoom, height: baseBoardHeight * boardZoom }}>
-	              <div
-	                style={{
-	                  position: "absolute",
-	                  left: 0,
-	                  top: 0,
-	                  width: baseBoardWidth,
-	                  height: baseBoardHeight,
-	                  transform: `scale(${boardZoom})`,
-	                  transformOrigin: "0 0",
-	                  backgroundColor: "white",
-	                  backgroundImage:
-	                    "radial-gradient(circle at 1px 1px, rgba(0,0,0,0.08) 1px, transparent 0)",
-	                  backgroundSize: "24px 24px",
-	                }}
-	              >
+		              <div
+		                style={{
+		                  position: "absolute",
+		                  left: 0,
+		                  top: 0,
+		                  width: baseBoardWidth,
+		                  height: baseBoardHeight,
+		                  transform: `scale(${boardZoom})`,
+		                  transformOrigin: "0 0",
+		                  backgroundColor: "white",
+		                }}
+		              >
 	                {/* Links layer */}
 	                <svg
 	                  width={baseBoardWidth}
@@ -1688,6 +1691,10 @@ export default function MonthSetupPage() {
   const standaloneTasks = plan?.tasks.filter((t) => !t.linkedMilestoneId) ?? [];
   const standaloneTemplates = getStandaloneTemplates(state, ymSafe);
 
+  const scopeBgColor = "#fbfaf7";
+  const scopeBgPattern =
+    "radial-gradient(circle at 1px 1px, rgba(0,0,0,0.06) 1px, transparent 0)";
+
   // v6.1: Get tasks for a specific milestone
   const getTasksForMilestone = (milestoneId: string) => {
     return plan?.tasks.filter((t) => t.linkedMilestoneId === milestoneId) ?? [];
@@ -2062,16 +2069,32 @@ export default function MonthSetupPage() {
     );
   }
 
-  return (
-    <div>
-      <h2>Month Setup: {ymSafe}</h2>
-      <p style={{ marginTop: -8, marginBottom: 24, opacity: 0.7 }}>
-        Configure your monthly tasks and focus templates
-      </p>
+	return (
+	  <div>
+	    {/* Header */}
+	    <div style={{ marginBottom: 24 }}>
+	      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16 }}>
+	        <div>
+	          <h2 style={{ margin: 0 }}>Month Plan</h2>
+	          <p style={{ margin: "8px 0 0", opacity: 0.7 }}>
+	            {ymSafe}
+	            {plan ? (
+	              <>
+	                {" "}
+	                · Tasks: <strong>{plan.tasks.length}</strong> · Completed:{" "}
+	                <strong>{plan.tasks.filter((t) => t.status === "GREEN").length}</strong>
+	              </>
+	            ) : (
+	              <> · Configure your monthly tasks and focus templates</>
+	            )}
+	          </p>
+	        </div>
+	      </div>
+	    </div>
 
-      {!plan ? (
-        <div
-          style={{
+	      {!plan ? (
+	        <div
+	          style={{
             padding: 32,
             border: "2px dashed #ddd",
             borderRadius: 12,
@@ -2117,65 +2140,31 @@ export default function MonthSetupPage() {
         </div>
       ) : (
         <>
-          {fireworks && (
-            <FireworksOverlay
-              key={fireworks.key}
-              colors={fireworks.colors}
-              onDone={() => setFireworks(null)}
-            />
-          )}
+	          {fireworks && (
+	            <FireworksOverlay
+	              key={fireworks.key}
+	              colors={fireworks.colors}
+	              onDone={() => setFireworks(null)}
+	            />
+	          )}
 
-          {/* Stats & Controls */}
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              flexWrap: "wrap",
-              gap: 16,
-              marginBottom: 24,
-            }}
-          >
-	            {/* Stats */}
-	            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-	              <span style={{ fontSize: 14, color: "#666" }}>
-	                Tasks: <strong>{plan.tasks.length}</strong>
-	              </span>
-	              <span style={{ color: "#ddd" }}>|</span>
-	              <span style={{ fontSize: 14, color: "#666" }}>
-	                Completed: <strong>{plan.tasks.filter((t) => t.status === "GREEN").length}</strong>
-	              </span>
-	            </div>
-	          </div>
-
-          {/* v8: Month Setup "board" with pins */}
-          <div
-            style={{
-              border: "1px solid #eee",
-              borderRadius: 12,
-              overflow: "hidden",
-              backgroundColor: "white",
-              boxShadow: "0 6px 14px rgba(0,0,0,0.06)",
-              marginBottom: 24,
-            }}
+	          {/* Pins bar (Grand Plan-like) */}
+	          <div
+	            style={{
+	              display: "flex",
+	              gap: 12,
+	              marginBottom: 24,
+	              alignItems: "center",
+	              borderBottom: "2px solid #eee",
+	              paddingBottom: 12,
+	            }}
 	          >
-	            {/* Pins bar */}
-	            <div
-	              style={{
-	                display: "flex",
-	                alignItems: "center",
-	                gap: 12,
-	                padding: 12,
-	                borderBottom: "1px solid #eee",
-	                backgroundColor: "white",
-	              }}
-	            >
-	              <div style={{ flex: "1 1 auto", minWidth: 0, overflowX: "auto", overflowY: "hidden", paddingBottom: 2 }}>
-	                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "nowrap", width: "max-content" }}>
-	                  <button
-	                    onClick={() => setSelectedMilestoneId(null)}
-	                    style={{
-	                      padding: "8px 12px",
+	            <div style={{ flex: "1 1 auto", minWidth: 0, overflowX: "auto", overflowY: "hidden", paddingBottom: 2 }}>
+	              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "nowrap", width: "max-content" }}>
+		                  <button
+		                    onClick={() => setSelectedMilestoneId(null)}
+		                    style={{
+		                      padding: "8px 12px",
 	                      fontSize: 12,
 	                      fontWeight: 800,
 	                      backgroundColor: selectedMilestoneId === null ? "#00000010" : "white",
@@ -2194,10 +2183,10 @@ export default function MonthSetupPage() {
 	                    title="Standalone (not linked to a milestone)"
 	                  >
 	                    <PinGlyph color="#111" />
-	                    Standalone
-	                  </button>
+		                    Standalone
+		                  </button>
 
-	                  {pinnedMilestones.map((milestone) => {
+		                  {pinnedMilestones.map((milestone) => {
 	                    const category = state.grandPlan?.categories.find((c) => c.id === milestone.categoryId);
 	                    const baseColor = category?.color ?? "#9c27b0";
 	                    const pinColor = milestone.status === "COMPLETED" ? "#FFD700" : baseColor;
@@ -2235,44 +2224,48 @@ export default function MonthSetupPage() {
 	                        {milestone.status === "COMPLETED" && <span style={{ fontSize: 11, opacity: 0.7 }}>✓</span>}
 	                      </button>
 	                    );
-	                  })}
-	                </div>
+		                  })}
 	              </div>
-
-	              {isInPeriod && state.grandPlan.milestones.length > 0 && (
-	                <button
-	                  onClick={() => setShowMilestonePicker(true)}
-	                  style={{
-                    padding: "6px 10px",
-                    fontSize: 12,
-                    fontWeight: 800,
-                    backgroundColor: "white",
-                    color: "#333",
-                    border: "2px dashed #bbb",
-                    borderRadius: 10,
-                    cursor: "pointer",
-                    whiteSpace: "nowrap",
-	                  }}
-	                >
-	                  + Pin Milestone
-	                </button>
-	              )}
 	            </div>
 
-            {/* Board content */}
-            <div
-              style={{
-                padding: 16,
-                backgroundColor: "#fafafa",
-                backgroundImage:
-                  "radial-gradient(circle at 1px 1px, rgba(0,0,0,0.06) 1px, transparent 0)",
-                backgroundSize: "18px 18px",
-              }}
-            >
-              {pinnedMilestones.length === 0 && standaloneTasks.length === 0 && standaloneTemplates.length === 0 && (
-                <div
-                  style={{
-                    padding: 12,
+	            {isInPeriod && state.grandPlan.milestones.length > 0 && (
+	              <button
+	                onClick={() => setShowMilestonePicker(true)}
+	                style={{
+	                  padding: "8px 16px",
+	                  fontSize: 14,
+	                  fontWeight: 600,
+	                  backgroundColor: "white",
+	                  color: "#666",
+	                  border: "2px dashed #ccc",
+	                  borderRadius: 20,
+	                  cursor: "pointer",
+	                  flex: "0 0 auto",
+	                  whiteSpace: "nowrap",
+	                }}
+	              >
+	                + Pin Milestone
+	              </button>
+	            )}
+	          </div>
+
+	          {/* Board content (Grand Plan-like container) */}
+		          <div
+		            style={{
+		              border: "2px solid #eee",
+		              borderRadius: 12,
+		              padding: 20,
+		              backgroundColor: scopeBgColor,
+		              backgroundImage: scopeBgPattern,
+		              backgroundSize: "24px 24px",
+		              minHeight: 300,
+		              marginBottom: 24,
+		            }}
+		          >
+	              {pinnedMilestones.length === 0 && standaloneTasks.length === 0 && standaloneTemplates.length === 0 && (
+	                <div
+	                  style={{
+	                    padding: 12,
                     border: "1px dashed #ddd",
                     borderRadius: 10,
                     backgroundColor: "rgba(255,255,255,0.95)",
@@ -2352,15 +2345,14 @@ export default function MonthSetupPage() {
 	                    onDeleteTemplate={handleDeleteTemplate}
 	                    hideTitle
 	                    chromeless={!milestone}
-	                  />
-	                );
-	              })()}
-            </div>
-          </div>
+		                  />
+		                );
+		              })()}
+	          </div>
 
-          {/* v5: Close Month Button */}
-          <div style={{ textAlign: "center", marginTop: 48, paddingTop: 24, borderTop: "2px solid #ddd" }}>
-            <button
+	          {/* v5: Close Month Button */}
+	          <div style={{ textAlign: "center", marginTop: 48, paddingTop: 24, borderTop: "2px solid #ddd" }}>
+	            <button
               onClick={() => setShowCloseModal(true)}
               style={{
                 padding: "12px 32px",
