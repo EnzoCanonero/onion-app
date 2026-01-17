@@ -261,19 +261,6 @@ export default function MilestoneTreeView({
 
   return (
     <div style={{ padding: 16 }}>
-      {/* Legend */}
-      <div style={{ display: "flex", gap: 16, marginBottom: 24, justifyContent: "center", fontSize: 12, color: "#666" }}>
-        <span>
-          <span style={{ color: getStatusColor("NOT_STARTED"), fontWeight: 700 }}>○</span> Not Started
-        </span>
-        <span>
-          <span style={{ color: getStatusColor("IN_PROGRESS"), fontWeight: 700 }}>◐</span> In Progress
-        </span>
-        <span>
-          <span style={{ color: getStatusColor("COMPLETED"), fontWeight: 700 }}>✓</span> Completed
-        </span>
-      </div>
-
       {/* Horizontal scrollable container for multiple trees */}
       <div
         style={{
@@ -296,24 +283,6 @@ export default function MilestoneTreeView({
         ))}
       </div>
 
-      {/* Add another goal */}
-      <div style={{ textAlign: "center", marginTop: 24 }}>
-        <button
-          onClick={() => onAddMilestone(null)}
-          style={{
-            padding: "8px 16px",
-            fontSize: 13,
-            fontWeight: 600,
-            backgroundColor: "white",
-            color: categoryColor,
-            border: `2px dashed ${categoryColor}`,
-            borderRadius: 6,
-            cursor: "pointer",
-          }}
-        >
-          + Add Another Goal
-        </button>
-      </div>
     </div>
   );
 }
