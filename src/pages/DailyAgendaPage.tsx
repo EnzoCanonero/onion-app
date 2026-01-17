@@ -33,6 +33,7 @@ import {
 } from "../app/storage";
 import { dayOfWeekFromDateISO, isTemplateScheduledForWeekday } from "../app/weekdays";
 import { useDateNavigation } from "../contexts/DateNavigationContext";
+import { APP_MAIN_COLOR } from "../app/theme";
 import TaskSelectionModal from "../components/TaskSelectionModal";
 import FocusTemplateCard from "../components/FocusTemplateCard";
 import DailyTimeline from "../components/DailyTimeline";
@@ -54,13 +55,35 @@ export default function DailyAgendaPage() {
   const state = useMemo(() => loadState(), [tick]);
 
   const plan = getMonth(state, ym);
+  const paperBgColor = "#fbfaf7";
+  const paperBgPattern =
+    "radial-gradient(circle at 1px 1px, rgba(0,0,0,0.06) 1px, transparent 0)";
 
   // Active month rule (v3): show empty panel if no plan exists
   if (!plan) {
     return (
       <div>
-        <h2>Daily Agenda: {dateSafe}</h2>
-        <EmptyMonthPanel ym={ym} />
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16 }}>
+            <div>
+              <h2 style={{ margin: 0 }}>Daily</h2>
+              <p style={{ margin: "8px 0 0", opacity: 0.7 }}>{dateSafe}</p>
+            </div>
+          </div>
+        </div>
+
+        <div
+          style={{
+            padding: 24,
+            border: "2px dashed #ddd",
+            borderRadius: 12,
+            backgroundColor: paperBgColor,
+            backgroundImage: paperBgPattern,
+            backgroundSize: "24px 24px",
+          }}
+        >
+          <EmptyMonthPanel ym={ym} />
+        </div>
       </div>
     );
   }
@@ -232,7 +255,7 @@ export default function DailyAgendaPage() {
         const linked = typeof t.linkedMilestoneId === "string" ? t.linkedMilestoneId : null;
         const milestone = linked ? milestonesById.get(linked) : undefined;
         const category = milestone ? categoriesById.get(milestone.categoryId) : undefined;
-        const color = category?.color ?? (linked ? "#9c27b0" : "#607d8b");
+        const color = category?.color ?? (linked ? APP_MAIN_COLOR : "#607d8b");
         return {
           id: t.id,
           title: t.title,
@@ -619,43 +642,71 @@ export default function DailyAgendaPage() {
 
   return (
     <div>
-      <h2>📅 Daily Agenda: {dateSafe}</h2>
-      <p style={{ marginTop: -8, marginBottom: 24, opacity: 0.7 }}>
-        Plan your day, track focus sessions, and reflect on progress
-      </p>
-
-      {/* v2: Message from Last Working Day - Shutdown note */}
-      <div
-        style={{
-          border: "2px solid #9c27b0",
-          borderRadius: 12,
-          padding: 16,
-          marginBottom: 24,
-          backgroundColor: "#f3e5f5",
-        }}
-      >
-        <h3 style={{ marginTop: 0, marginBottom: 12, color: "#6a1b9a" }}>
-          💌 Message from your yesterday self
-        </h3>
-        {lastWorkingDay?.shutdownNote ? (
-          <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.6, marginBottom: 12 }}>
-            {lastWorkingDay.shutdownNote}
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16 }}>
+          <div>
+            <h2 style={{ margin: 0 }}>Daily</h2>
+            <p style={{ margin: "8px 0 0", opacity: 0.7 }}>
+              {dateSafe} · Plan your day, track focus sessions, and reflect on progress
+            </p>
           </div>
-        ) : (
-          <p style={{ fontStyle: "italic", color: "#7b1fa2", marginBottom: 12 }}>
-            Nothing pending from yesterday. Fresh start! Have a great day! 🌟
-          </p>
-        )}
-        {lastWorkingDay && (
-          <div style={{ fontSize: 12, color: "#7b1fa2", marginTop: 8 }}>
-            From: {lastWorkingDay.date} (last working day)
-          </div>
-        )}
+        </div>
       </div>
 
-      {/* v2: If day is not activated, show only activation button */}
-      {!day.isWorkingDay ? (
-        <div style={{ textAlign: "center", padding: 48, border: "2px dashed #ddd", borderRadius: 12 }}>
+      <div
+        style={{
+          border: "2px solid #eee",
+          borderRadius: 12,
+          padding: 20,
+          backgroundColor: paperBgColor,
+          backgroundImage: paperBgPattern,
+          backgroundSize: "24px 24px",
+          minHeight: 300,
+        }}
+      >
+        {/* v2: Message from Last Working Day - Shutdown note */}
+        <div
+          style={{
+            border: "2px solid #eee",
+            borderLeft: `6px solid ${APP_MAIN_COLOR}`,
+            borderRadius: 12,
+            padding: 16,
+            marginBottom: 24,
+            backgroundColor: "rgba(255,255,255,0.92)",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+          }}
+        >
+          <h3 style={{ marginTop: 0, marginBottom: 12, color: "#333" }}>
+            💌 Message from your yesterday self
+          </h3>
+          {lastWorkingDay?.shutdownNote ? (
+            <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.6, marginBottom: 12 }}>
+              {lastWorkingDay.shutdownNote}
+            </div>
+          ) : (
+            <p style={{ fontStyle: "italic", color: "#666", marginBottom: 12 }}>
+              Nothing pending from yesterday. Fresh start! Have a great day! 🌟
+            </p>
+          )}
+          {lastWorkingDay && (
+            <div style={{ fontSize: 12, color: "#666", marginTop: 8 }}>
+              From: {lastWorkingDay.date} (last working day)
+            </div>
+          )}
+        </div>
+
+        {/* v2: If day is not activated, show only activation button */}
+        {!day.isWorkingDay ? (
+          <div
+            style={{
+              textAlign: "center",
+              padding: 48,
+              border: "2px dashed #ddd",
+              borderRadius: 12,
+              backgroundColor: "rgba(255,255,255,0.92)",
+              boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+            }}
+          >
           <p style={{ fontSize: 18, marginBottom: 24, opacity: 0.8 }}>
             Ready to start your working day?
           </p>
@@ -743,14 +794,25 @@ export default function DailyAgendaPage() {
         </div>
       ) : (
         <>
-          {/* All sections below only show when day is activated */}
-
-          <div style={{ display: "flex", gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
-            <div ref={leftColumnRef} style={{ flex: "3 1 620px", minWidth: 380 }}>
-          {/* v4: Daily Reminders Section */}
-          <div style={{ marginBottom: 24 }}>
-            <div
-              style={{
+	          {/* All sections below only show when day is activated */}
+	
+	          <div style={{ display: "flex", gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
+	            <div
+	              ref={leftColumnRef}
+	              style={{
+	                flex: "3 1 620px",
+	                minWidth: 380,
+	                border: "2px solid #eee",
+	                borderRadius: 12,
+	                padding: 16,
+	                backgroundColor: "rgba(255,255,255,0.92)",
+	                boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+	              }}
+	            >
+	          {/* v4: Daily Reminders Section */}
+	          <div style={{ marginBottom: 24 }}>
+	            <div
+	              style={{
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
@@ -952,7 +1014,7 @@ export default function DailyAgendaPage() {
             )}
           </div>
 
-          <h3>Daily Tasks</h3>
+          <h3>🎯 Daily Tasks</h3>
 
           {/* v2: Task Selection Modal */}
           {showTaskModal && (
@@ -988,41 +1050,23 @@ export default function DailyAgendaPage() {
             </div>
           ) : (
             <div>
-              {/* Primary Task - Gold Rectangle */}
-              <div
-            style={{
-              border: "3px solid #ffa726",
-              borderRadius: 12,
-              padding: 16,
-              marginBottom: 16,
-              backgroundColor: "#fff8e1",
-            }}
-          >
+	              {/* Primary Task - Gold Rectangle */}
+	              <div
+	            style={{
+	              border: "2px solid #eee",
+	              borderLeft: `6px solid ${APP_MAIN_COLOR}`,
+	              borderRadius: 12,
+	              padding: 16,
+	              marginBottom: 16,
+	              backgroundColor: "#fff8e1",
+	              boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+	            }}
+	          >
             <div style={{ marginBottom: 12 }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: "#f57c00", marginBottom: 4 }}>
-                🎯 PRIMARY TASK
-              </div>
-              <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 4 }}>
-                {tasksById.get(day.primaryTaskId)?.title ?? "Unknown"}
-              </div>
-              {tasksById.get(day.primaryTaskId)?.status !== "NONE" && (
-                <span
-                  style={{
-                    display: "inline-block",
-                    width: 12,
-                    height: 12,
-                    borderRadius: "50%",
-                    backgroundColor:
-                      tasksById.get(day.primaryTaskId)?.status === "GREEN"
-                        ? "#4caf50"
-                        : "#ff9800",
-                    border: "2px solid white",
-                    boxShadow: "0 0 0 1px rgba(0,0,0,0.1)",
-                  }}
-                  title={tasksById.get(day.primaryTaskId)?.status}
-                />
-              )}
-            </div>
+	              <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 4 }}>
+	                {tasksById.get(day.primaryTaskId)?.title ?? "Unknown"}
+	              </div>
+	            </div>
 
             {/* Outcome Buttons for Primary */}
             {day.primaryTaskId && (() => {
@@ -1074,40 +1118,25 @@ export default function DailyAgendaPage() {
           {/* Secondary Tasks */}
           {day.secondaryTaskIds.length > 0 && (
             <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: "#666" }}>
-                📌 SECONDARY TASKS ({day.secondaryTaskIds.length})
-              </div>
-              <div style={{ display: "grid", gap: 8 }}>
+	              <div style={{ display: "grid", gap: 8 }}>
                 {day.secondaryTaskIds.map((id) => {
                   const task = tasksById.get(id);
                   if (!task) return null;
                   return (
                     <div
-                      key={id}
-                      style={{
-                        border: "2px solid #e0e0e0",
-                        borderRadius: 8,
-                        padding: 12,
-                        backgroundColor: "white",
-                      }}
-                    >
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                        <div style={{ fontWeight: 500 }}>{task.title}</div>
-                        {task.status !== "NONE" && (
-                          <span
-                            style={{
-                              display: "inline-block",
-                              width: 10,
-                              height: 10,
-                              borderRadius: "50%",
-                              backgroundColor: task.status === "GREEN" ? "#4caf50" : "#ff9800",
-                              border: "2px solid white",
-                              boxShadow: "0 0 0 1px rgba(0,0,0,0.1)",
-                            }}
-                            title={task.status}
-                          />
-                        )}
-                      </div>
+	                      key={id}
+	                      style={{
+	                        border: "2px solid #eee",
+	                        borderLeft: `6px solid ${APP_MAIN_COLOR}`,
+	                        borderRadius: 12,
+	                        padding: 16,
+	                        backgroundColor: "rgba(255,255,255,0.92)",
+	                        boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+	                      }}
+	                    >
+	                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+	                        <div style={{ fontWeight: 500 }}>{task.title}</div>
+	                      </div>
 
                       {/* Outcome Buttons */}
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -1170,45 +1199,48 @@ export default function DailyAgendaPage() {
           {/* v4: Meetings Section */}
           <h3 style={{ marginTop: 32 }}>📅 Meetings</h3>
           <div style={{ marginBottom: 24 }}>
-            {dayMeetings.length === 0 ? (
-              <div
-                style={{
-                  textAlign: "center",
-                  padding: 24,
-                  border: "2px dashed #ddd",
-                  borderRadius: 8,
-                }}
-              >
-                <p style={{ opacity: 0.6, marginBottom: 12 }}>No meetings scheduled</p>
-                <button
-                  onClick={() => setShowMeetingForm(true)}
-                  style={{
-                    padding: "10px 20px",
-                    fontSize: 14,
-                    fontWeight: 600,
-                    backgroundColor: "#2196f3",
-                    color: "white",
-                    border: "none",
-                    borderRadius: 6,
-                    cursor: "pointer",
-                  }}
-                >
-                  + Add Meeting
-                </button>
-              </div>
+	            {dayMeetings.length === 0 ? (
+	              <div
+	                style={{
+	                  textAlign: "center",
+	                  padding: 24,
+	                  border: "2px dashed #ddd",
+	                  borderRadius: 8,
+	                  backgroundColor: "rgba(255,255,255,0.92)",
+	                }}
+	              >
+	                <p style={{ opacity: 0.6, marginBottom: 12 }}>No meetings scheduled</p>
+		                <button
+		                  onClick={() => setShowMeetingForm(true)}
+		                  style={{
+		                    padding: "8px 16px",
+		                    fontSize: 14,
+		                    fontWeight: 600,
+		                    backgroundColor: "white",
+		                    color: "#666",
+		                    border: "2px dashed #ccc",
+		                    borderRadius: 8,
+		                    cursor: "pointer",
+		                  }}
+		                >
+		                  + Add Meeting
+	                </button>
+	              </div>
             ) : (
               <>
                 <div style={{ display: "grid", gap: 12 }}>
                   {dayMeetings.map((meeting) => (
-                    <div
-                      key={meeting.id}
-                      style={{
-                        border: "2px solid #2196f3",
-                        borderRadius: 8,
-                        padding: 16,
-                        backgroundColor: "#e3f2fd",
-                      }}
-                    >
+		                    <div
+		                      key={meeting.id}
+		                      style={{
+		                        border: "2px solid #eee",
+				                        borderLeft: `6px solid ${APP_MAIN_COLOR}`,
+			                        borderRadius: 12,
+			                        padding: 16,
+			                        backgroundColor: "rgba(255,255,255,0.92)",
+			                        boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+		                      }}
+		                    >
                       <div
                         style={{
                           display: "flex",
@@ -1218,13 +1250,13 @@ export default function DailyAgendaPage() {
                         }}
                       >
                         <div style={{ flex: 1 }}>
-                          <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>
-                            {meeting.title}
-                          </div>
-                          <div style={{ fontSize: 14, color: "#1976d2", fontWeight: 500 }}>
-                            🕒 {meeting.time}
-                          </div>
-                          <div style={{ display: "flex", alignItems: "center", marginTop: 8 }}>
+		                          <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>
+		                            {meeting.title}
+		                          </div>
+		                          <div style={{ fontSize: 14, color: "#333", opacity: 0.8, fontWeight: 600 }}>
+		                            🕒 {meeting.time}
+		                          </div>
+		                          <div style={{ display: "flex", alignItems: "center", marginTop: 8 }}>
                             <label
                               style={{
                                 display: "flex",
@@ -1255,17 +1287,18 @@ export default function DailyAgendaPage() {
                               setEditingMeeting(meeting);
                               setShowMeetingForm(true);
                             }}
-                            style={{
-                              padding: "4px 10px",
-                              fontSize: 12,
-                              backgroundColor: "white",
-                              border: "1px solid #2196f3",
-                              borderRadius: 4,
-                              cursor: "pointer",
-                            }}
-                          >
-                            ✏️ Edit
-                          </button>
+		                            style={{
+		                              padding: "4px 10px",
+		                              fontSize: 12,
+		                              backgroundColor: "white",
+		                              border: "1px solid #ddd",
+		                              borderRadius: 4,
+		                              cursor: "pointer",
+		                              opacity: 0.9,
+		                            }}
+		                          >
+		                            ✏️ Edit
+		                          </button>
                           <button
                             onClick={() => handleDeleteMeeting(meeting.id)}
                             style={{
@@ -1303,36 +1336,38 @@ export default function DailyAgendaPage() {
 
                       {meeting.description && (
                         <div
-                          style={{
-                            fontSize: 13,
-                            color: "#555",
-                            whiteSpace: "pre-wrap",
-                            marginTop: 8,
-                            paddingTop: 8,
-                            borderTop: "1px solid #90caf9",
-                          }}
-                        >
-                          {meeting.description}
-                        </div>
-                      )}
+		                          style={{
+		                            fontSize: 13,
+		                            color: "#555",
+		                            whiteSpace: "pre-wrap",
+		                            marginTop: 8,
+		                            paddingTop: 8,
+		                            borderTop: "1px solid #eee",
+		                          }}
+		                        >
+		                          {meeting.description}
+		                        </div>
+		                      )}
                     </div>
                   ))}
                 </div>
 
-                <button
-                  onClick={() => setShowMeetingForm(true)}
-                  style={{
-                    padding: "8px 16px",
-                    fontSize: 14,
-                    backgroundColor: "white",
-                    border: "1px solid #2196f3",
-                    borderRadius: 6,
-                    cursor: "pointer",
-                    marginTop: 12,
-                  }}
-                >
-                  + Add Another Meeting
-                </button>
+		                <button
+		                  onClick={() => setShowMeetingForm(true)}
+		                  style={{
+		                    padding: "8px 16px",
+		                    fontSize: 14,
+		                    fontWeight: 600,
+		                    backgroundColor: "white",
+		                    color: "#666",
+		                    border: "2px dashed #ccc",
+		                    borderRadius: 8,
+		                    cursor: "pointer",
+		                    marginTop: 12,
+		                  }}
+		                >
+	                  + Add Another Meeting
+	                </button>
               </>
             )}
           </div>
@@ -1372,43 +1407,24 @@ export default function DailyAgendaPage() {
                     const milestoneTemplates = getTemplatesForMilestone(state, ym, milestone.id).filter((t) =>
                       isTemplateScheduledForWeekday(t.daysOfWeek, weekday)
                     );
-                    const visibleMilestoneTemplates = milestoneTemplates.filter(
-                      (t) => !t.isSuspended || t.id === activeTemplateId
-                    );
-                    if (visibleMilestoneTemplates.length === 0) return null;
-                    return (
-                      <div key={milestone.id} style={{ marginBottom: 16 }}>
-                        <div
-                          style={{
-                            fontSize: 13,
-                            fontWeight: 600,
-                            color: category?.color ?? "#9c27b0",
-                            marginBottom: 8,
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 6,
-                          }}
-                        >
-                          <span
-                            style={{
-                              width: 10,
-                              height: 10,
-                              borderRadius: "50%",
-                              backgroundColor: category?.color ?? "#9c27b0",
-                              display: "inline-block",
-                            }}
-                          />
-                          [{category?.title ?? "Category"}] {milestone.title}
-                        </div>
-                        {visibleMilestoneTemplates.map((template) => (
-                          <FocusTemplateCard
-                            key={template.id}
-                            template={template}
-                            activeSessionId={day.activeSessionId}
-                            completedSessions={sessionsForDate}
-                            onStartSession={startSession}
-                            onEndSession={endSession}
-                          />
+	                    const visibleMilestoneTemplates = milestoneTemplates.filter(
+	                      (t) => !t.isSuspended || t.id === activeTemplateId
+	                    );
+	                    if (visibleMilestoneTemplates.length === 0) return null;
+	                    const categoryColor = category?.color ?? APP_MAIN_COLOR;
+	                    return (
+	                      <div key={milestone.id} style={{ marginBottom: 16 }}>
+	                        {visibleMilestoneTemplates.map((template) => (
+	                          <FocusTemplateCard
+	                            key={template.id}
+	                            template={template}
+	                            accentColor={categoryColor}
+	                            milestoneTitle={milestone.title}
+	                            activeSessionId={day.activeSessionId}
+	                            completedSessions={sessionsForDate}
+	                            onStartSession={startSession}
+	                            onEndSession={endSession}
+	                          />
                         ))}
                       </div>
                     );
@@ -1483,29 +1499,56 @@ export default function DailyAgendaPage() {
             </div>
           </div>
 
-          <div style={{ marginTop: 32, paddingTop: 24, borderTop: "2px solid #e0e0e0" }}>
-            {/* v2: Daily Journal - Persistent notes */}
-            <h3 style={{ marginTop: 0 }}>📝 Daily Journal</h3>
-            <textarea
-              rows={12}
-              placeholder="Daily notes, thoughts, observations..."
-              value={day.dailyJournal ?? ""}
-              onChange={(e) => updateJournal(e.target.value)}
-              style={{ padding: 10, fontSize: 14, lineHeight: 1.6, width: "100%", boxSizing: "border-box" }}
-            />
+	          <div
+	            style={{
+	              marginTop: 24,
+	              border: "2px solid #eee",
+	              borderRadius: 12,
+	              padding: 16,
+	              backgroundColor: "rgba(255,255,255,0.92)",
+	              boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+	            }}
+	          >
+	            {/* v2: Daily Journal - Persistent notes */}
+	            <h3 style={{ marginTop: 0 }}>📝 Daily Journal</h3>
+	            <textarea
+	              rows={12}
+	              placeholder="Daily notes, thoughts, observations..."
+	              value={day.dailyJournal ?? ""}
+	              onChange={(e) => updateJournal(e.target.value)}
+	              style={{
+	                padding: 10,
+	                fontSize: 14,
+	                lineHeight: 1.6,
+	                width: "100%",
+	                boxSizing: "border-box",
+	                border: "1px solid #ddd",
+	                borderRadius: 10,
+	                backgroundColor: "white",
+	              }}
+	            />
 
             {/* v2: Shutdown Note - Full shutdown summary */}
             <h3 style={{ marginTop: 24 }}>🔒 Shutdown Note</h3>
             <p style={{ fontSize: 13, color: "#666", marginTop: 0 }}>
               Complete shutdown summary (shown next working day)
             </p>
-            <textarea
-              rows={4}
-              placeholder="Full shutdown summary, reflections, detailed notes..."
-              value={day.shutdownNote ?? ""}
-              onChange={(e) => updateShutdown(e.target.value)}
-              style={{ padding: 10, fontSize: 14, lineHeight: 1.6, width: "100%", boxSizing: "border-box" }}
-            />
+	            <textarea
+	              rows={4}
+	              placeholder="Full shutdown summary, reflections, detailed notes..."
+	              value={day.shutdownNote ?? ""}
+	              onChange={(e) => updateShutdown(e.target.value)}
+	              style={{
+	                padding: 10,
+	                fontSize: 14,
+	                lineHeight: 1.6,
+	                width: "100%",
+	                boxSizing: "border-box",
+	                border: "1px solid #ddd",
+	                borderRadius: 10,
+	                backgroundColor: "white",
+	              }}
+	            />
 
           {/* v4: Close Day Button */}
           <div style={{ marginTop: 28, textAlign: "center" }}>
@@ -1515,7 +1558,7 @@ export default function DailyAgendaPage() {
                 padding: "16px 32px",
                 fontSize: 16,
                 fontWeight: 600,
-                backgroundColor: "#9c27b0",
+                backgroundColor: APP_MAIN_COLOR,
                 color: "white",
                 border: "none",
                 borderRadius: 8,
@@ -1582,7 +1625,7 @@ export default function DailyAgendaPage() {
                       padding: "8px 16px",
                       fontSize: 14,
                       fontWeight: 600,
-                      backgroundColor: "#9c27b0",
+                      backgroundColor: APP_MAIN_COLOR,
                       color: "white",
                       border: "none",
                       borderRadius: 6,
@@ -1596,12 +1639,10 @@ export default function DailyAgendaPage() {
             </div>
           )}
 
-          <p style={{ opacity: 0.8, marginTop: 16 }}>
-            v2 note: Working days system - Only activated days show all sections. Shutdown note shows on next working day.
-          </p>
-          </div>
-        </>
-      )}
+	          </div>
+	        </>
+	      )}
+      </div>
     </div>
   );
 }

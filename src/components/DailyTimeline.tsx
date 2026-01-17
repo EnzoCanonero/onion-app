@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { DateISO, MeetingEntry, ProductivitySession } from "../app/types";
+import { APP_MAIN_COLOR } from "../app/theme";
 
 type ScheduledFocusTemplate = {
   id: string;
@@ -191,10 +192,11 @@ export default function DailyTimeline({
     <div
       ref={containerRef}
       style={{
-        border: "1px solid #e0e0e0",
+        border: "2px solid #eee",
         borderRadius: 12,
-        backgroundColor: "white",
+        backgroundColor: "rgba(255,255,255,0.92)",
         overflow: "hidden",
+        boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
       }}
     >
       <div style={{ padding: "12px 14px", borderBottom: "1px solid #eee" }}>
@@ -215,7 +217,7 @@ export default function DailyTimeline({
           }}
         >
           <div style={{ fontSize: 11, fontWeight: 800, color: "#1976d2" }}>MEETINGS</div>
-          <div style={{ fontSize: 11, fontWeight: 800, color: "#6a1b9a" }}>FOCUS</div>
+          <div style={{ fontSize: 11, fontWeight: 800, color: APP_MAIN_COLOR }}>FOCUS</div>
         </div>
 
         <div style={{ border: "1px solid #eee", borderRadius: 10, overflow: "hidden" }}>
@@ -233,7 +235,7 @@ export default function DailyTimeline({
               style={{
                 position: "relative",
                 height: HOUR_HEIGHT * 24,
-                backgroundColor: "#fafafa",
+                backgroundColor: "#fbfaf7",
               }}
             >
               {/* Hour grid */}
