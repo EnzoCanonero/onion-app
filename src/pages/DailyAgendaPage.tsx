@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import type { MeetingEntry, DailyReminderTemplate } from "../app/types";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { MeetingEntry, DailyReminderTemplate, DayLogEvent } from "../app/types";
 import {
   loadState,
   saveState,
@@ -28,11 +28,14 @@ import {
   getMilestonesInMonth,
   getTemplatesForMilestone,
   getStandaloneTemplates,
+  formatTime,
+  appendDayEvent,
 } from "../app/storage";
 import { dayOfWeekFromDateISO, isTemplateScheduledForWeekday } from "../app/weekdays";
 import { useDateNavigation } from "../contexts/DateNavigationContext";
 import TaskSelectionModal from "../components/TaskSelectionModal";
 import FocusTemplateCard from "../components/FocusTemplateCard";
+import DailyTimeline from "../components/DailyTimeline";
 import EmptyMonthPanel from "../components/EmptyMonthPanel";
 import MeetingFormModal from "../components/MeetingFormModal";
 
@@ -64,6 +67,31 @@ export default function DailyAgendaPage() {
 
   const { state: withDay, day } = getOrCreateDay(state, dateSafe, ym);
 
+  const leftColumnRef = useRef<HTMLDivElement | null>(null);
+  const [leftColumnHeightPx, setLeftColumnHeightPx] = useState<number | undefined>(undefined);
+
+  useLayoutEffect(() => {
+    if (!day.isWorkingDay) {
+      setLeftColumnHeightPx(undefined);
+      return;
+    }
+
+    const el = leftColumnRef.current;
+    if (!el) return;
+
+    const update = () => {
+      const rect = el.getBoundingClientRect();
+      if (!Number.isFinite(rect.height)) return;
+      setLeftColumnHeightPx(Math.max(0, Math.round(rect.height)));
+    };
+
+    update();
+
+    const ro = new ResizeObserver(() => update());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [day.isWorkingDay, dateSafe]);
+
   // Persist newly created day entry (only once)
   if (withDay !== state) {
     saveState(withDay);
@@ -85,16 +113,26 @@ export default function DailyAgendaPage() {
       if (day0.activeSessionId) return withDay0;
 
       const sessionId = makeId("sess");
+      const startedAt = new Date().toISOString();
       const session = {
         id: sessionId,
         date: dateSafe,
         ym,
         templateId,
-        startedAt: new Date().toISOString(),
+        startedAt,
       };
 
       let next = addSession(withDay0, session);
       next = updateDay(next, { ...day0, activeSessionId: sessionId });
+
+      const templateTitle = plan0.templates.find((t) => t.id === templateId)?.title ?? "Focus session";
+      const event: DayLogEvent = {
+        id: makeId("evt"),
+        at: startedAt,
+        kind: "FOCUS",
+        text: `▶ Started: ${templateTitle}`,
+      };
+      next = appendDayEvent(next, dateSafe, event);
       return next;
     });
   };
@@ -107,39 +145,162 @@ export default function DailyAgendaPage() {
       const session0 = withDay0.sessions.find((s) => s.id === day0.activeSessionId);
       if (!session0?.startedAt) return withDay0;
 
+      const plan0 = getMonth(withDay0, ym);
       const endedAt = new Date().toISOString();
       const ms = Date.parse(endedAt) - Date.parse(session0.startedAt);
       const minutes = Math.max(0, Math.round(ms / 60000));
 
       let next = updateSession(withDay0, day0.activeSessionId, { endedAt, actualMinutes: minutes });
       next = updateDay(next, { ...day0, activeSessionId: undefined });
+
+      const templateTitle = plan0?.templates.find((t) => t.id === session0.templateId)?.title ?? "Focus session";
+      const event: DayLogEvent = {
+        id: makeId("evt"),
+        at: endedAt,
+        kind: "FOCUS",
+        text: `✓ Ended: ${templateTitle} (${minutes}m)`,
+      };
+      next = appendDayEvent(next, dateSafe, event);
       return next;
     });
   };
 
+  const tasksById = useMemo(() => new Map(plan.tasks.map((t) => [t.id, t] as const)), [plan.tasks]);
+
+  const completedMilestoneIds = useMemo(() => {
+    return new Set(
+      state.grandPlan?.milestones.filter((m) => m.status === "COMPLETED").map((m) => m.id) ?? []
+    );
+  }, [state.grandPlan]);
+
+  const selectableTasks = useMemo(() => {
+    return plan.tasks.filter((t) => !t.linkedMilestoneId || !completedMilestoneIds.has(t.linkedMilestoneId));
+  }, [plan.tasks, completedMilestoneIds]);
+
+  const selectableTaskIds = useMemo(() => new Set(selectableTasks.map((t) => t.id)), [selectableTasks]);
 
   // v2: Smart defaults - suggest YELLOW tasks as secondaries (shown in modal)
   const suggestedSecondaryIds = useMemo(() => {
     if (day.secondaryTaskIds.length > 0) return []; // Don't show suggestions if already has selections
 
-    return plan.tasks
+    return selectableTasks
       .filter((t) => t.status === "YELLOW" && !t.parentId) // Top-level YELLOW tasks
       .slice(0, 3)
       .map((t) => t.id);
-  }, [plan.tasks, day.secondaryTaskIds]);
+  }, [selectableTasks, day.secondaryTaskIds]);
 
   // v2: Working day activation
   const handleActivateDay = () => {
-    mutate((s0) => activateWorkingDay(s0, dateSafe));
+    mutate((s0) => {
+      const next = activateWorkingDay(s0, dateSafe);
+      const { day: nextDay } = getOrCreateDay(next, dateSafe, ym);
+      if (!nextDay.startedAt) return next;
+      const event: DayLogEvent = {
+        id: makeId("evt"),
+        at: nextDay.startedAt,
+        kind: "SYSTEM",
+        text: "Day started",
+      };
+      return appendDayEvent(next, dateSafe, event);
+    });
     setShowActivateModal(false);
   };
 
-  const tasksById = useMemo(() => new Map(plan.tasks.map((t) => [t.id, t] as const)), [plan.tasks]);
+  const sessionsForDate = useMemo(
+    () => state.sessions.filter((s) => s.date === dateSafe),
+    [state.sessions, dateSafe]
+  );
+
+  const activeTemplateId = useMemo(() => {
+    if (!day.activeSessionId) return undefined;
+    const session = state.sessions.find((s) => s.id === day.activeSessionId);
+    return session?.templateId;
+  }, [state.sessions, day.activeSessionId]);
+
+  const scheduledTemplatesForTimeline = useMemo(() => {
+    const milestonesById = new Map(state.grandPlan?.milestones.map((m) => [m.id, m] as const) ?? []);
+    const categoriesById = new Map(state.grandPlan?.categories.map((c) => [c.id, c] as const) ?? []);
+
+    return plan.templates
+      .filter((t) => isTemplateScheduledForWeekday(t.daysOfWeek, weekday))
+      .filter((t) => !t.isSuspended)
+      .filter((t) => {
+        const linked = typeof t.linkedMilestoneId === "string" ? t.linkedMilestoneId : null;
+        return !linked || !completedMilestoneIds.has(linked);
+      })
+      .map((t) => {
+        const linked = typeof t.linkedMilestoneId === "string" ? t.linkedMilestoneId : null;
+        const milestone = linked ? milestonesById.get(linked) : undefined;
+        const category = milestone ? categoriesById.get(milestone.categoryId) : undefined;
+        const color = category?.color ?? (linked ? "#9c27b0" : "#607d8b");
+        return {
+          id: t.id,
+          title: t.title,
+          plannedStart: t.plannedStart,
+          plannedEnd: t.plannedEnd,
+          color,
+        };
+      });
+  }, [plan.templates, state.grandPlan, weekday, completedMilestoneIds]);
+
+  const eligibleFocusTemplates = useMemo(() => {
+    return plan.templates.filter((t) => {
+      const linked = typeof t.linkedMilestoneId === "string" ? t.linkedMilestoneId : null;
+      if (linked && completedMilestoneIds.has(linked)) return false;
+      if (t.isSuspended && t.id !== activeTemplateId) return false;
+      return true;
+    });
+  }, [plan.templates, completedMilestoneIds, activeTemplateId]);
+
+  const eligibleFocusTemplatesTodayCount = useMemo(() => {
+    return eligibleFocusTemplates.filter((t) => isTemplateScheduledForWeekday(t.daysOfWeek, weekday)).length;
+  }, [eligibleFocusTemplates, weekday]);
 
   const handleTaskSelectionConfirm = (primaryId: string | undefined, secondaryIds: string[]) => {
     mutate((s0) => {
-      const { state: withDay0 } = getOrCreateDay(s0, dateSafe, ym);
-      return setDayTasks(withDay0, dateSafe, primaryId, secondaryIds);
+      const { state: withDay0, day: day0 } = getOrCreateDay(s0, dateSafe, ym);
+
+      const safePrimaryId = primaryId && selectableTaskIds.has(primaryId) ? primaryId : undefined;
+      const safeSecondaryIds = (secondaryIds ?? [])
+        .filter((id) => selectableTaskIds.has(id))
+        .filter((id) => id !== safePrimaryId);
+
+      const prevPrimaryId = day0.primaryTaskId ?? undefined;
+      const prevSet = new Set<string>([
+        ...(day0.primaryTaskId ? [day0.primaryTaskId] : []),
+        ...(day0.secondaryTaskIds ?? []),
+      ]);
+      const nextSet = new Set<string>([
+        ...(safePrimaryId ? [safePrimaryId] : []),
+        ...(safeSecondaryIds ?? []),
+      ]);
+
+      let next = setDayTasks(withDay0, dateSafe, safePrimaryId, safeSecondaryIds);
+
+      const at = new Date().toISOString();
+      if (safePrimaryId && safePrimaryId !== prevPrimaryId) {
+        const title = tasksById.get(safePrimaryId)?.title ?? "Task";
+        next = appendDayEvent(next, dateSafe, {
+          id: makeId("evt"),
+          at,
+          kind: "TASK",
+          text: `Primary set: ${title}`,
+        });
+      }
+
+      const added = [...nextSet].filter((id) => !prevSet.has(id));
+      for (const id of added) {
+        if (id === safePrimaryId && safePrimaryId && safePrimaryId !== prevPrimaryId) continue;
+        const title = tasksById.get(id)?.title ?? "Task";
+        next = appendDayEvent(next, dateSafe, {
+          id: makeId("evt"),
+          at,
+          kind: "TASK",
+          text: `+ Added: ${title}`,
+        });
+      }
+
+      return next;
     });
     setShowTaskModal(false);
   };
@@ -148,7 +309,22 @@ export default function DailyAgendaPage() {
   const lastWorkingDay = useMemo(() => findLastWorkingDay(state, dateSafe, ym), [state, dateSafe, ym]);
 
   const setOutcome = (taskId: string, outcome: "COMPLETED" | "NOT_COMPLETED" | undefined) => {
-    mutate((s0) => setTaskOutcome(s0, dateSafe, taskId, outcome));
+    mutate((s0) => {
+      const { state: withDay0, day: day0 } = getOrCreateDay(s0, dateSafe, ym);
+      const prev = day0.outcomeByTaskId?.[taskId];
+      let next = setTaskOutcome(withDay0, dateSafe, taskId, outcome);
+      if (outcome && prev !== outcome) {
+        const title = tasksById.get(taskId)?.title ?? "Task";
+        const text = outcome === "COMPLETED" ? `✓ Completed: ${title}` : `⏳ In progress: ${title}`;
+        next = appendDayEvent(next, dateSafe, {
+          id: makeId("evt"),
+          at: new Date().toISOString(),
+          kind: "TASK",
+          text,
+        });
+      }
+      return next;
+    });
   };
 
   const updateJournal = (text: string) => {
@@ -202,11 +378,28 @@ export default function DailyAgendaPage() {
   };
 
   const handleToggleAttended = (meetingId: string) => {
-    mutate((s0) => toggleMeetingAttended(s0, meetingId));
+    mutate((s0) => {
+      const meeting0 = s0.meetings.find((m) => m.id === meetingId);
+      const willBeAttended = !(meeting0?.attended ?? false);
+      let next = toggleMeetingAttended(s0, meetingId);
+      if (willBeAttended && meeting0) {
+        next = appendDayEvent(next, dateSafe, {
+          id: makeId("evt"),
+          at: new Date().toISOString(),
+          kind: "MEETING",
+          text: `✓ Attended: ${meeting0.title}`,
+        });
+      }
+      return next;
+    });
   };
 
   // v4: If day is closed, show journal-style read-only view
   if (day.isClosed && day.isWorkingDay) {
+    const startedAtTime = day.startedAt ? formatTime(day.startedAt) : "—";
+    const endedAtTime = day.endedAt ? formatTime(day.endedAt) : "—";
+    const endedAtDate = day.endedAt ? day.endedAt.slice(0, 10) : undefined;
+
     const completedTasks = [
       day.primaryTaskId ? { id: day.primaryTaskId, isPrimary: true } : null,
       ...day.secondaryTaskIds.map((id) => ({ id, isPrimary: false })),
@@ -232,6 +425,30 @@ export default function DailyAgendaPage() {
           <p style={{ textAlign: "center", marginBottom: 32, opacity: 0.7, fontSize: 16 }}>
             {dateSafe}
           </p>
+
+          <div
+            style={{
+              marginBottom: 28,
+              padding: "12px 14px",
+              backgroundColor: "rgba(255,255,255,0.9)",
+              border: "1px solid #e0d7cf",
+              borderRadius: 10,
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 16,
+              flexWrap: "wrap",
+            }}
+          >
+            <div style={{ fontSize: 13, color: "#5d4037" }}>
+              <span style={{ fontWeight: 700 }}>Started:</span> {startedAtTime}
+            </div>
+            <div style={{ fontSize: 13, color: "#5d4037" }}>
+              <span style={{ fontWeight: 700 }}>Ended:</span> {endedAtTime}
+              {endedAtDate && endedAtDate !== dateSafe ? (
+                <span style={{ marginLeft: 6, opacity: 0.75 }}>({endedAtDate})</span>
+              ) : null}
+            </div>
+          </div>
 
           {/* Completed Tasks Section */}
           <div style={{ marginBottom: 32 }}>
@@ -528,6 +745,8 @@ export default function DailyAgendaPage() {
         <>
           {/* All sections below only show when day is activated */}
 
+          <div style={{ display: "flex", gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
+            <div ref={leftColumnRef} style={{ flex: "3 1 620px", minWidth: 380 }}>
           {/* v4: Daily Reminders Section */}
           <div style={{ marginBottom: 24 }}>
             <div
@@ -624,15 +843,29 @@ export default function DailyAgendaPage() {
                         fontSize: 15,
                       }}
                     >
-                      <input
-                        type="checkbox"
-                        checked={day.reminderCheckedById?.[reminder.id] ?? false}
-                        onChange={() => {
-                          mutate((s0) => toggleReminderChecked(s0, dateSafe, reminder.id));
-                        }}
-                        style={{
-                          width: 18,
-                          height: 18,
+	                      <input
+	                        type="checkbox"
+	                        checked={day.reminderCheckedById?.[reminder.id] ?? false}
+	                        onChange={() => {
+	                          mutate((s0) => {
+	                            const { day: day0 } = getOrCreateDay(s0, dateSafe, ym);
+	                            const wasChecked = day0.reminderCheckedById?.[reminder.id] ?? false;
+	                            const willBeChecked = !wasChecked;
+	                            let next = toggleReminderChecked(s0, dateSafe, reminder.id);
+	                            if (willBeChecked) {
+	                              next = appendDayEvent(next, dateSafe, {
+	                                id: makeId("evt"),
+	                                at: new Date().toISOString(),
+	                                kind: "REMINDER",
+	                                text: reminder.text,
+	                              });
+	                            }
+	                            return next;
+	                          });
+	                        }}
+	                        style={{
+	                          width: 18,
+	                          height: 18,
                           cursor: "pointer",
                         }}
                       />
@@ -724,7 +957,7 @@ export default function DailyAgendaPage() {
           {/* v2: Task Selection Modal */}
           {showTaskModal && (
             <TaskSelectionModal
-              tasks={plan.tasks}
+              tasks={selectableTasks}
               currentPrimaryId={day.primaryTaskId}
               currentSecondaryIds={day.secondaryTaskIds}
               onConfirm={handleTaskSelectionConfirm}
@@ -1117,139 +1350,165 @@ export default function DailyAgendaPage() {
             />
           )}
 
-          {/* v2: Daily Journal - Persistent notes */}
-          <h3 style={{ marginTop: 24 }}>📝 Daily Journal</h3>
-          <textarea
-            rows={12}
-            placeholder="Daily notes, thoughts, observations..."
-            value={day.dailyJournal ?? ""}
-            onChange={(e) => updateJournal(e.target.value)}
-            style={{ padding: 10, fontSize: 14, lineHeight: 1.6, width: "100%", boxSizing: "border-box" }}
-          />
-
-          {/* v2: Shutdown Note - Full shutdown summary */}
-          <h3 style={{ marginTop: 24 }}>🔒 Shutdown Note</h3>
-          <p style={{ fontSize: 13, color: "#666", marginTop: 0 }}>
-            Complete shutdown summary (shown next working day)
-          </p>
-          <textarea
-            rows={4}
-            placeholder="Full shutdown summary, reflections, detailed notes..."
-            value={day.shutdownNote ?? ""}
-            onChange={(e) => updateShutdown(e.target.value)}
-            style={{ padding: 10, fontSize: 14, lineHeight: 1.6, width: "100%", boxSizing: "border-box" }}
-          />
-
           {/* v6.3: Focus Sessions - Grouped by milestone */}
-          <h3 style={{ marginTop: 32 }}>⏱️ Focus Sessions</h3>
-          <div style={{ marginBottom: 24 }}>
-            {/* Sessions grouped by milestone */}
-            {getMilestonesInMonth(state, ym).map((milestone) => {
-              const category = state.grandPlan?.categories.find((c) => c.id === milestone.categoryId);
-              const milestoneTemplates = getTemplatesForMilestone(state, ym, milestone.id).filter((t) =>
-                isTemplateScheduledForWeekday(t.daysOfWeek, weekday)
-              );
-              if (milestoneTemplates.length === 0) return null;
-              return (
-                <div key={milestone.id} style={{ marginBottom: 16 }}>
-                  <div
-                    style={{
-                      fontSize: 13,
-                      fontWeight: 600,
-                      color: category?.color ?? "#9c27b0",
-                      marginBottom: 8,
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 6,
-                    }}
-                  >
-                    <span
-                      style={{
-                        width: 10,
-                        height: 10,
-                        borderRadius: "50%",
-                        backgroundColor: category?.color ?? "#9c27b0",
-                        display: "inline-block",
-                      }}
-                    />
-                    [{category?.title ?? "Category"}] {milestone.title}
-                  </div>
-                  {milestoneTemplates.map((template) => (
-                    <FocusTemplateCard
-                      key={template.id}
-                      template={template}
-                      activeSessionId={day.activeSessionId}
-                      completedSessions={state.sessions.filter((s) => s.date === dateSafe)}
-                      onStartSession={startSession}
-                      onEndSession={endSession}
-                    />
-                  ))}
-                </div>
-              );
-            })}
-
-            {/* Standalone templates */}
-            {(() => {
-              const standaloneTemplates = getStandaloneTemplates(state, ym).filter((t) =>
-                isTemplateScheduledForWeekday(t.daysOfWeek, weekday)
-              );
-              if (standaloneTemplates.length === 0) return null;
-              return (
-                <div style={{ marginBottom: 16 }}>
-                  <div
-                    style={{
-                      fontSize: 13,
-                      fontWeight: 600,
-                      color: "#607d8b",
-                      marginBottom: 8,
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 6,
-                    }}
-                  >
-                    <span
-                      style={{
-                        width: 10,
-                        height: 10,
-                        borderRadius: "50%",
-                        backgroundColor: "#607d8b",
-                        display: "inline-block",
-                      }}
-                    />
-                    Standalone Sessions
-                  </div>
-                  {standaloneTemplates.map((template) => (
-                    <FocusTemplateCard
-                      key={template.id}
-                      template={template}
-                      activeSessionId={day.activeSessionId}
-                      completedSessions={state.sessions.filter((s) => s.date === dateSafe)}
-                      onStartSession={startSession}
-                      onEndSession={endSession}
-                    />
-                  ))}
-                </div>
-              );
-            })()}
-
-            {/* Show message if no templates at all */}
-            {plan.templates.length === 0 && (
-              <p style={{ fontSize: 13, color: "#999", fontStyle: "italic" }}>
-                No focus templates defined. Add templates in Month Setup.
-              </p>
-            )}
-
-            {/* Show message if templates exist, but none are scheduled for today */}
-            {plan.templates.length > 0 &&
-              plan.templates.filter((t) => isTemplateScheduledForWeekday(t.daysOfWeek, weekday)).length === 0 && (
+          {plan.templates.length === 0 ? (
+            <>
+              <h3 style={{ marginTop: 32 }}>⏱️ Focus Sessions</h3>
+              <div style={{ marginBottom: 24 }}>
                 <p style={{ fontSize: 13, color: "#999", fontStyle: "italic" }}>
-                  No focus templates scheduled for today. Edit templates in Month Setup to assign weekdays.
+                  No focus templates defined. Add templates in Month Setup.
                 </p>
-              )}
+              </div>
+            </>
+          ) : eligibleFocusTemplates.length === 0 ? null : (
+            <>
+              <h3 style={{ marginTop: 32 }}>⏱️ Focus Sessions</h3>
+              <div style={{ marginBottom: 24 }}>
+                {/* Sessions grouped by milestone */}
+                {getMilestonesInMonth(state, ym)
+                  .filter((milestone) => milestone.status !== "COMPLETED")
+                  .map((milestone) => {
+                    const category = state.grandPlan?.categories.find((c) => c.id === milestone.categoryId);
+                    const milestoneTemplates = getTemplatesForMilestone(state, ym, milestone.id).filter((t) =>
+                      isTemplateScheduledForWeekday(t.daysOfWeek, weekday)
+                    );
+                    const visibleMilestoneTemplates = milestoneTemplates.filter(
+                      (t) => !t.isSuspended || t.id === activeTemplateId
+                    );
+                    if (visibleMilestoneTemplates.length === 0) return null;
+                    return (
+                      <div key={milestone.id} style={{ marginBottom: 16 }}>
+                        <div
+                          style={{
+                            fontSize: 13,
+                            fontWeight: 600,
+                            color: category?.color ?? "#9c27b0",
+                            marginBottom: 8,
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 6,
+                          }}
+                        >
+                          <span
+                            style={{
+                              width: 10,
+                              height: 10,
+                              borderRadius: "50%",
+                              backgroundColor: category?.color ?? "#9c27b0",
+                              display: "inline-block",
+                            }}
+                          />
+                          [{category?.title ?? "Category"}] {milestone.title}
+                        </div>
+                        {visibleMilestoneTemplates.map((template) => (
+                          <FocusTemplateCard
+                            key={template.id}
+                            template={template}
+                            activeSessionId={day.activeSessionId}
+                            completedSessions={sessionsForDate}
+                            onStartSession={startSession}
+                            onEndSession={endSession}
+                          />
+                        ))}
+                      </div>
+                    );
+                  })}
+
+                {/* Standalone templates */}
+                {(() => {
+                  const standaloneTemplates = getStandaloneTemplates(state, ym).filter((t) =>
+                    isTemplateScheduledForWeekday(t.daysOfWeek, weekday)
+                  );
+                  const visibleStandaloneTemplates = standaloneTemplates.filter(
+                    (t) => !t.isSuspended || t.id === activeTemplateId
+                  );
+                  if (visibleStandaloneTemplates.length === 0) return null;
+                  return (
+                    <div style={{ marginBottom: 16 }}>
+                      <div
+                        style={{
+                          fontSize: 13,
+                          fontWeight: 600,
+                          color: "#607d8b",
+                          marginBottom: 8,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
+                        <span
+                          style={{
+                            width: 10,
+                            height: 10,
+                            borderRadius: "50%",
+                            backgroundColor: "#607d8b",
+                            display: "inline-block",
+                          }}
+                        />
+                        Standalone Sessions
+                      </div>
+                      {visibleStandaloneTemplates.map((template) => (
+                        <FocusTemplateCard
+                          key={template.id}
+                          template={template}
+                          activeSessionId={day.activeSessionId}
+                          completedSessions={sessionsForDate}
+                          onStartSession={startSession}
+                          onEndSession={endSession}
+                        />
+                      ))}
+                    </div>
+                  );
+                })()}
+
+                {/* Show message if eligible templates exist, but none are scheduled for today */}
+                {eligibleFocusTemplatesTodayCount === 0 && (
+                  <p style={{ fontSize: 13, color: "#999", fontStyle: "italic" }}>
+                    No focus templates scheduled for today. Edit templates in Month Setup to assign weekdays.
+                  </p>
+                )}
+              </div>
+            </>
+          )}
+
+            </div>
+            <div style={{ flex: "2 1 420px", minWidth: 320 }}>
+              <DailyTimeline
+                date={dateSafe}
+                meetings={dayMeetings}
+                scheduledTemplates={scheduledTemplatesForTimeline}
+                sessions={sessionsForDate}
+                matchHeightPx={leftColumnHeightPx}
+              />
+            </div>
           </div>
 
+          <div style={{ marginTop: 32, paddingTop: 24, borderTop: "2px solid #e0e0e0" }}>
+            {/* v2: Daily Journal - Persistent notes */}
+            <h3 style={{ marginTop: 0 }}>📝 Daily Journal</h3>
+            <textarea
+              rows={12}
+              placeholder="Daily notes, thoughts, observations..."
+              value={day.dailyJournal ?? ""}
+              onChange={(e) => updateJournal(e.target.value)}
+              style={{ padding: 10, fontSize: 14, lineHeight: 1.6, width: "100%", boxSizing: "border-box" }}
+            />
+
+            {/* v2: Shutdown Note - Full shutdown summary */}
+            <h3 style={{ marginTop: 24 }}>🔒 Shutdown Note</h3>
+            <p style={{ fontSize: 13, color: "#666", marginTop: 0 }}>
+              Complete shutdown summary (shown next working day)
+            </p>
+            <textarea
+              rows={4}
+              placeholder="Full shutdown summary, reflections, detailed notes..."
+              value={day.shutdownNote ?? ""}
+              onChange={(e) => updateShutdown(e.target.value)}
+              style={{ padding: 10, fontSize: 14, lineHeight: 1.6, width: "100%", boxSizing: "border-box" }}
+            />
+
           {/* v4: Close Day Button */}
-          <div style={{ marginTop: 48, paddingTop: 24, borderTop: "2px solid #e0e0e0", textAlign: "center" }}>
+          <div style={{ marginTop: 28, textAlign: "center" }}>
             <button
               onClick={() => setShowCloseModal(true)}
               style={{
@@ -1340,6 +1599,7 @@ export default function DailyAgendaPage() {
           <p style={{ opacity: 0.8, marginTop: 16 }}>
             v2 note: Working days system - Only activated days show all sections. Shutdown note shows on next working day.
           </p>
+          </div>
         </>
       )}
     </div>
