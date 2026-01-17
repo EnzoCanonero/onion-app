@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { YM, Category, MilestoneNode } from "../app/types";
+import { APP_MAIN_COLOR } from "../app/theme";
 import {
   loadState,
   saveState,
@@ -18,7 +19,7 @@ import {
 import MilestoneTreeView from "../components/MilestoneTreeView";
 import MilestoneDetailModal from "../components/MilestoneDetailModal";
 
-const DEFAULT_COLORS = ["#4caf50", "#2196f3", "#ff9800", "#e91e63", "#9c27b0", "#00bcd4"];
+const DEFAULT_COLORS = ["#4caf50", "#2196f3", "#ff9800", "#e91e63", APP_MAIN_COLOR, "#00bcd4"];
 const SELECTED_CATEGORY_STORAGE_KEY = "focustree:grand-plan:selected-category";
 
 export default function GrandPlanPage() {

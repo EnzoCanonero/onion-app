@@ -1,5 +1,6 @@
 import { useMemo, useState, useEffect } from "react";
 import type { FocusTemplate, ProductivitySession } from "../app/types";
+import { APP_MAIN_COLOR } from "../app/theme";
 import { formatWeekdays } from "../app/weekdays";
 
 type FocusTemplateCardProps = {
@@ -8,6 +9,8 @@ type FocusTemplateCardProps = {
   completedSessions: ProductivitySession[];
   onStartSession: (templateId: string) => void;
   onEndSession: () => void;
+  accentColor?: string;
+  milestoneTitle?: string;
 };
 
 export default function FocusTemplateCard({
@@ -16,6 +19,8 @@ export default function FocusTemplateCard({
   completedSessions,
   onStartSession,
   onEndSession,
+  accentColor,
+  milestoneTitle,
 }: FocusTemplateCardProps) {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [showStartConfirm, setShowStartConfirm] = useState(false);
@@ -79,19 +84,28 @@ export default function FocusTemplateCard({
     setShowStopConfirm(false);
   };
 
+  const stripeColor = accentColor ?? APP_MAIN_COLOR;
+
   return (
     <div
       style={{
-        border: "2px solid #e0e0e0",
+        border: "2px solid #eee",
+        borderLeft: `6px solid ${stripeColor}`,
         borderRadius: 12,
         padding: 16,
         marginBottom: 12,
-        backgroundColor: activeSession ? "#fff8e1" : completedSession ? "#e8f5e9" : "white",
+        backgroundColor: "rgba(255,255,255,0.92)",
+        boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
       }}
     >
       {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <div>
+	      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+	        <div>
+          {milestoneTitle ? (
+            <div style={{ fontSize: 12, fontWeight: 800, color: stripeColor, marginBottom: 10 }}>
+              {milestoneTitle}
+            </div>
+          ) : null}
           <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>{template.title}</div>
           <div style={{ fontSize: 13, color: "#666" }}>
             📅 Planned: {template.plannedStart} - {template.plannedEnd} ({plannedMinutes} min) · 🗓 {formatWeekdays(template.daysOfWeek)}
