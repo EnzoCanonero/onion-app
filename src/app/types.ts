@@ -6,6 +6,15 @@ export type TaskStatus = "NONE" | "YELLOW" | "GREEN";
 
 export type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
+export type DayLogEventKind = "SYSTEM" | "REMINDER" | "TASK" | "MEETING" | "FOCUS";
+
+export type DayLogEvent = {
+  id: string;
+  at: string; // ISO timestamp
+  kind: DayLogEventKind;
+  text: string;
+};
+
 // v7: Daily reminders (editable quick checks)
 export type DailyReminderTemplate = {
   id: string;
@@ -63,6 +72,7 @@ export type FocusTemplate = {
   plannedEnd: string;   // "HH:MM"
   daysOfWeek?: Weekday[]; // optional: when undefined/empty, available any day
   linkedMilestoneId?: string | null; // v6.3: null = standalone, undefined = legacy (treat as standalone)
+  isSuspended?: boolean; // when true, hide from Daily (keeps past session data)
 };
 
 export type MonthPlan = {
@@ -88,7 +98,10 @@ export type DayEntry = {
   date: DateISO;
   ym: YM;
   isWorkingDay?: boolean; // v2: true if user activated this day as working day
+  startedAt?: string; // v9: ISO timestamp when day was started
   isClosed?: boolean; // v4: true if user closed the day (read-only mode)
+  endedAt?: string; // v9: ISO timestamp when day was closed
+  events?: DayLogEvent[]; // v9: timeline events for the day
   emailChecked?: boolean; // v4: true if email was checked
   bureaucraticsCompleted?: boolean; // v4: true if bureaucratic tasks completed
   reminderCheckedById?: Record<string, boolean>; // v7: reminder template id -> checked
