@@ -12,6 +12,7 @@ import type {
   MilestoneNode,
   FocusTemplate,
   DailyReminderTemplate,
+  DayLogEvent,
 } from "./types";
 import { normalizeWeekdays } from "./weekdays";
 
@@ -64,6 +65,14 @@ export function loadState(): AppStateV0 {
       }
       if (Object.keys(nextMap).length > 0) {
         day.reminderCheckedById = nextMap;
+      }
+
+      if (Array.isArray((day as any).events)) {
+        (day as any).events = (day as any).events
+          .filter((e: any) => e && typeof e.id === "string" && typeof e.at === "string" && typeof e.kind === "string" && typeof e.text === "string")
+          .map((e: any) => ({ id: e.id, at: e.at, kind: e.kind, text: e.text }));
+      } else {
+        delete (day as any).events;
       }
     }
 
@@ -150,6 +159,13 @@ export function addSession(state: AppStateV0, s: ProductivitySession): AppStateV
 
 export function updateDay(state: AppStateV0, day: DayEntry): AppStateV0 {
   return { ...state, days: { ...state.days, [day.date]: day } };
+}
+
+export function appendDayEvent(state: AppStateV0, date: DateISO, event: DayLogEvent): AppStateV0 {
+  const ym = ymFromDate(date);
+  const { state: withDay, day } = getOrCreateDay(state, date, ym);
+  const events = Array.isArray(day.events) ? day.events : [];
+  return updateDay(withDay, { ...day, events: [...events, event] });
 }
 
 export function updateSession(state: AppStateV0, sessionId: string, patch: Partial<ProductivitySession>): AppStateV0 {
@@ -422,7 +438,8 @@ export function findLastWorkingDay(state: AppStateV0, currentDate: DateISO, ym: 
 export function activateWorkingDay(state: AppStateV0, date: DateISO): AppStateV0 {
   const ym = ymFromDate(date);
   const { state: withDay, day } = getOrCreateDay(state, date, ym);
-  return updateDay(withDay, { ...day, isWorkingDay: true });
+  const startedAt = day.startedAt ?? new Date().toISOString();
+  return updateDay(withDay, { ...day, isWorkingDay: true, startedAt });
 }
 
 // v4: Close/Reopen day functionality
@@ -430,25 +447,26 @@ export function closeDay(state: AppStateV0, date: DateISO): AppStateV0 {
   const ym = ymFromDate(date);
   const { state: withDay, day } = getOrCreateDay(state, date, ym);
 
+  const endedAt = new Date().toISOString();
+
   // End any active session before closing
   let next = withDay;
   if (day.activeSessionId) {
     const session = next.sessions.find((s) => s.id === day.activeSessionId);
     if (session?.startedAt) {
-      const endedAt = new Date().toISOString();
       const ms = Date.parse(endedAt) - Date.parse(session.startedAt);
       const minutes = Math.max(0, Math.round(ms / 60000));
       next = updateSession(next, day.activeSessionId, { endedAt, actualMinutes: minutes });
     }
   }
 
-  return updateDay(next, { ...day, isClosed: true, activeSessionId: undefined });
+  return updateDay(next, { ...day, isClosed: true, activeSessionId: undefined, endedAt });
 }
 
 export function reopenDay(state: AppStateV0, date: DateISO): AppStateV0 {
   const ym = ymFromDate(date);
   const { state: withDay, day } = getOrCreateDay(state, date, ym);
-  return updateDay(withDay, { ...day, isClosed: false });
+  return updateDay(withDay, { ...day, isClosed: false, endedAt: undefined });
 }
 
 // v5: Close/Reopen month functionality

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { TaskNode } from "../app/types";
 
 type TaskSelectionModalProps = {
@@ -22,6 +22,12 @@ export default function TaskSelectionModal({
   const [selectedPrimary, setSelectedPrimary] = useState<string | undefined>(currentPrimaryId);
   const [selectedSecondaries, setSelectedSecondaries] = useState<string[]>(currentSecondaryIds);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    const ids = new Set(tasks.map((t) => t.id));
+    setSelectedPrimary((prev) => (prev && ids.has(prev) ? prev : undefined));
+    setSelectedSecondaries((prev) => prev.filter((id) => ids.has(id)));
+  }, [tasks]);
 
   const toggleExpand = (taskId: string) => {
     const next = new Set(expandedIds);
@@ -56,8 +62,6 @@ export default function TaskSelectionModal({
   const handleBack = () => {
     setStep("primary");
   };
-
-  const canProceed = step === "primary" ? selectedPrimary : true;
 
   const renderTask = (task: TaskNode, depth: number = 0) => {
     const children = tasks.filter((t) => t.parentId === task.id);
@@ -182,6 +186,7 @@ export default function TaskSelectionModal({
 
   const topLevelTasks = tasks.filter((t) => t.parentId === null);
   const selectedPrimaryTask = selectedPrimary ? tasks.find((t) => t.id === selectedPrimary) : undefined;
+  const canProceed = step === "primary" ? !!selectedPrimaryTask : true;
 
   return (
     <div

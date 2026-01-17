@@ -82,7 +82,7 @@ function TaskGroup({
   onAddTemplate: (milestoneId: string | null) => void;
   onUpdateTemplate: (
     templateId: string,
-    updates: Partial<Pick<FocusTemplate, "title" | "plannedStart" | "plannedEnd" | "daysOfWeek">>
+    updates: Partial<Pick<FocusTemplate, "title" | "plannedStart" | "plannedEnd" | "daysOfWeek" | "isSuspended">>
   ) => void;
   onDeleteTemplate: (templateId: string) => void;
   hideAddButton?: boolean;
@@ -99,6 +99,16 @@ function TaskGroup({
   const [taskModalTitle, setTaskModalTitle] = useState("");
   const [taskModalDescription, setTaskModalDescription] = useState("");
   const [taskModalError, setTaskModalError] = useState<string | null>(null);
+
+  const suspendInfoStorageKey = "focustree.templateSuspendInfo.dismissed";
+  const [suspendInfoDismissed, setSuspendInfoDismissed] = useState(() => {
+    try {
+      return window.localStorage.getItem(suspendInfoStorageKey) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const [suspendInfo, setSuspendInfo] = useState<{ action: "suspend" | "resume"; title: string } | null>(null);
 
   const startTemplateEdit = (template: FocusTemplate) => {
     setEditingTemplateId(template.id);
@@ -349,7 +359,9 @@ function TaskGroup({
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          onDeleteTask(task.id);
+                          if (window.confirm(`Delete task "${task.title}"?`)) {
+                            onDeleteTask(task.id);
+                          }
                         }}
                         style={{
                           padding: "2px 6px",
@@ -407,19 +419,20 @@ function TaskGroup({
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {templates.map((template) => (
-                  <div
-                    key={template.id}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                      padding: chromeless ? "6px 0" : "7.2px 8px",
-                      backgroundColor: chromeless ? "transparent" : "white",
-                      borderRadius: chromeless ? 0 : 4,
-                      border: chromeless ? "none" : `1px solid ${accentColor}`,
-                      flexWrap: "wrap",
-                    }}
-                  >
+	                  <div
+	                    key={template.id}
+	                    style={{
+	                      display: "flex",
+	                      alignItems: "center",
+	                      gap: 8,
+	                      padding: chromeless ? "6px 0" : "7.2px 8px",
+	                      backgroundColor: chromeless ? "transparent" : "white",
+	                      borderRadius: chromeless ? 0 : 4,
+	                      border: chromeless ? "none" : `1px solid ${accentColor}`,
+	                      opacity: template.isSuspended ? 0.55 : 1,
+	                      flexWrap: "wrap",
+	                    }}
+	                  >
                     {editingTemplateId === template.id ? (
                       <>
                         <input
@@ -586,38 +599,143 @@ function TaskGroup({
                             flex: "0 0 auto",
                             whiteSpace: "nowrap",
                           }}
-                        >
-                          {template.plannedStart}-{template.plannedEnd}
-                        </span>
-                        {!isCompleted && (
-                          <button
-                            onClick={() => onDeleteTemplate(template.id)}
-                            style={{
-                              padding: "2px 6px",
-                              fontSize: 11,
-                              backgroundColor: "transparent",
-                              color: "#f44336",
-                              border: "none",
-                              cursor: "pointer",
-                              opacity: 0.7,
-                            }}
-                          >
-                            ✕
-                          </button>
-                        )}
-                      </>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+	                        >
+	                          {template.plannedStart}-{template.plannedEnd}
+	                        </span>
+	                        {!isCompleted && (
+	                          <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+	                            <button
+	                              onClick={(e) => {
+	                                e.stopPropagation();
+	                                const nextSuspended = !template.isSuspended;
+	                                onUpdateTemplate(template.id, { isSuspended: nextSuspended });
+	                                if (!suspendInfoDismissed) {
+	                                  setSuspendInfo({
+	                                    action: nextSuspended ? "suspend" : "resume",
+	                                    title: template.title,
+	                                  });
+	                                }
+	                              }}
+	                              title={template.isSuspended ? "Resume focus template" : "Suspend focus template"}
+	                              style={{
+	                                padding: "2px 6px",
+	                                fontSize: 11,
+	                                backgroundColor: "transparent",
+	                                color: template.isSuspended ? "#2e7d32" : "#f9a825",
+	                                border: "none",
+	                                cursor: "pointer",
+	                                opacity: 0.8,
+	                              }}
+	                            >
+	                              {template.isSuspended ? "▶" : "⏸"}
+	                            </button>
+	                            <button
+	                              onClick={(e) => {
+	                                e.stopPropagation();
+	                                if (window.confirm(`Delete focus template "${template.title}"?`)) {
+	                                  onDeleteTemplate(template.id);
+	                                }
+	                              }}
+	                              style={{
+	                                padding: "2px 6px",
+	                                fontSize: 11,
+	                                backgroundColor: "transparent",
+	                                color: "#f44336",
+	                                border: "none",
+	                                cursor: "pointer",
+	                                opacity: 0.7,
+	                              }}
+	                            >
+	                              ✕
+	                            </button>
+	                          </div>
+	                        )}
+	                      </>
+	                    )}
+	                  </div>
+	                ))}
+	              </div>
+	            )}
+	          </div>
 
-          {!isCompleted && (
-            <div style={{ marginTop: "auto", paddingTop: 10 }}>
-              <button
-                onClick={() => onAddTemplate(milestoneId)}
-                style={{
+	          {suspendInfo && (
+	            <div
+	              style={{
+	                position: "fixed",
+	                inset: 0,
+	                backgroundColor: "rgba(0, 0, 0, 0.5)",
+	                display: "flex",
+	                alignItems: "center",
+	                justifyContent: "center",
+	                zIndex: 1000,
+	              }}
+	              onClick={() => setSuspendInfo(null)}
+	            >
+	              <div
+	                style={{
+	                  backgroundColor: "white",
+	                  borderRadius: 12,
+	                  padding: 24,
+	                  maxWidth: 460,
+	                  width: "90%",
+	                  boxShadow: "0 10px 40px rgba(0,0,0,0.3)",
+	                }}
+	                onClick={(e) => e.stopPropagation()}
+	              >
+	                <h3 style={{ margin: 0, marginBottom: 10 }}>
+	                  {suspendInfo.action === "suspend" ? "Focus template suspended" : "Focus template resumed"}
+	                </h3>
+	                <p style={{ margin: 0, marginBottom: 14, color: "#666", fontSize: 13, lineHeight: 1.5 }}>
+	                  {suspendInfo.action === "suspend"
+	                    ? `“${suspendInfo.title}” will stop appearing in the Daily page, but any past sessions remain saved. You can bring it back anytime with ▶.`
+	                    : `“${suspendInfo.title}” will appear again in the Daily page on its scheduled days.`}
+	                </p>
+	                <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+	                  <button
+	                    onClick={() => {
+	                      try {
+	                        window.localStorage.setItem(suspendInfoStorageKey, "1");
+	                      } catch {
+	                        // ignore
+	                      }
+	                      setSuspendInfoDismissed(true);
+	                      setSuspendInfo(null);
+	                    }}
+	                    style={{
+	                      padding: "8px 12px",
+	                      backgroundColor: "white",
+	                      border: "1px solid #ddd",
+	                      borderRadius: 6,
+	                      cursor: "pointer",
+	                      color: "#666",
+	                    }}
+	                  >
+	                    Don't show again
+	                  </button>
+	                  <button
+	                    onClick={() => setSuspendInfo(null)}
+	                    style={{
+	                      padding: "8px 12px",
+	                      backgroundColor: "#111",
+	                      border: "none",
+	                      borderRadius: 6,
+	                      cursor: "pointer",
+	                      color: "white",
+	                      fontWeight: 700,
+	                    }}
+	                  >
+	                    OK
+	                  </button>
+	                </div>
+	              </div>
+	            </div>
+	          )}
+
+	          {!isCompleted && (
+	            <div style={{ marginTop: "auto", paddingTop: 10 }}>
+	              <button
+	                onClick={() => onAddTemplate(milestoneId)}
+	                style={{
                   padding: "4.95px 9.9px",
                   fontSize: 9.9,
                   fontWeight: 700,
@@ -1002,18 +1120,19 @@ export default function MonthSetupPage() {
       return;
     }
 
-		    const newTemplate: FocusTemplate = {
-		      id: makeId("tpl"),
-		      title,
-		      plannedStart: newTemplateStart,
-		      plannedEnd: newTemplateEnd,
-          daysOfWeek: newTemplateDays.length > 0 ? newTemplateDays : undefined,
-		      linkedMilestoneId: addTemplateMilestoneId,
-		    };
-	    const nextPinnedMilestoneIds =
-	      typeof addTemplateMilestoneId === "string" && addTemplateMilestoneId
-	        ? plan.pinnedMilestoneIds.includes(addTemplateMilestoneId)
-	          ? plan.pinnedMilestoneIds
+			    const newTemplate: FocusTemplate = {
+			      id: makeId("tpl"),
+			      title,
+			      plannedStart: newTemplateStart,
+			      plannedEnd: newTemplateEnd,
+	          daysOfWeek: newTemplateDays.length > 0 ? newTemplateDays : undefined,
+			      linkedMilestoneId: addTemplateMilestoneId,
+			      isSuspended: false,
+			    };
+		    const nextPinnedMilestoneIds =
+		      typeof addTemplateMilestoneId === "string" && addTemplateMilestoneId
+		        ? plan.pinnedMilestoneIds.includes(addTemplateMilestoneId)
+		          ? plan.pinnedMilestoneIds
 	          : [...plan.pinnedMilestoneIds, addTemplateMilestoneId]
 	        : plan.pinnedMilestoneIds;
 	    const nextPlan: MonthPlan = { ...plan, templates: [...plan.templates, newTemplate], pinnedMilestoneIds: nextPinnedMilestoneIds };
@@ -1021,14 +1140,14 @@ export default function MonthSetupPage() {
 	    closeAddTemplateModal();
 	  };
 
-  const handleUpdateTemplate = (
-    templateId: string,
-    updates: Partial<Pick<FocusTemplate, "title" | "plannedStart" | "plannedEnd" | "daysOfWeek">>
-  ) => {
-    if (!plan) return;
-    const nextTemplates = plan.templates.map((t) =>
-      t.id === templateId ? { ...t, ...updates } : t
-    );
+	const handleUpdateTemplate = (
+	    templateId: string,
+	    updates: Partial<Pick<FocusTemplate, "title" | "plannedStart" | "plannedEnd" | "daysOfWeek" | "isSuspended">>
+	  ) => {
+	    if (!plan) return;
+	    const nextTemplates = plan.templates.map((t) =>
+	      t.id === templateId ? { ...t, ...updates } : t
+	    );
     const nextPlan: MonthPlan = { ...plan, templates: nextTemplates };
     handlePlanUpdate(nextPlan);
   };
