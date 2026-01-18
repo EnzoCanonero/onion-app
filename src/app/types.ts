@@ -119,6 +119,7 @@ export type DayEntry = {
   pendingNote?: string; // v2: what's pending for next day
   shutdownNote?: string; // v2: end-of-day note shown next day
   activeSessionId?: string; // enforces "one active running session"
+  focusMilestoneByTemplateId?: Record<string, string>; // v10: per-day link focus template -> milestone id (Daily-only)
 };
 
 export type MeetingEntry = {

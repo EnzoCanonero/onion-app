@@ -165,10 +165,30 @@ export default function GrandPlanPage() {
   if (!grandPlan) {
     return (
       <div>
-        <h2>Grand Plan</h2>
-        <p style={{ opacity: 0.7, marginBottom: 24 }}>
-          Create a long-term plan to track your goals across multiple months.
-        </p>
+        <div style={{ marginBottom: 24, paddingBottom: 12, borderBottom: "1px solid #eee" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "end", gap: 12 }}>
+            <div />
+            <div style={{ textAlign: "center" }}>
+              <h2 style={{ margin: 0, fontSize: 28, fontWeight: 900, color: "#111", letterSpacing: 0.2 }}>
+                Grand Plan
+              </h2>
+              <div
+                style={{
+                  margin: "10px auto 0",
+                  width: 56,
+                  height: 4,
+                  borderRadius: 999,
+                  backgroundColor: APP_MAIN_COLOR,
+                  opacity: 0.9,
+                }}
+              />
+              <p style={{ margin: "8px 0 0", color: "#666", fontSize: 13 }}>
+                Create a long-term plan to track your goals across multiple months.
+              </p>
+            </div>
+            <div />
+          </div>
+        </div>
 
         <div
           style={{
@@ -341,37 +361,47 @@ export default function GrandPlanPage() {
   return (
     <div>
       {/* Header */}
-      <div style={{ marginBottom: 24 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16 }}>
-          <div>
-            <h2 style={{ margin: 0 }}>{grandPlan.title}</h2>
-            <p style={{ margin: "8px 0 0", opacity: 0.7 }}>
-              {grandPlan.startMonth} - {grandPlan.endMonth ?? "Ongoing"}
-            </p>
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button
+      <div style={{ marginBottom: 24, paddingBottom: 12, borderBottom: "1px solid #eee" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "end", gap: 12 }}>
+          <div />
+          <div style={{ textAlign: "center" }}>
+            <h2
+              style={{ margin: 0, fontSize: 28, fontWeight: 900, color: "#111", letterSpacing: 0.2, cursor: "pointer" }}
+              title="Click to edit Grand Plan"
+              role="button"
+              tabIndex={0}
               onClick={() => {
                 setNewTitle(grandPlan.title);
                 setNewStartMonth(grandPlan.startMonth);
                 setNewEndMonth(grandPlan.endMonth ?? "");
                 setShowEditModal(true);
               }}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" && e.key !== " ") return;
+                e.preventDefault();
+                setNewTitle(grandPlan.title);
+                setNewStartMonth(grandPlan.startMonth);
+                setNewEndMonth(grandPlan.endMonth ?? "");
+                setShowEditModal(true);
+              }}
+            >
+              {grandPlan.title}
+            </h2>
+            <div
               style={{
-                padding: "6px 10px",
-                fontSize: 14,
-                backgroundColor: "white",
-                border: "1px solid #ddd",
-                borderRadius: 6,
-                cursor: "pointer",
+                margin: "10px auto 0",
+                width: 56,
+                height: 4,
+                borderRadius: 999,
+                backgroundColor: APP_MAIN_COLOR,
                 opacity: 0.9,
               }}
-              title="Edit Grand Plan"
-              aria-label="Edit Grand Plan"
-            >
-              ✏️
-            </button>
+            />
+            <p style={{ margin: "8px 0 0", color: "#666", fontSize: 13 }}>
+              {grandPlan.startMonth} - {grandPlan.endMonth ?? "Ongoing"}
+            </p>
           </div>
+          <div />
         </div>
       </div>
 
@@ -457,21 +487,21 @@ export default function GrandPlanPage() {
 	              flexWrap: "wrap",
 	            }}
 	          >
-	            <button
-	              onClick={() => handleAddMilestone(null)}
-	              style={{
-	                padding: "8px 16px",
-	                fontSize: 13,
-	                fontWeight: 600,
-	                backgroundColor: "white",
-	                color: activeCategory.color,
-	                border: `2px dashed ${activeCategory.color}`,
-	                borderRadius: 6,
-	                cursor: "pointer",
-	              }}
-	            >
-	              + Add another goal
-	            </button>
+		            <button
+		              onClick={() => handleAddMilestone(null)}
+		              style={{
+		                padding: "8px 16px",
+		                fontSize: 13,
+		                fontWeight: 600,
+		                backgroundColor: "white",
+		                color: activeCategory.color,
+		                border: `2px solid ${activeCategory.color}`,
+		                borderRadius: 20,
+		                cursor: "pointer",
+		              }}
+		            >
+		              + Add another goal
+		            </button>
 	            <div
 	              style={{
 	                display: "flex",
@@ -494,20 +524,21 @@ export default function GrandPlanPage() {
 	                <span style={{ color: "#4caf50", fontWeight: 700 }}>✓</span> Completed
 	              </span>
 	            </div>
-	            <button
-	              onClick={() => handleDeleteCategory(activeCategory.id)}
-	              style={{
-	                padding: "4px 8px",
-                fontSize: 12,
-                backgroundColor: "#f44336",
-                color: "white",
-                border: "none",
-                borderRadius: 4,
-                cursor: "pointer",
-              }}
-            >
-              Delete Category
-            </button>
+		            <button
+		              onClick={() => handleDeleteCategory(activeCategory.id)}
+		              style={{
+		                padding: "8px 16px",
+		                fontSize: 13,
+		                fontWeight: 600,
+		                backgroundColor: "white",
+		                color: "#f44336",
+		                border: "2px solid #f44336",
+		                borderRadius: 20,
+		                cursor: "pointer",
+		              }}
+		            >
+		              Delete Category
+		            </button>
           </div>
 
           <MilestoneTreeView

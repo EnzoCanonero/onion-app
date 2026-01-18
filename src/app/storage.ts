@@ -89,7 +89,7 @@ export function loadState(): AppStateV0 {
         ? (plan as any).pinnedMilestoneIds.filter((id: any) => typeof id === "string")
         : [];
 
-      // If no pins exist yet, derive them from any linked tasks/templates (legacy linking behavior)
+      // If no pins exist yet, derive them from any linked tasks (legacy linking behavior)
       const derivedPins: string[] = [];
       const seen = new Set<string>();
       const pushIfValid = (id: unknown) => {
@@ -101,7 +101,6 @@ export function loadState(): AppStateV0 {
       };
 
       (plan as any).tasks?.forEach((t: any) => pushIfValid(t?.linkedMilestoneId));
-      (plan as any).templates?.forEach((t: any) => pushIfValid(t?.linkedMilestoneId));
 
       const pinsToUse = existingPins.length > 0 ? existingPins : derivedPins;
       (plan as any).pinnedMilestoneIds =
@@ -313,6 +312,22 @@ export function setShutdownNote(
   const ym = ymFromDate(date);
   const { state: withDay, day } = getOrCreateDay(state, date, ym);
   return updateDay(withDay, { ...day, shutdownNote: note });
+}
+
+// v10: Per-day focus template -> milestone assignment (Daily-only UI, does not change Month templates)
+export function setFocusTemplateMilestoneForDay(
+  state: AppStateV0,
+  date: DateISO,
+  templateId: string,
+  milestoneId: string | undefined
+): AppStateV0 {
+  const ym = ymFromDate(date);
+  const { state: withDay, day } = getOrCreateDay(state, date, ym);
+  const prev = day.focusMilestoneByTemplateId ?? {};
+  const nextMap = { ...prev };
+  if (milestoneId && milestoneId.trim()) nextMap[templateId] = milestoneId;
+  else delete nextMap[templateId];
+  return updateDay(withDay, { ...day, focusMilestoneByTemplateId: nextMap });
 }
 
 // v2: Task tree editing functions
@@ -767,7 +782,17 @@ export function deleteGrandPlan(state: AppStateV0): AppStateV0 {
     });
     cleanedMonths[ym] = { ...plan, tasks: cleanedTasks, pinnedMilestoneIds: [] };
   }
-  return { ...state, grandPlan: undefined, months: cleanedMonths };
+
+  const cleanedDays: Record<string, DayEntry> = {};
+  for (const [date, day] of Object.entries(state.days)) {
+    if (!day.focusMilestoneByTemplateId) {
+      cleanedDays[date] = day;
+      continue;
+    }
+    cleanedDays[date] = { ...day, focusMilestoneByTemplateId: undefined };
+  }
+
+  return { ...state, grandPlan: undefined, months: cleanedMonths, days: cleanedDays };
 }
 
 // Category CRUD
@@ -839,9 +864,24 @@ export function deleteCategory(state: AppStateV0, categoryId: string): AppStateV
     cleanedMonths[ym] = { ...plan, tasks: cleanedTasks, templates: cleanedTemplates, pinnedMilestoneIds: nextPinned };
   }
 
+  const cleanedDays: Record<string, DayEntry> = {};
+  for (const [date, day] of Object.entries(state.days)) {
+    const prev = day.focusMilestoneByTemplateId;
+    if (!prev) {
+      cleanedDays[date] = day;
+      continue;
+    }
+    const nextMap: Record<string, string> = {};
+    for (const [templateId, milestoneId] of Object.entries(prev)) {
+      if (!milestoneIds.has(milestoneId)) nextMap[templateId] = milestoneId;
+    }
+    cleanedDays[date] = { ...day, focusMilestoneByTemplateId: Object.keys(nextMap).length > 0 ? nextMap : undefined };
+  }
+
   return {
     ...state,
     months: cleanedMonths,
+    days: cleanedDays,
     grandPlan: {
       ...state.grandPlan,
       categories: state.grandPlan.categories.filter((c) => c.id !== categoryId),
@@ -970,9 +1010,24 @@ export function deleteMilestone(state: AppStateV0, milestoneId: string, cascadeC
     cleanedMonths[ym] = { ...plan, tasks: cleanedTasks, templates: cleanedTemplates, pinnedMilestoneIds: nextPinned };
   }
 
+  const cleanedDays: Record<string, DayEntry> = {};
+  for (const [date, day] of Object.entries(state.days)) {
+    const prev = day.focusMilestoneByTemplateId;
+    if (!prev) {
+      cleanedDays[date] = day;
+      continue;
+    }
+    const nextMap: Record<string, string> = {};
+    for (const [templateId, msId] of Object.entries(prev)) {
+      if (!toDelete.has(msId)) nextMap[templateId] = msId;
+    }
+    cleanedDays[date] = { ...day, focusMilestoneByTemplateId: Object.keys(nextMap).length > 0 ? nextMap : undefined };
+  }
+
   return {
     ...state,
     months: cleanedMonths,
+    days: cleanedDays,
     grandPlan: {
       ...state.grandPlan,
       milestones: state.grandPlan.milestones.filter((m) => !toDelete.has(m.id)),
@@ -1060,9 +1115,8 @@ export function getMilestonesInMonth(state: AppStateV0, ym: YM): MilestoneNode[]
   // Prefer explicit month pins first (in user order)
   (plan.pinnedMilestoneIds ?? []).forEach((id) => push(id));
 
-  // Also include any milestones referenced by tasks/templates (legacy / safety)
+  // Also include any milestones referenced by tasks (legacy / safety)
   plan.tasks.forEach((t) => push(t.linkedMilestoneId));
-  plan.templates.forEach((t) => push(t.linkedMilestoneId));
 
   return orderedIds.map((id) => byId.get(id)!).filter(Boolean);
 }

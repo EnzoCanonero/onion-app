@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { DateISO, YM, MeetingEntry } from "../app/types";
 import { getTodayDate, ymFromDate, makeId, loadState, saveState, addMeeting } from "../app/storage";
+import { APP_MAIN_COLOR } from "../app/theme";
 import CalendarGrid from "./CalendarGrid";
 import DateContextMenu from "./DateContextMenu";
 import MeetingFormModal from "./MeetingFormModal";
@@ -17,6 +18,10 @@ export default function DatePickerModal({ currentDate, onSelectDate, onClose }: 
   const [contextMenuDate, setContextMenuDate] = useState<DateISO | null>(null);
   const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 });
   const [showMeetingForm, setShowMeetingForm] = useState(false);
+
+  const paperBgColor = "#fbfaf7";
+  const paperBgPattern =
+    "radial-gradient(circle at 1px 1px, rgba(0,0,0,0.06) 1px, transparent 0)";
 
   const handleDayClick = (date: DateISO, event: React.MouseEvent) => {
     setContextMenuDate(date);
@@ -85,16 +90,42 @@ export default function DatePickerModal({ currentDate, onSelectDate, onClose }: 
           top: "50%",
           left: "50%",
           transform: "translate(-50%, -50%)",
-          background: "white",
-          padding: 30,
-          borderRadius: 12,
-          boxShadow: "0 8px 16px rgba(0,0,0,0.2)",
+          backgroundColor: paperBgColor,
+          backgroundImage: paperBgPattern,
+          backgroundSize: "24px 24px",
+          padding: 24,
+          borderRadius: 14,
+          border: "2px solid #eee",
+          boxShadow: "0 12px 34px rgba(0,0,0,0.18)",
           zIndex: 1001,
-          minWidth: 400,
-          maxWidth: 500,
+          minWidth: 420,
+          maxWidth: 520,
         }}
       >
-        <h2 style={{ marginTop: 0, marginBottom: 20 }}>Select Date</h2>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 16 }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 900, color: "#333" }}>Calendar</div>
+            <div style={{ fontSize: 12, color: "#666", marginTop: 4 }}>
+              Click a day to open options (go to date / add meeting)
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              padding: "6px 10px",
+              fontSize: 14,
+              fontWeight: 900,
+              backgroundColor: "white",
+              border: "1px solid #ddd",
+              borderRadius: 10,
+              cursor: "pointer",
+              color: "#666",
+            }}
+            title="Close"
+          >
+            ✕
+          </button>
+        </div>
 
         <CalendarGrid
           currentMonth={viewMonth}
@@ -110,10 +141,11 @@ export default function DatePickerModal({ currentDate, onSelectDate, onClose }: 
               flex: 1,
               padding: "10px 20px",
               fontSize: 14,
-              fontWeight: 600,
-              background: "#f0f0f0",
-              border: "1px solid #ddd",
-              borderRadius: 6,
+              fontWeight: 800,
+              backgroundColor: "white",
+              color: APP_MAIN_COLOR,
+              border: `2px dashed ${APP_MAIN_COLOR}`,
+              borderRadius: 12,
               cursor: "pointer",
             }}
           >

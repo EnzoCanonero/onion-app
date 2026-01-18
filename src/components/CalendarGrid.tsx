@@ -1,5 +1,6 @@
 import type { DateISO, YM } from "../app/types";
 import { getTodayDate } from "../app/storage";
+import { APP_MAIN_COLOR } from "../app/theme";
 
 interface CalendarGridProps {
   currentMonth: YM;
@@ -56,6 +57,19 @@ function formatMonthYear(ym: YM): string {
   return date.toLocaleDateString("en-US", { month: "long", year: "numeric" });
 }
 
+function withHexAlpha(color: string, alphaHex: string): string {
+  const normalizedAlpha = /^[0-9a-fA-F]{2}$/.test(alphaHex) ? alphaHex : "10";
+  if (/^#[0-9a-fA-F]{3}$/.test(color)) {
+    const r = color[1];
+    const g = color[2];
+    const b = color[3];
+    return `#${r}${r}${g}${g}${b}${b}${normalizedAlpha}`;
+  }
+  if (/^#[0-9a-fA-F]{6}$/.test(color)) return `${color}${normalizedAlpha}`;
+  if (/^#[0-9a-fA-F]{8}$/.test(color)) return `${color.slice(0, 7)}${normalizedAlpha}`;
+  return color;
+}
+
 export default function CalendarGrid({
   currentMonth,
   selectedDate,
@@ -74,7 +88,7 @@ export default function CalendarGrid({
           justifyContent: "space-between",
           alignItems: "center",
           marginBottom: 16,
-          padding: "0 8px",
+          padding: "0 4px",
         }}
       >
         <button
@@ -83,16 +97,18 @@ export default function CalendarGrid({
             padding: "8px 12px",
             fontSize: 18,
             backgroundColor: "white",
-            border: "1px solid #ddd",
-            borderRadius: 6,
+            border: "2px solid #eee",
+            borderRadius: 12,
             cursor: "pointer",
-            fontWeight: 600,
+            fontWeight: 900,
+            boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
           }}
+          title="Previous month"
         >
           ‹
         </button>
 
-        <h3 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>
+        <h3 style={{ margin: 0, fontSize: 18, fontWeight: 900, color: "#333" }}>
           {formatMonthYear(currentMonth)}
         </h3>
 
@@ -102,11 +118,13 @@ export default function CalendarGrid({
             padding: "8px 12px",
             fontSize: 18,
             backgroundColor: "white",
-            border: "1px solid #ddd",
-            borderRadius: 6,
+            border: "2px solid #eee",
+            borderRadius: 12,
             cursor: "pointer",
-            fontWeight: 600,
+            fontWeight: 900,
+            boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
           }}
+          title="Next month"
         >
           ›
         </button>
@@ -126,10 +144,11 @@ export default function CalendarGrid({
             key={day}
             style={{
               textAlign: "center",
-              fontSize: 12,
-              fontWeight: 600,
+              fontSize: 11,
+              fontWeight: 900,
               color: "#666",
               padding: "8px 0",
+              letterSpacing: 0.5,
             }}
           >
             {day}
@@ -146,21 +165,32 @@ export default function CalendarGrid({
         }}
       >
         {cells.map((cell) => {
+          const highlightBg = withHexAlpha(APP_MAIN_COLOR, "12");
           const baseStyle: React.CSSProperties = {
-            padding: "10px",
+            padding: "10px 0",
             textAlign: "center",
             cursor: "pointer",
-            borderRadius: 6,
-            fontSize: 14,
-            fontWeight: cell.isCurrentMonth ? 500 : 400,
-            color: cell.isCurrentMonth ? "#000" : "#999",
-            backgroundColor: cell.isSelected ? "#e3f2fd" : "white",
-            border: cell.isToday ? "2px solid #2196f3" : "1px solid #e0e0e0",
-            transition: "background-color 0.2s",
+            borderRadius: 12,
+            fontSize: 13,
+            fontWeight: cell.isCurrentMonth ? 900 : 700,
+            color: cell.isCurrentMonth ? "#222" : "#999",
+            backgroundColor: cell.isSelected ? highlightBg : "rgba(255,255,255,0.92)",
+            border: cell.isSelected
+              ? `2px solid ${APP_MAIN_COLOR}`
+              : cell.isToday
+              ? `2px dashed ${APP_MAIN_COLOR}`
+              : "1px solid #e6e6e6",
+            boxShadow: cell.isSelected
+              ? `0 10px 22px ${withHexAlpha(APP_MAIN_COLOR, "1a")}`
+              : "0 1px 0 rgba(0,0,0,0.04)",
+            transform: "translateY(0px)",
+            transition: "transform 120ms ease, background-color 120ms ease, box-shadow 120ms ease, border-color 120ms ease",
           };
 
           const hoverStyle: React.CSSProperties = {
-            backgroundColor: cell.isSelected ? "#e3f2fd" : "#f5f5f5",
+            backgroundColor: cell.isSelected ? withHexAlpha(APP_MAIN_COLOR, "18") : "rgba(0,0,0,0.03)",
+            transform: "translateY(-1px)",
+            boxShadow: "0 8px 18px rgba(0,0,0,0.12)",
           };
 
           return (
@@ -174,6 +204,7 @@ export default function CalendarGrid({
               onMouseLeave={(e) => {
                 Object.assign(e.currentTarget.style, baseStyle);
               }}
+              title={cell.date}
             >
               {cell.dayOfMonth}
             </div>

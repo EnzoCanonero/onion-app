@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import type { DateISO } from "../app/types";
 import { formatDateDisplay } from "../app/storage";
+import { APP_MAIN_COLOR } from "../app/theme";
 
 interface DateContextMenuProps {
   date: DateISO;
@@ -68,10 +69,11 @@ export default function DateContextMenu({
           position: "fixed",
           top: adjustedY,
           left: adjustedX,
-          backgroundColor: "white",
-          border: "1px solid #ddd",
-          borderRadius: 8,
-          boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+          backgroundColor: "rgba(255,255,255,0.96)",
+          border: "2px solid #eee",
+          borderLeft: `6px solid ${APP_MAIN_COLOR}`,
+          borderRadius: 12,
+          boxShadow: "0 10px 26px rgba(0,0,0,0.16)",
           zIndex: 2001,
           minWidth: menuWidth,
           overflow: "hidden",
@@ -84,7 +86,7 @@ export default function DateContextMenu({
             padding: "12px 16px",
             borderBottom: "1px solid #e0e0e0",
             fontSize: 13,
-            fontWeight: 600,
+            fontWeight: 900,
             color: "#666",
           }}
         >
