@@ -26,8 +26,7 @@ import {
   setDailyReminderTemplates,
   toggleReminderChecked,
   getMilestonesInMonth,
-  getTemplatesForMilestone,
-  getStandaloneTemplates,
+  setFocusTemplateMilestoneForDay,
   formatTime,
   appendDayEvent,
 } from "../app/storage";
@@ -63,12 +62,26 @@ export default function DailyAgendaPage() {
   if (!plan) {
     return (
       <div>
-        <div style={{ marginBottom: 24 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16 }}>
-            <div>
-              <h2 style={{ margin: 0 }}>Daily</h2>
-              <p style={{ margin: "8px 0 0", opacity: 0.7 }}>{dateSafe}</p>
+        <div style={{ marginBottom: 24, paddingBottom: 12, borderBottom: "1px solid #eee" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "end", gap: 12 }}>
+            <div />
+            <div style={{ textAlign: "center" }}>
+              <h2 style={{ margin: 0, fontSize: 28, fontWeight: 900, color: "#111", letterSpacing: 0.2 }}>
+                Daily
+              </h2>
+              <div
+                style={{
+                  margin: "10px auto 0",
+                  width: 56,
+                  height: 4,
+                  borderRadius: 999,
+                  backgroundColor: APP_MAIN_COLOR,
+                  opacity: 0.9,
+                }}
+              />
+              <p style={{ margin: "8px 0 0", color: "#666", fontSize: 13 }}>{dateSafe}</p>
             </div>
+            <div />
           </div>
         </div>
 
@@ -243,19 +256,16 @@ export default function DailyAgendaPage() {
   const scheduledTemplatesForTimeline = useMemo(() => {
     const milestonesById = new Map(state.grandPlan?.milestones.map((m) => [m.id, m] as const) ?? []);
     const categoriesById = new Map(state.grandPlan?.categories.map((c) => [c.id, c] as const) ?? []);
+    const focusMilestoneByTemplateId = day.focusMilestoneByTemplateId ?? {};
 
     return plan.templates
       .filter((t) => isTemplateScheduledForWeekday(t.daysOfWeek, weekday))
       .filter((t) => !t.isSuspended)
-      .filter((t) => {
-        const linked = typeof t.linkedMilestoneId === "string" ? t.linkedMilestoneId : null;
-        return !linked || !completedMilestoneIds.has(linked);
-      })
       .map((t) => {
-        const linked = typeof t.linkedMilestoneId === "string" ? t.linkedMilestoneId : null;
-        const milestone = linked ? milestonesById.get(linked) : undefined;
+        const milestoneId = focusMilestoneByTemplateId[t.id];
+        const milestone = milestoneId ? milestonesById.get(milestoneId) : undefined;
         const category = milestone ? categoriesById.get(milestone.categoryId) : undefined;
-        const color = category?.color ?? (linked ? APP_MAIN_COLOR : "#607d8b");
+        const color = category?.color ?? APP_MAIN_COLOR;
         return {
           id: t.id,
           title: t.title,
@@ -264,20 +274,26 @@ export default function DailyAgendaPage() {
           color,
         };
       });
-  }, [plan.templates, state.grandPlan, weekday, completedMilestoneIds]);
+  }, [plan.templates, state.grandPlan, weekday, day.focusMilestoneByTemplateId]);
 
   const eligibleFocusTemplates = useMemo(() => {
     return plan.templates.filter((t) => {
-      const linked = typeof t.linkedMilestoneId === "string" ? t.linkedMilestoneId : null;
-      if (linked && completedMilestoneIds.has(linked)) return false;
       if (t.isSuspended && t.id !== activeTemplateId) return false;
       return true;
     });
-  }, [plan.templates, completedMilestoneIds, activeTemplateId]);
+  }, [plan.templates, activeTemplateId]);
 
   const eligibleFocusTemplatesTodayCount = useMemo(() => {
     return eligibleFocusTemplates.filter((t) => isTemplateScheduledForWeekday(t.daysOfWeek, weekday)).length;
   }, [eligibleFocusTemplates, weekday]);
+
+  const focusMilestoneOptions = useMemo(() => {
+    return getMilestonesInMonth(state, ym).map((m) => ({
+      id: m.id,
+      title: m.title,
+      disabled: m.status === "COMPLETED",
+    }));
+  }, [state, ym]);
 
   const handleTaskSelectionConfirm = (primaryId: string | undefined, secondaryIds: string[]) => {
     mutate((s0) => {
@@ -642,14 +658,28 @@ export default function DailyAgendaPage() {
 
   return (
     <div>
-      <div style={{ marginBottom: 24 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16 }}>
-          <div>
-            <h2 style={{ margin: 0 }}>Daily</h2>
-            <p style={{ margin: "8px 0 0", opacity: 0.7 }}>
+      <div style={{ marginBottom: 24, paddingBottom: 12, borderBottom: "1px solid #eee" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "end", gap: 12 }}>
+          <div />
+          <div style={{ textAlign: "center" }}>
+            <h2 style={{ margin: 0, fontSize: 28, fontWeight: 900, color: "#111", letterSpacing: 0.2 }}>
+              Daily
+            </h2>
+            <div
+              style={{
+                margin: "10px auto 0",
+                width: 56,
+                height: 4,
+                borderRadius: 999,
+                backgroundColor: APP_MAIN_COLOR,
+                opacity: 0.9,
+              }}
+            />
+            <p style={{ margin: "8px 0 0", color: "#666", fontSize: 13 }}>
               {dateSafe} · Plan your day, track focus sessions, and reflect on progress
             </p>
           </div>
+          <div />
         </div>
       </div>
 
@@ -1385,7 +1415,7 @@ export default function DailyAgendaPage() {
             />
           )}
 
-          {/* v6.3: Focus Sessions - Grouped by milestone */}
+          {/* Focus Sessions */}
           {plan.templates.length === 0 ? (
             <>
               <h3 style={{ marginTop: 32 }}>⏱️ Focus Sessions</h3>
@@ -1399,89 +1429,41 @@ export default function DailyAgendaPage() {
             <>
               <h3 style={{ marginTop: 32 }}>⏱️ Focus Sessions</h3>
               <div style={{ marginBottom: 24 }}>
-                {/* Sessions grouped by milestone */}
-                {getMilestonesInMonth(state, ym)
-                  .filter((milestone) => milestone.status !== "COMPLETED")
-                  .map((milestone) => {
-                    const category = state.grandPlan?.categories.find((c) => c.id === milestone.categoryId);
-                    const milestoneTemplates = getTemplatesForMilestone(state, ym, milestone.id).filter((t) =>
-                      isTemplateScheduledForWeekday(t.daysOfWeek, weekday)
-                    );
-	                    const visibleMilestoneTemplates = milestoneTemplates.filter(
-	                      (t) => !t.isSuspended || t.id === activeTemplateId
-	                    );
-	                    if (visibleMilestoneTemplates.length === 0) return null;
-	                    const categoryColor = category?.color ?? APP_MAIN_COLOR;
-	                    return (
-	                      <div key={milestone.id} style={{ marginBottom: 16 }}>
-	                        {visibleMilestoneTemplates.map((template) => (
-	                          <FocusTemplateCard
-	                            key={template.id}
-	                            template={template}
-	                            accentColor={categoryColor}
-	                            milestoneTitle={milestone.title}
-	                            activeSessionId={day.activeSessionId}
-	                            completedSessions={sessionsForDate}
-	                            onStartSession={startSession}
-	                            onEndSession={endSession}
-	                          />
-                        ))}
-                      </div>
-                    );
-                  })}
+                {eligibleFocusTemplatesTodayCount === 0 ? (
+                  <p style={{ fontSize: 13, color: "#999", fontStyle: "italic" }}>
+                    No focus templates scheduled for today. Edit templates in Month Setup to assign weekdays.
+                  </p>
+                ) : (
+                  eligibleFocusTemplates
+                    .filter((t) => isTemplateScheduledForWeekday(t.daysOfWeek, weekday))
+                    .map((template) => {
+                      const milestoneId = day.focusMilestoneByTemplateId?.[template.id];
+                      const milestone = milestoneId
+                        ? state.grandPlan?.milestones.find((m) => m.id === milestoneId)
+                        : undefined;
+                      const categoryColor = milestone
+                        ? state.grandPlan?.categories.find((c) => c.id === milestone.categoryId)?.color
+                        : undefined;
+                      const accentColor = categoryColor ?? APP_MAIN_COLOR;
 
-                {/* Standalone templates */}
-                {(() => {
-                  const standaloneTemplates = getStandaloneTemplates(state, ym).filter((t) =>
-                    isTemplateScheduledForWeekday(t.daysOfWeek, weekday)
-                  );
-                  const visibleStandaloneTemplates = standaloneTemplates.filter(
-                    (t) => !t.isSuspended || t.id === activeTemplateId
-                  );
-                  if (visibleStandaloneTemplates.length === 0) return null;
-                  return (
-                    <div style={{ marginBottom: 16 }}>
-                      <div
-                        style={{
-                          fontSize: 13,
-                          fontWeight: 600,
-                          color: "#607d8b",
-                          marginBottom: 8,
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 6,
-                        }}
-                      >
-                        <span
-                          style={{
-                            width: 10,
-                            height: 10,
-                            borderRadius: "50%",
-                            backgroundColor: "#607d8b",
-                            display: "inline-block",
-                          }}
-                        />
-                        Standalone Sessions
-                      </div>
-                      {visibleStandaloneTemplates.map((template) => (
+                      return (
                         <FocusTemplateCard
                           key={template.id}
                           template={template}
+                          accentColor={accentColor}
+                          milestoneTitle={milestone?.title}
+                          milestoneOptions={focusMilestoneOptions.length > 0 ? focusMilestoneOptions : undefined}
+                          selectedMilestoneId={milestoneId}
+                          onChangeMilestoneId={(nextMilestoneId) =>
+                            mutate((s0) => setFocusTemplateMilestoneForDay(s0, dateSafe, template.id, nextMilestoneId))
+                          }
                           activeSessionId={day.activeSessionId}
                           completedSessions={sessionsForDate}
                           onStartSession={startSession}
                           onEndSession={endSession}
                         />
-                      ))}
-                    </div>
-                  );
-                })()}
-
-                {/* Show message if eligible templates exist, but none are scheduled for today */}
-                {eligibleFocusTemplatesTodayCount === 0 && (
-                  <p style={{ fontSize: 13, color: "#999", fontStyle: "italic" }}>
-                    No focus templates scheduled for today. Edit templates in Month Setup to assign weekdays.
-                  </p>
+                      );
+                    })
                 )}
               </div>
             </>
