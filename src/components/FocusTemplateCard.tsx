@@ -11,6 +11,9 @@ type FocusTemplateCardProps = {
   onEndSession: () => void;
   accentColor?: string;
   milestoneTitle?: string;
+  milestoneOptions?: { id: string; title: string; disabled?: boolean }[];
+  selectedMilestoneId?: string;
+  onChangeMilestoneId?: (milestoneId: string | undefined) => void;
 };
 
 export default function FocusTemplateCard({
@@ -21,6 +24,9 @@ export default function FocusTemplateCard({
   onEndSession,
   accentColor,
   milestoneTitle,
+  milestoneOptions,
+  selectedMilestoneId,
+  onChangeMilestoneId,
 }: FocusTemplateCardProps) {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [showStartConfirm, setShowStartConfirm] = useState(false);
@@ -100,7 +106,7 @@ export default function FocusTemplateCard({
     >
       {/* Header */}
 	      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-	        <div>
+        <div>
           {milestoneTitle ? (
             <div style={{ fontSize: 12, fontWeight: 800, color: stripeColor, marginBottom: 10 }}>
               {milestoneTitle}
@@ -110,6 +116,32 @@ export default function FocusTemplateCard({
           <div style={{ fontSize: 13, color: "#666" }}>
             📅 Planned: {template.plannedStart} - {template.plannedEnd} ({plannedMinutes} min) · 🗓 {formatWeekdays(template.daysOfWeek)}
           </div>
+          {milestoneOptions && onChangeMilestoneId ? (
+            <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 12, fontWeight: 800, color: "#666" }}>Link to:</span>
+              <select
+                value={selectedMilestoneId ?? ""}
+                onChange={(e) => onChangeMilestoneId(e.target.value ? e.target.value : undefined)}
+                style={{
+                  padding: "6px 10px",
+                  borderRadius: 10,
+                  border: `1px solid ${stripeColor}`,
+                  backgroundColor: "white",
+                  color: "#333",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  outline: "none",
+                }}
+              >
+                <option value="">No milestone</option>
+                {milestoneOptions.map((m) => (
+                  <option key={m.id} value={m.id} disabled={m.disabled}>
+                    {m.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
         </div>
 
         {/* Play/Stop Button - Hide Play if completed */}

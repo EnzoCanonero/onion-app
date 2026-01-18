@@ -1,5 +1,5 @@
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Navigate } from "react-router-dom";
 import type { MonthPlan, YM, TaskNode, MilestoneNode, MilestoneStatus, FocusTemplate, Weekday } from "../app/types";
 import {
@@ -16,8 +16,6 @@ import {
   deleteTaskFromMonth,
   updateTaskInMonth,
   updateMilestone,
-  getTemplatesForMilestone,
-  getStandaloneTemplates,
 } from "../app/storage";
 import { MON_FRI, WEEKDAY_ORDER, WEEKDAY_SHORT, formatWeekdays, sortWeekdays } from "../app/weekdays";
 import { useDateNavigation } from "../contexts/DateNavigationContext";
@@ -115,7 +113,6 @@ function TaskGroup({
   tasks,
   milestoneId,
   milestoneStatus,
-  templates,
   boardSize,
   onUpdateBoardSize,
   links,
@@ -125,9 +122,6 @@ function TaskGroup({
   onUpdateTask,
   onDeleteTask,
   onMarkMilestoneCompleted,
-  onAddTemplate,
-  onUpdateTemplate,
-  onDeleteTemplate,
   hideAddButton = false,
   hideTitle = false,
   chromeless = false,
@@ -137,7 +131,6 @@ function TaskGroup({
   tasks: TaskNode[];
   milestoneId: string | null;
   milestoneStatus?: MilestoneStatus;
-  templates: FocusTemplate[];
   boardSize: { width: number; height: number };
   onUpdateBoardSize: (next: { width: number; height: number }) => void;
   links: { from: string; to: string }[];
@@ -150,68 +143,15 @@ function TaskGroup({
   ) => void;
   onDeleteTask: (taskId: string) => void;
   onMarkMilestoneCompleted?: (milestoneId: string) => void;
-  onAddTemplate: (milestoneId: string | null) => void;
-  onUpdateTemplate: (
-    templateId: string,
-    updates: Partial<Pick<FocusTemplate, "title" | "plannedStart" | "plannedEnd" | "daysOfWeek" | "isSuspended">>
-  ) => void;
-  onDeleteTemplate: (templateId: string) => void;
   hideAddButton?: boolean;
   hideTitle?: boolean;
   chromeless?: boolean;
 }) {
-  const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
-  const [editTemplateTitle, setEditTemplateTitle] = useState("");
-  const [editTemplateStart, setEditTemplateStart] = useState("");
-  const [editTemplateEnd, setEditTemplateEnd] = useState("");
-  const [editTemplateDays, setEditTemplateDays] = useState<Weekday[]>([]);
-
   const [taskModalTaskId, setTaskModalTaskId] = useState<string | null>(null);
   const [taskModalTitle, setTaskModalTitle] = useState("");
   const [taskModalDescription, setTaskModalDescription] = useState("");
   const [taskModalNotes, setTaskModalNotes] = useState("");
   const [taskModalError, setTaskModalError] = useState<string | null>(null);
-
-  const suspendInfoStorageKey = "focustree.templateSuspendInfo.dismissed";
-  const [suspendInfoDismissed, setSuspendInfoDismissed] = useState(() => {
-    try {
-      return window.localStorage.getItem(suspendInfoStorageKey) === "1";
-    } catch {
-      return false;
-    }
-  });
-  const [suspendInfo, setSuspendInfo] = useState<{ action: "suspend" | "resume"; title: string } | null>(null);
-
-  const startTemplateEdit = (template: FocusTemplate) => {
-    setEditingTemplateId(template.id);
-    setEditTemplateTitle(template.title);
-    setEditTemplateStart(template.plannedStart);
-    setEditTemplateEnd(template.plannedEnd);
-    setEditTemplateDays(template.daysOfWeek ? [...template.daysOfWeek] : []);
-  };
-
-  const saveTemplateEdit = () => {
-    if (editingTemplateId && editTemplateTitle.trim()) {
-      onUpdateTemplate(editingTemplateId, {
-        title: editTemplateTitle.trim(),
-        plannedStart: editTemplateStart || "09:00",
-        plannedEnd: editTemplateEnd || "10:00",
-        daysOfWeek: editTemplateDays.length > 0 ? editTemplateDays : undefined,
-      });
-    }
-    setEditingTemplateId(null);
-    setEditTemplateTitle("");
-    setEditTemplateStart("");
-    setEditTemplateEnd("");
-    setEditTemplateDays([]);
-  };
-
-  const toggleTemplateDay = (day: Weekday) => {
-    setEditTemplateDays((prev) => {
-      if (prev.includes(day)) return prev.filter((d) => d !== day);
-      return sortWeekdays([...prev, day]);
-    });
-  };
 
   const isCompleted = milestoneStatus === "COMPLETED";
   const accentColor = isCompleted ? "#FFD700" : color;
@@ -219,11 +159,6 @@ function TaskGroup({
   const noteBorderColor = chromeless ? "#000" : accentColor;
   const noteBackgroundColor = chromeless ? "rgba(255,255,255,0.96)" : "#fffde7";
   const canEditBoard = !isCompleted;
-
-  useEffect(() => {
-    if (!isCompleted) return;
-    setEditingTemplateId(null);
-  }, [isCompleted]);
 
   const baseBoardWidth = Math.max(800, boardSize.width);
   const baseBoardHeight = Math.max(600, boardSize.height);
@@ -361,9 +296,20 @@ function TaskGroup({
       return;
     }
 
-    const [a, b] = linkFromTaskId < taskId ? [linkFromTaskId, taskId] : [taskId, linkFromTaskId];
-    const exists = links.some((l) => l.from === a && l.to === b);
-    const next = exists ? links.filter((l) => !(l.from === a && l.to === b)) : [...links, { from: a, to: b }];
+    const exists = links.some(
+      (l) =>
+        (l.from === linkFromTaskId && l.to === taskId) ||
+        (l.from === taskId && l.to === linkFromTaskId)
+    );
+    const next = exists
+      ? links.filter(
+          (l) =>
+            !(
+              (l.from === linkFromTaskId && l.to === taskId) ||
+              (l.from === taskId && l.to === linkFromTaskId)
+            )
+        )
+      : [...links, { from: linkFromTaskId, to: taskId }];
     onUpdateLinks(next);
     setLinkFromTaskId(null);
   };
@@ -573,15 +519,6 @@ function TaskGroup({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [taskModalTaskId]);
 
-  const focusBoxStyle: CSSProperties = {
-    marginTop: 18,
-    padding: 16,
-    backgroundColor: "transparent",
-    borderRadius: 0,
-    border: "none",
-    boxShadow: "none",
-  };
-
   return (
     <div style={{ marginBottom: 16 }}>
       {!hideTitle ? (
@@ -758,8 +695,8 @@ function TaskGroup({
         {isLinkMode && !isCompleted && (
           <div style={{ marginBottom: 10, fontSize: 12, fontWeight: 800, color: "#f44336" }}>
             {linkFromTaskId
-              ? "Click another task to create a red link (click the same task to cancel)."
-              : "Click a task, then click another to create a red link."}
+              ? "Click another task to create a red arrow (click the same task to cancel)."
+              : "Click a task, then click another to create a red arrow."}
           </div>
         )}
 
@@ -839,34 +776,92 @@ function TaskGroup({
 		                  backgroundColor: "white",
 		                }}
 		              >
-	                {/* Links layer */}
-	                <svg
-	                  width={baseBoardWidth}
-	                  height={baseBoardHeight}
-	                  style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 1 }}
-	                >
-	                  {links.map((l) => {
-	                    const a = taskRectsById.get(l.from);
-	                    const b = taskRectsById.get(l.to);
-	                    if (!a || !b) return null;
-	                    const x1 = a.x + a.w / 2;
-	                    const y1 = a.y + a.h / 2;
-	                    const x2 = b.x + b.w / 2;
-	                    const y2 = b.y + b.h / 2;
-	                    return (
-	                      <line
-	                        key={`${l.from}:${l.to}`}
-	                        x1={x1}
-	                        y1={y1}
-	                        x2={x2}
-	                        y2={y2}
-	                        stroke="#f44336"
-	                        strokeWidth={2}
-	                        opacity={0.9}
-	                      />
-	                    );
-	                  })}
-	                </svg>
+		                {/* Links layer */}
+		                <svg
+		                  width={baseBoardWidth}
+		                  height={baseBoardHeight}
+		                  style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 1 }}
+		                >
+		                  {(() => {
+		                    const markerId = `taskLinkArrow-${milestoneId ?? "standalone"}`;
+		                    const LINK_COLOR = "#f44336";
+		                    const DEFAULT_GAP = 12;
+
+		                    const getEdgePoint = (rect: TaskRect, dirX: number, dirY: number) => {
+		                      const cx = rect.x + rect.w / 2;
+		                      const cy = rect.y + rect.h / 2;
+		                      const absX = Math.abs(dirX);
+		                      const absY = Math.abs(dirY);
+		                      const hx = rect.w / 2;
+		                      const hy = rect.h / 2;
+		                      const tx = absX > 1e-6 ? hx / absX : Number.POSITIVE_INFINITY;
+		                      const ty = absY > 1e-6 ? hy / absY : Number.POSITIVE_INFINITY;
+		                      const t = Math.min(tx, ty);
+		                      return { x: cx + dirX * t, y: cy + dirY * t };
+		                    };
+
+		                    return (
+		                      <>
+		                        <defs>
+		                          <marker
+		                            id={markerId}
+		                            viewBox="0 0 10 10"
+		                            markerWidth="6"
+		                            markerHeight="6"
+		                            refX="10"
+		                            refY="5"
+		                            orient="auto"
+		                          >
+		                            <path d="M 0 0 L 10 5 L 0 10 z" fill={LINK_COLOR} />
+		                          </marker>
+		                        </defs>
+
+		                        {links.map((l) => {
+		                          const a = taskRectsById.get(l.from);
+		                          const b = taskRectsById.get(l.to);
+		                          if (!a || !b) return null;
+
+		                          const ax = a.x + a.w / 2;
+		                          const ay = a.y + a.h / 2;
+		                          const bx = b.x + b.w / 2;
+		                          const by = b.y + b.h / 2;
+		                          const dx = bx - ax;
+		                          const dy = by - ay;
+		                          const len = Math.hypot(dx, dy);
+		                          if (!Number.isFinite(len) || len < 1e-6) return null;
+
+		                          const ux = dx / len;
+		                          const uy = dy / len;
+
+		                          const aEdge = getEdgePoint(a, ux, uy);
+		                          const bEdge = getEdgePoint(b, -ux, -uy);
+		                          const edgeDist = Math.hypot(bEdge.x - aEdge.x, bEdge.y - aEdge.y);
+		                          const gap = Math.max(0, Math.min(DEFAULT_GAP, edgeDist / 2 - 8));
+
+		                          const x1 = aEdge.x + ux * gap;
+		                          const y1 = aEdge.y + uy * gap;
+		                          const x2 = bEdge.x - ux * gap;
+		                          const y2 = bEdge.y - uy * gap;
+
+		                          return (
+		                            <line
+		                              key={`${l.from}:${l.to}`}
+		                              x1={x1}
+		                              y1={y1}
+		                              x2={x2}
+		                              y2={y2}
+		                              stroke={LINK_COLOR}
+		                              strokeWidth={2}
+		                              strokeLinecap="round"
+		                              opacity={0.9}
+		                              markerEnd={`url(#${markerId})`}
+		                            />
+		                          );
+		                        })}
+		                      </>
+		                    );
+		                  })()}
+		                </svg>
 
 	                {tasks.map((task) => {
 	                const rect = taskRectsById.get(task.id);
@@ -1008,357 +1003,6 @@ function TaskGroup({
 	          </div>
 	        </div>
 
-        {/* Focus Templates (bottom box) */}
-        <div style={focusBoxStyle}>
-          <div style={{ fontSize: 14, fontWeight: 800, color: uiAccent, display: "flex", alignItems: "center", gap: 6, marginBottom: 12 }}>
-            ⏱️ Focus Templates
-          </div>
-
-          <div style={{ flex: "1 1 auto" }}>
-            {templates.length === 0 ? (
-              <p style={{ fontSize: 14, color: "#999", fontStyle: "italic", margin: 0 }}>
-                No focus templates
-              </p>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {templates.map((template) => (
-			                  <div
-			                    key={template.id}
-			                    style={{
-			                      display: "flex",
-			                      alignItems: "center",
-			                      gap: 12,
-			                      padding: "12px 12px",
-			                      backgroundColor: "transparent",
-			                      borderRadius: 0,
-			                      border: "none",
-			                      opacity: template.isSuspended ? 0.55 : 1,
-		                      flexWrap: "wrap",
-		                    }}
-		                  >
-                    {editingTemplateId === template.id ? (
-                      <>
-                        <input
-                          type="text"
-                          value={editTemplateTitle}
-                          onChange={(e) => setEditTemplateTitle(e.target.value)}
-                          placeholder="Template name"
-	                          style={{
-	                            flex: "1 1 160px",
-	                            minWidth: 140,
-	                            padding: "7px 12px",
-	                            fontSize: 14,
-	                            border: `1px solid ${uiAccent}`,
-	                            borderRadius: 4,
-	                            outline: "none",
-	                          }}
-	                        />
-                        <input
-                          type="time"
-                          value={editTemplateStart}
-                          onChange={(e) => setEditTemplateStart(e.target.value)}
-	                          style={{
-	                            width: 92,
-	                            padding: "7px 10px",
-	                            fontSize: 14,
-	                            border: `1px solid ${uiAccent}`,
-	                            borderRadius: 4,
-	                          }}
-	                        />
-	                        <span style={{ fontSize: 13, color: "#999" }}>-</span>
-	                        <input
-	                          type="time"
-	                          value={editTemplateEnd}
-	                          onChange={(e) => setEditTemplateEnd(e.target.value)}
-	                          style={{
-	                            width: 92,
-	                            padding: "7px 10px",
-	                            fontSize: 14,
-	                            border: `1px solid ${uiAccent}`,
-	                            borderRadius: 4,
-	                          }}
-	                        />
-	                        <div style={{ flexBasis: "100%", display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginTop: 4 }}>
-	                          <span style={{ fontSize: 13, fontWeight: 800, color: "#666" }}>Days:</span>
-	                          {WEEKDAY_ORDER.map((day) => {
-	                            const isSelected = editTemplateDays.includes(day);
-	                            return (
-	                              <button
-	                                key={day}
-	                                type="button"
-	                                onClick={() => toggleTemplateDay(day)}
-	                                style={{
-	                                  padding: "5px 10px",
-	                                  fontSize: 13,
-	                                  fontWeight: 800,
-	                                  backgroundColor: isSelected ? uiAccent : "white",
-	                                  color: isSelected ? "white" : uiAccent,
-	                                  border: `1px solid ${uiAccent}`,
-                                  borderRadius: 999,
-                                  cursor: "pointer",
-                                }}
-                                title={WEEKDAY_SHORT[day]}
-                              >
-                                {WEEKDAY_SHORT[day]}
-                              </button>
-                            );
-                          })}
-	                          <button
-	                            type="button"
-	                            onClick={() => setEditTemplateDays([...MON_FRI])}
-	                            style={{
-	                              padding: "5px 10px",
-	                              fontSize: 13,
-	                              fontWeight: 800,
-	                              backgroundColor: "white",
-	                              color: uiAccent,
-	                              border: `1px dashed ${uiAccent}`,
-                              borderRadius: 999,
-                              cursor: "pointer",
-                            }}
-                          >
-                            Mon–Fri
-                          </button>
-	                          <button
-	                            type="button"
-	                            onClick={() => setEditTemplateDays([])}
-	                            style={{
-	                              padding: "5px 10px",
-	                              fontSize: 13,
-	                              fontWeight: 800,
-	                              backgroundColor: "white",
-	                              color: uiAccent,
-	                              border: `1px dashed ${uiAccent}`,
-                              borderRadius: 999,
-                              cursor: "pointer",
-                            }}
-                          >
-                            Any
-                          </button>
-                        </div>
-
-                        <div style={{ flexBasis: "100%", display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
-	                          <button
-	                            onClick={saveTemplateEdit}
-	                            style={{
-	                              padding: "7px 12px",
-	                              fontSize: 13,
-	                              backgroundColor: "#4caf50",
-	                              color: "white",
-	                              border: "none",
-                              borderRadius: 4,
-                              cursor: "pointer",
-                            }}
-                          >
-                            ✓
-                          </button>
-	                          <button
-	                            onClick={() => setEditingTemplateId(null)}
-	                            style={{
-	                              padding: "7px 12px",
-	                              fontSize: 13,
-	                              backgroundColor: "transparent",
-	                              color: "#666",
-	                              border: "1px solid #ddd",
-                              borderRadius: 4,
-                              cursor: "pointer",
-                            }}
-                          >
-                            ✕
-                          </button>
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <span
-                          onClick={() => {
-                            if (isCompleted) return;
-                            startTemplateEdit(template);
-                          }}
-	                          style={{
-	                            flex: "1 1 160px",
-	                            minWidth: 140,
-	                            fontSize: 14,
-	                            cursor: isCompleted ? "default" : "pointer",
-	                            color: chromeless ? "#000" : "#333",
-	                            fontWeight: 800,
-	                          }}
-                        >
-                          {template.title}
-                        </span>
-                        <span
-	                          style={{
-	                            fontSize: 13,
-	                            color: chromeless ? "#000" : "#888",
-	                            flex: "1 1 140px",
-	                            minWidth: 120,
-	                            textAlign: "center",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {formatWeekdays(template.daysOfWeek)}
-                        </span>
-                        <span
-	                          style={{
-	                            fontSize: 13,
-	                            color: chromeless ? "#000" : "#888",
-	                            fontFamily: "monospace",
-	                            flex: "0 0 auto",
-	                            whiteSpace: "nowrap",
-                          }}
-		                        >
-		                          {template.plannedStart}-{template.plannedEnd}
-		                        </span>
-		                        {!isCompleted && (
-		                          <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
-		                            <button
-	                              onClick={(e) => {
-	                                e.stopPropagation();
-	                                const nextSuspended = !template.isSuspended;
-	                                onUpdateTemplate(template.id, { isSuspended: nextSuspended });
-	                                if (!suspendInfoDismissed) {
-	                                  setSuspendInfo({
-	                                    action: nextSuspended ? "suspend" : "resume",
-	                                    title: template.title,
-	                                  });
-	                                }
-	                              }}
-	                              title={template.isSuspended ? "Resume focus template" : "Suspend focus template"}
-			                              style={{
-			                                padding: "4px 10px",
-			                                fontSize: 13,
-			                                backgroundColor: "transparent",
-			                                color: template.isSuspended ? "#2e7d32" : "#f9a825",
-			                                border: "none",
-		                                cursor: "pointer",
-		                                opacity: 0.8,
-		                              }}
-		                            >
-		                              {template.isSuspended ? "▶" : "⏸"}
-		                            </button>
-		                            <button
-	                              onClick={(e) => {
-	                                e.stopPropagation();
-	                                if (window.confirm(`Delete focus template "${template.title}"?`)) {
-	                                  onDeleteTemplate(template.id);
-	                                }
-	                              }}
-			                              style={{
-			                                padding: "4px 10px",
-			                                fontSize: 13,
-			                                backgroundColor: "transparent",
-			                                color: "#f44336",
-			                                border: "none",
-		                                cursor: "pointer",
-		                                opacity: 0.7,
-		                              }}
-		                            >
-		                              ✕
-		                            </button>
-		                          </div>
-		                        )}
-	                      </>
-	                    )}
-	                  </div>
-	                ))}
-	              </div>
-	            )}
-	          </div>
-
-	          {suspendInfo && (
-	            <div
-	              style={{
-	                position: "fixed",
-	                inset: 0,
-	                backgroundColor: "rgba(0, 0, 0, 0.5)",
-	                display: "flex",
-	                alignItems: "center",
-	                justifyContent: "center",
-	                zIndex: 1000,
-	              }}
-	              onClick={() => setSuspendInfo(null)}
-	            >
-	              <div
-	                style={{
-	                  backgroundColor: "white",
-	                  borderRadius: 12,
-	                  padding: 24,
-	                  maxWidth: 460,
-	                  width: "90%",
-	                  boxShadow: "0 10px 40px rgba(0,0,0,0.3)",
-	                }}
-	                onClick={(e) => e.stopPropagation()}
-	              >
-	                <h3 style={{ margin: 0, marginBottom: 10 }}>
-	                  {suspendInfo.action === "suspend" ? "Focus template suspended" : "Focus template resumed"}
-	                </h3>
-	                <p style={{ margin: 0, marginBottom: 14, color: "#666", fontSize: 13, lineHeight: 1.5 }}>
-	                  {suspendInfo.action === "suspend"
-	                    ? `“${suspendInfo.title}” will stop appearing in the Daily page, but any past sessions remain saved. You can bring it back anytime with ▶.`
-	                    : `“${suspendInfo.title}” will appear again in the Daily page on its scheduled days.`}
-	                </p>
-	                <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-	                  <button
-	                    onClick={() => {
-	                      try {
-	                        window.localStorage.setItem(suspendInfoStorageKey, "1");
-	                      } catch {
-	                        // ignore
-	                      }
-	                      setSuspendInfoDismissed(true);
-	                      setSuspendInfo(null);
-	                    }}
-	                    style={{
-	                      padding: "8px 12px",
-	                      backgroundColor: "white",
-	                      border: "1px solid #ddd",
-	                      borderRadius: 6,
-	                      cursor: "pointer",
-	                      color: "#666",
-	                    }}
-	                  >
-	                    Don't show again
-	                  </button>
-	                  <button
-	                    onClick={() => setSuspendInfo(null)}
-	                    style={{
-	                      padding: "8px 12px",
-	                      backgroundColor: "#111",
-	                      border: "none",
-	                      borderRadius: 6,
-	                      cursor: "pointer",
-	                      color: "white",
-	                      fontWeight: 700,
-	                    }}
-	                  >
-	                    OK
-	                  </button>
-	                </div>
-	              </div>
-	            </div>
-	          )}
-
-          {!isCompleted && (
-            <div style={{ marginTop: 12 }}>
-              <button
-                onClick={() => onAddTemplate(milestoneId)}
-                style={{
-                  padding: "4.95px 9.9px",
-                  fontSize: 9.9,
-                  fontWeight: 700,
-                  backgroundColor: "white",
-                  color: chromeless ? "#000" : color,
-                  border: chromeless ? "2px solid #000" : `2px solid ${color}`,
-                  borderRadius: 6,
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                + Add Focus Template
-              </button>
-            </div>
-          )}
-        </div>
       </div>
 
 	      {taskModalTaskId && (
@@ -1528,6 +1172,442 @@ function TaskGroup({
   );
 }
 
+function FocusTemplatesPanel({
+  templates,
+  onAddTemplate,
+  onUpdateTemplate,
+  onDeleteTemplate,
+}: {
+  templates: FocusTemplate[];
+  onAddTemplate: () => void;
+  onUpdateTemplate: (
+    templateId: string,
+    updates: Partial<Pick<FocusTemplate, "title" | "plannedStart" | "plannedEnd" | "daysOfWeek" | "isSuspended">>
+  ) => void;
+  onDeleteTemplate: (templateId: string) => void;
+}) {
+  const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
+  const [editTemplateTitle, setEditTemplateTitle] = useState("");
+  const [editTemplateStart, setEditTemplateStart] = useState("");
+  const [editTemplateEnd, setEditTemplateEnd] = useState("");
+  const [editTemplateDays, setEditTemplateDays] = useState<Weekday[]>([]);
+
+  const suspendInfoStorageKey = "focustree.templateSuspendInfo.dismissed";
+  const [suspendInfoDismissed, setSuspendInfoDismissed] = useState(() => {
+    try {
+      return window.localStorage.getItem(suspendInfoStorageKey) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const [suspendInfo, setSuspendInfo] = useState<{ action: "suspend" | "resume"; title: string } | null>(null);
+
+  const startTemplateEdit = (template: FocusTemplate) => {
+    setEditingTemplateId(template.id);
+    setEditTemplateTitle(template.title);
+    setEditTemplateStart(template.plannedStart);
+    setEditTemplateEnd(template.plannedEnd);
+    setEditTemplateDays(template.daysOfWeek ? [...template.daysOfWeek] : []);
+  };
+
+  const saveTemplateEdit = () => {
+    if (editingTemplateId && editTemplateTitle.trim()) {
+      onUpdateTemplate(editingTemplateId, {
+        title: editTemplateTitle.trim(),
+        plannedStart: editTemplateStart || "09:00",
+        plannedEnd: editTemplateEnd || "10:00",
+        daysOfWeek: editTemplateDays.length > 0 ? editTemplateDays : undefined,
+      });
+    }
+    setEditingTemplateId(null);
+    setEditTemplateTitle("");
+    setEditTemplateStart("");
+    setEditTemplateEnd("");
+    setEditTemplateDays([]);
+  };
+
+  const toggleTemplateDay = (day: Weekday) => {
+    setEditTemplateDays((prev) => {
+      if (prev.includes(day)) return prev.filter((d) => d !== day);
+      return sortWeekdays([...prev, day]);
+    });
+  };
+
+  const panelBgColor = "#fbfaf7";
+  const panelBgPattern =
+    "radial-gradient(circle at 1px 1px, rgba(0,0,0,0.06) 1px, transparent 0)";
+
+  const uiAccent = APP_MAIN_COLOR;
+
+  return (
+    <div
+      style={{
+        border: "2px solid #eee",
+        borderRadius: 12,
+        padding: 20,
+        backgroundColor: panelBgColor,
+        backgroundImage: panelBgPattern,
+        backgroundSize: "24px 24px",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          gap: 12,
+          flexWrap: "wrap",
+          marginBottom: 12,
+        }}
+      >
+        <div>
+          <div style={{ fontSize: 16, fontWeight: 900, color: "#333", display: "flex", alignItems: "center", gap: 8 }}>
+            ⏱️ Focus templates
+          </div>
+          <div style={{ fontSize: 13, color: "#666", marginTop: 6, lineHeight: 1.5 }}>
+            Define monthly focus sessions here. You can link them to milestones day-by-day in the Daily page.
+          </div>
+        </div>
+
+        <button
+          onClick={onAddTemplate}
+          style={{
+            padding: "8px 16px",
+            fontSize: 14,
+            fontWeight: 600,
+            backgroundColor: "white",
+            color: "#666",
+            border: "2px dashed #ccc",
+            borderRadius: 20,
+            cursor: "pointer",
+            whiteSpace: "nowrap",
+          }}
+        >
+          + Add Focus Template
+        </button>
+      </div>
+
+      {templates.length === 0 ? (
+        <p style={{ fontSize: 14, color: "#999", fontStyle: "italic", margin: 0 }}>
+          No focus templates yet
+        </p>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {templates.map((template) => (
+            <div
+              key={template.id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+                padding: "12px 12px",
+                backgroundColor: "rgba(255,255,255,0.92)",
+                borderRadius: 12,
+                border: "1px solid #e6e6e6",
+                opacity: template.isSuspended ? 0.55 : 1,
+                flexWrap: "wrap",
+              }}
+            >
+              {editingTemplateId === template.id ? (
+                <>
+                  <input
+                    type="text"
+                    value={editTemplateTitle}
+                    onChange={(e) => setEditTemplateTitle(e.target.value)}
+                    placeholder="Template name"
+                    style={{
+                      flex: "1 1 160px",
+                      minWidth: 140,
+                      padding: "7px 12px",
+                      fontSize: 14,
+                      border: `1px solid ${uiAccent}`,
+                      borderRadius: 4,
+                      outline: "none",
+                    }}
+                  />
+                  <input
+                    type="time"
+                    value={editTemplateStart}
+                    onChange={(e) => setEditTemplateStart(e.target.value)}
+                    style={{
+                      width: 92,
+                      padding: "7px 10px",
+                      fontSize: 14,
+                      border: `1px solid ${uiAccent}`,
+                      borderRadius: 4,
+                    }}
+                  />
+                  <span style={{ fontSize: 13, color: "#999" }}>-</span>
+                  <input
+                    type="time"
+                    value={editTemplateEnd}
+                    onChange={(e) => setEditTemplateEnd(e.target.value)}
+                    style={{
+                      width: 92,
+                      padding: "7px 10px",
+                      fontSize: 14,
+                      border: `1px solid ${uiAccent}`,
+                      borderRadius: 4,
+                    }}
+                  />
+                  <div style={{ flexBasis: "100%", display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginTop: 4 }}>
+                    <span style={{ fontSize: 13, fontWeight: 800, color: "#666" }}>Days:</span>
+                    {WEEKDAY_ORDER.map((day) => {
+                      const isSelected = editTemplateDays.includes(day);
+                      return (
+                        <button
+                          key={day}
+                          type="button"
+                          onClick={() => toggleTemplateDay(day)}
+                          style={{
+                            padding: "5px 10px",
+                            fontSize: 13,
+                            fontWeight: 800,
+                            backgroundColor: isSelected ? uiAccent : "white",
+                            color: isSelected ? "white" : uiAccent,
+                            border: `1px solid ${uiAccent}`,
+                            borderRadius: 999,
+                            cursor: "pointer",
+                          }}
+                          title={WEEKDAY_SHORT[day]}
+                        >
+                          {WEEKDAY_SHORT[day]}
+                        </button>
+                      );
+                    })}
+                    <button
+                      type="button"
+                      onClick={() => setEditTemplateDays([...MON_FRI])}
+                      style={{
+                        padding: "5px 10px",
+                        fontSize: 13,
+                        fontWeight: 800,
+                        backgroundColor: "white",
+                        color: uiAccent,
+                        border: `1px dashed ${uiAccent}`,
+                        borderRadius: 999,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Mon–Fri
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditTemplateDays([])}
+                      style={{
+                        padding: "5px 10px",
+                        fontSize: 13,
+                        fontWeight: 800,
+                        backgroundColor: "white",
+                        color: uiAccent,
+                        border: `1px dashed ${uiAccent}`,
+                        borderRadius: 999,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Any
+                    </button>
+                  </div>
+
+                  <div style={{ flexBasis: "100%", display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
+                    <button
+                      onClick={saveTemplateEdit}
+                      style={{
+                        padding: "7px 12px",
+                        fontSize: 13,
+                        backgroundColor: "#4caf50",
+                        color: "white",
+                        border: "none",
+                        borderRadius: 4,
+                        cursor: "pointer",
+                      }}
+                    >
+                      ✓
+                    </button>
+                    <button
+                      onClick={() => setEditingTemplateId(null)}
+                      style={{
+                        padding: "7px 12px",
+                        fontSize: 13,
+                        backgroundColor: "transparent",
+                        color: "#666",
+                        border: "1px solid #ddd",
+                        borderRadius: 4,
+                        cursor: "pointer",
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <span
+                    onClick={() => startTemplateEdit(template)}
+                    style={{
+                      flex: "1 1 160px",
+                      minWidth: 140,
+                      fontSize: 15,
+                      cursor: "pointer",
+                      color: "#333",
+                      fontWeight: 900,
+                    }}
+                  >
+                    {template.title}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: 14,
+                      color: "#666",
+                      flex: "1 1 160px",
+                      minWidth: 140,
+                      textAlign: "center",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {formatWeekdays(template.daysOfWeek)}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: 14,
+                      color: "#666",
+                      fontFamily: "monospace",
+                      flex: "0 0 auto",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {template.plannedStart}-{template.plannedEnd}
+                  </span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const nextSuspended = !template.isSuspended;
+                        onUpdateTemplate(template.id, { isSuspended: nextSuspended });
+                        if (!suspendInfoDismissed) {
+                          setSuspendInfo({
+                            action: nextSuspended ? "suspend" : "resume",
+                            title: template.title,
+                          });
+                        }
+                      }}
+                      title={template.isSuspended ? "Resume focus template" : "Suspend focus template"}
+                      style={{
+                        padding: "4px 10px",
+                        fontSize: 13,
+                        backgroundColor: "transparent",
+                        color: template.isSuspended ? "#2e7d32" : "#f9a825",
+                        border: "none",
+                        cursor: "pointer",
+                        opacity: 0.8,
+                      }}
+                    >
+                      {template.isSuspended ? "▶" : "⏸"}
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (window.confirm(`Delete focus template "${template.title}"?`)) {
+                          onDeleteTemplate(template.id);
+                        }
+                      }}
+                      style={{
+                        padding: "4px 10px",
+                        fontSize: 13,
+                        backgroundColor: "transparent",
+                        color: "#f44336",
+                        border: "none",
+                        cursor: "pointer",
+                        opacity: 0.7,
+                      }}
+                      title="Delete focus template"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {suspendInfo && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={() => setSuspendInfo(null)}
+        >
+          <div
+            style={{
+              backgroundColor: "white",
+              borderRadius: 12,
+              padding: 24,
+              maxWidth: 460,
+              width: "90%",
+              boxShadow: "0 10px 40px rgba(0,0,0,0.3)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ margin: 0, marginBottom: 10 }}>
+              {suspendInfo.action === "suspend" ? "Focus template suspended" : "Focus template resumed"}
+            </h3>
+            <p style={{ margin: 0, marginBottom: 14, color: "#666", fontSize: 13, lineHeight: 1.5 }}>
+              {suspendInfo.action === "suspend"
+                ? `“${suspendInfo.title}” will stop appearing in the Daily page, but any past sessions remain saved. You can bring it back anytime with ▶.`
+                : `“${suspendInfo.title}” will appear again in the Daily page on its scheduled days.`}
+            </p>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button
+                onClick={() => {
+                  try {
+                    window.localStorage.setItem(suspendInfoStorageKey, "1");
+                  } catch {
+                    // ignore
+                  }
+                  setSuspendInfoDismissed(true);
+                  setSuspendInfo(null);
+                }}
+                style={{
+                  padding: "8px 12px",
+                  backgroundColor: "white",
+                  border: "1px solid #ddd",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  color: "#666",
+                }}
+              >
+                Don't show again
+              </button>
+              <button
+                onClick={() => setSuspendInfo(null)}
+                style={{
+                  padding: "8px 12px",
+                  backgroundColor: "#111",
+                  border: "none",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  color: "white",
+                  fontWeight: 700,
+                }}
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function MonthSetupPage() {
   const { selectedMonth } = useDateNavigation();
   const ymSafe = selectedMonth;
@@ -1592,7 +1672,6 @@ export default function MonthSetupPage() {
 
   // v6.3: Add focus template modal
   const [showAddTemplateModal, setShowAddTemplateModal] = useState(false);
-  const [addTemplateMilestoneId, setAddTemplateMilestoneId] = useState<string | null>(null);
   const [newTemplateTitle, setNewTemplateTitle] = useState("");
   const [newTemplateStart, setNewTemplateStart] = useState("09:00");
   const [newTemplateEnd, setNewTemplateEnd] = useState("10:00");
@@ -1690,7 +1769,6 @@ export default function MonthSetupPage() {
 
   // v6.1: Get standalone tasks (no linkedMilestoneId)
   const standaloneTasks = plan?.tasks.filter((t) => !t.linkedMilestoneId) ?? [];
-  const standaloneTemplates = getStandaloneTemplates(state, ymSafe);
 
   const scopeBgColor = "#fbfaf7";
   const scopeBgPattern =
@@ -1740,8 +1818,7 @@ export default function MonthSetupPage() {
     });
   };
 
-  const handleAddTemplate = (milestoneId: string | null) => {
-    setAddTemplateMilestoneId(milestoneId);
+  const handleAddTemplate = () => {
     setNewTemplateTitle("");
     setNewTemplateStart("09:00");
     setNewTemplateEnd("10:00");
@@ -1752,7 +1829,6 @@ export default function MonthSetupPage() {
 
   const closeAddTemplateModal = () => {
     setShowAddTemplateModal(false);
-    setAddTemplateMilestoneId(null);
     setNewTemplateTitle("");
     setNewTemplateStart("09:00");
     setNewTemplateEnd("10:00");
@@ -1786,16 +1862,9 @@ export default function MonthSetupPage() {
 			      plannedStart: newTemplateStart,
 			      plannedEnd: newTemplateEnd,
 	          daysOfWeek: newTemplateDays.length > 0 ? newTemplateDays : undefined,
-			      linkedMilestoneId: addTemplateMilestoneId,
 			      isSuspended: false,
 			    };
-		    const nextPinnedMilestoneIds =
-		      typeof addTemplateMilestoneId === "string" && addTemplateMilestoneId
-		        ? plan.pinnedMilestoneIds.includes(addTemplateMilestoneId)
-		          ? plan.pinnedMilestoneIds
-	          : [...plan.pinnedMilestoneIds, addTemplateMilestoneId]
-	        : plan.pinnedMilestoneIds;
-	    const nextPlan: MonthPlan = { ...plan, templates: [...plan.templates, newTemplate], pinnedMilestoneIds: nextPinnedMilestoneIds };
+	    const nextPlan: MonthPlan = { ...plan, templates: [...plan.templates, newTemplate] };
 	    handlePlanUpdate(nextPlan);
 	    closeAddTemplateModal();
 	  };
@@ -1865,9 +1934,9 @@ export default function MonthSetupPage() {
         fontFamily: "Georgia, serif"
       }}>
         <div style={{ maxWidth: 1200, margin: "0 auto" }}>
-          <h2 style={{ textAlign: "center", marginBottom: 8, fontSize: 28, color: "#5d4037" }}>
-            Monthly Report
-          </h2>
+	          <h2 style={{ textAlign: "center", marginBottom: 8, fontSize: 28, color: "#5d4037" }}>
+	            Monthly Report
+	          </h2>
           <p style={{ textAlign: "center", marginBottom: 32, opacity: 0.7, fontSize: 16 }}>
             {ymSafe}
           </p>
@@ -2073,11 +2142,24 @@ export default function MonthSetupPage() {
 	return (
 	  <div>
 	    {/* Header */}
-	    <div style={{ marginBottom: 24 }}>
-	      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16 }}>
-	        <div>
-	          <h2 style={{ margin: 0 }}>Month Plan</h2>
-	          <p style={{ margin: "8px 0 0", opacity: 0.7 }}>
+	    <div style={{ marginBottom: 24, paddingBottom: 12, borderBottom: "1px solid #eee" }}>
+	      <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "end", gap: 12 }}>
+	        <div />
+	        <div style={{ textAlign: "center" }}>
+	          <h2 style={{ margin: 0, fontSize: 28, fontWeight: 900, color: "#111", letterSpacing: 0.2 }}>
+	            Month Plan
+	          </h2>
+	          <div
+	            style={{
+	              margin: "10px auto 0",
+	              width: 56,
+	              height: 4,
+	              borderRadius: 999,
+	              backgroundColor: APP_MAIN_COLOR,
+	              opacity: 0.9,
+	            }}
+	          />
+	          <p style={{ margin: "8px 0 0", color: "#666", fontSize: 13 }}>
 	            {ymSafe}
 	            {plan ? (
 	              <>
@@ -2090,6 +2172,7 @@ export default function MonthSetupPage() {
 	            )}
 	          </p>
 	        </div>
+	        <div />
 	      </div>
 	    </div>
 
@@ -2263,7 +2346,7 @@ export default function MonthSetupPage() {
 		              marginBottom: 24,
 		            }}
 		          >
-	              {pinnedMilestones.length === 0 && standaloneTasks.length === 0 && standaloneTemplates.length === 0 && (
+	              {pinnedMilestones.length === 0 && standaloneTasks.length === 0 && plan.templates.length === 0 && (
 	                <div
 	                  style={{
 	                    padding: 12,
@@ -2290,15 +2373,12 @@ export default function MonthSetupPage() {
 	                  ? state.grandPlan?.categories.find((c) => c.id === milestone.categoryId) ?? null
 	                  : null;
 
-                const title = milestone
-                  ? `[${category?.title ?? "Category"}] ${milestone.title}`
-                  : "Standalone";
+		                const title = milestone
+		                  ? `[${category?.title ?? "Category"}] ${milestone.title}`
+		                  : "Standalone";
 
 		                const color = milestone ? category?.color ?? APP_MAIN_COLOR : "#000";
-	                const tasks = milestone ? getTasksForMilestone(milestone.id) : standaloneTasks;
-	                const templates = milestone
-	                  ? getTemplatesForMilestone(state, ymSafe, milestone.id)
-	                  : standaloneTemplates;
+		                const tasks = milestone ? getTasksForMilestone(milestone.id) : standaloneTasks;
 
 		                const scopeKey = milestone ? `milestone:${milestone.id}` : "standalone";
 		                const zoomStorageKey = `focustree:month-setup:board-zoom:${ymSafe}:${scopeKey}`;
@@ -2331,7 +2411,6 @@ export default function MonthSetupPage() {
 		                    tasks={tasks}
 		                    milestoneId={milestone ? milestone.id : null}
 		                    milestoneStatus={milestone?.status}
-		                    templates={templates}
 		                    boardSize={boardSize}
 		                    onUpdateBoardSize={handleUpdateBoardSize}
 			                    links={links}
@@ -2341,15 +2420,19 @@ export default function MonthSetupPage() {
 			                    onUpdateTask={handleUpdateTask}
 			                    onDeleteTask={handleDeleteTask}
 		                    onMarkMilestoneCompleted={milestone ? handleMarkMilestoneCompleted : undefined}
-		                    onAddTemplate={handleAddTemplate}
-	                    onUpdateTemplate={handleUpdateTemplate}
-	                    onDeleteTemplate={handleDeleteTemplate}
-	                    hideTitle
-	                    chromeless={!milestone}
+		                    hideTitle
+		                    chromeless={!milestone}
 		                  />
 		                );
 		              })()}
 	          </div>
+
+	          <FocusTemplatesPanel
+	            templates={plan.templates}
+	            onAddTemplate={handleAddTemplate}
+	            onUpdateTemplate={handleUpdateTemplate}
+	            onDeleteTemplate={handleDeleteTemplate}
+	          />
 
 	          {/* v5: Close Month Button */}
 	          <div style={{ textAlign: "center", marginTop: 48, paddingTop: 24, borderTop: "2px solid #ddd" }}>
@@ -2520,12 +2603,7 @@ export default function MonthSetupPage() {
                 onClick={(e) => e.stopPropagation()}
               >
 	                {(() => {
-	                  const accentColor =
-	                    addTemplateMilestoneId === null
-	                      ? "#000"
-	                      : state.grandPlan?.categories.find(
-	                          (c) => c.id === state.grandPlan?.milestones.find((m) => m.id === addTemplateMilestoneId)?.categoryId
-	                        )?.color ?? "#ff9800";
+	                  const accentColor = APP_MAIN_COLOR;
 
                   return (
                     <>
