@@ -13,8 +13,10 @@ import type {
   FocusTemplate,
   DailyReminderTemplate,
   DayLogEvent,
+  MeetingRecurrence,
 } from "./types";
 import { normalizeWeekdays } from "./weekdays";
+import { getVirtualTodayDate, getVirtualCurrentYM, getVirtualTimestamp } from "../contexts/VirtualClockContext";
 
 const KEY = "focustree.state";
 
@@ -118,6 +120,14 @@ export function loadState(): AppStateV0 {
           }
         });
       }
+    }
+
+    if (parsed.grandPlan?.milestones) {
+      parsed.grandPlan.milestones.forEach((m) => {
+        if (m.status === "COMPLETED" && !m.completedAt) {
+          m.completedAt = m.createdAt;
+        }
+      });
     }
 
     return parsed;
@@ -257,7 +267,7 @@ export function applyStatusToMonth(
           milestones: nextState.grandPlan.milestones.map((m) =>
             m.id === existing.linkedMilestoneId ? { ...m, status: "IN_PROGRESS" } : m
           ),
-          updatedAt: new Date().toISOString(),
+          updatedAt: getVirtualTimestamp(),
         },
       };
     }
@@ -453,7 +463,7 @@ export function findLastWorkingDay(state: AppStateV0, currentDate: DateISO, ym: 
 export function activateWorkingDay(state: AppStateV0, date: DateISO): AppStateV0 {
   const ym = ymFromDate(date);
   const { state: withDay, day } = getOrCreateDay(state, date, ym);
-  const startedAt = day.startedAt ?? new Date().toISOString();
+  const startedAt = day.startedAt ?? getVirtualTimestamp();
   return updateDay(withDay, { ...day, isWorkingDay: true, startedAt });
 }
 
@@ -462,7 +472,9 @@ export function closeDay(state: AppStateV0, date: DateISO): AppStateV0 {
   const ym = ymFromDate(date);
   const { state: withDay, day } = getOrCreateDay(state, date, ym);
 
-  const endedAt = new Date().toISOString();
+  if (day.isClosed) return withDay;
+
+  const endedAt = getVirtualTimestamp();
 
   // End any active session before closing
   let next = withDay;
@@ -475,13 +487,27 @@ export function closeDay(state: AppStateV0, date: DateISO): AppStateV0 {
     }
   }
 
-  return updateDay(next, { ...day, isClosed: true, activeSessionId: undefined, endedAt });
+  const updated = updateDay(next, { ...day, isClosed: true, activeSessionId: undefined, endedAt });
+  const hasEndedEvent = Array.isArray(day.events)
+    ? day.events.some((e) => e.kind === "SYSTEM" && e.text === "Day ended")
+    : false;
+  if (hasEndedEvent) return updated;
+  return appendDayEvent(updated, date, {
+    id: makeId("evt"),
+    at: endedAt,
+    kind: "SYSTEM",
+    text: "Day ended",
+  });
 }
 
 export function reopenDay(state: AppStateV0, date: DateISO): AppStateV0 {
   const ym = ymFromDate(date);
-  const { state: withDay, day } = getOrCreateDay(state, date, ym);
-  return updateDay(withDay, { ...day, isClosed: false, endedAt: undefined });
+  const reopened = reopenMonth(state, ym);
+  const { state: withDay, day } = getOrCreateDay(reopened, date, ym);
+  const cleanedEvents = Array.isArray(day.events)
+    ? day.events.filter((e) => !(e.kind === "SYSTEM" && e.text === "Day ended"))
+    : day.events;
+  return updateDay(withDay, { ...day, isClosed: false, endedAt: undefined, events: cleanedEvents });
 }
 
 // v5: Close/Reopen month functionality
@@ -489,16 +515,32 @@ export function closeMonth(state: AppStateV0, ym: YM): AppStateV0 {
   const plan = getMonth(state, ym);
   if (!plan) return state;
 
+  let next = state;
+
+  // If closing the current month, also close today's day (if it's open)
+  const today = getTodayDate();
+  if (today.slice(0, 7) === ym) {
+    const day0 = next.days[today];
+    if (day0 && !day0.isClosed && (day0.isWorkingDay === true || !!day0.activeSessionId)) {
+      next = closeDay(next, today);
+    }
+  }
+
   const closedPlan: MonthPlan = { ...plan, isClosed: true };
-  return upsertMonth(state, closedPlan);
+  return upsertMonth(next, closedPlan);
 }
 
 export function reopenMonth(state: AppStateV0, ym: YM): AppStateV0 {
-  const plan = getMonth(state, ym);
-  if (!plan) return state;
+  let next = state;
+  if (next.grandPlan?.isClosed) {
+    next = reopenGrandPlan(next);
+  }
+
+  const plan = getMonth(next, ym);
+  if (!plan) return next;
 
   const reopenedPlan: MonthPlan = { ...plan, isClosed: false };
-  return upsertMonth(state, reopenedPlan);
+  return upsertMonth(next, reopenedPlan);
 }
 
 export function formatTime(isoTimestamp: string): string {
@@ -526,7 +568,7 @@ export function countDescendants(tasks: TaskNode[], taskId: string): number {
 // v3: Date navigation utility functions
 
 export function getTodayDate(): DateISO {
-  return new Date().toISOString().slice(0, 10) as DateISO;
+  return getVirtualTodayDate();
 }
 
 export function isValidDateISO(dateStr: string): boolean {
@@ -537,7 +579,7 @@ export function isValidDateISO(dateStr: string): boolean {
 }
 
 export function getCurrentYM(): YM {
-  return getTodayDate().slice(0, 7) as YM;
+  return getVirtualCurrentYM();
 }
 
 export function formatDateDisplay(date: DateISO): string {
@@ -555,8 +597,72 @@ export function formatDateDisplay(date: DateISO): string {
 
 // v4: Meeting management functions
 
+function parseDateParts(date: DateISO): { year: number; month: number; day: number } {
+  const [year, month, day] = date.split("-").map(Number);
+  return { year, month, day };
+}
+
+function toDateISO(year: number, month: number, day: number): DateISO {
+  const yyyy = String(year).padStart(4, "0");
+  const mm = String(month).padStart(2, "0");
+  const dd = String(day).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}` as DateISO;
+}
+
+function addDaysISO(date: DateISO, days: number): DateISO {
+  const { year, month, day } = parseDateParts(date);
+  const next = new Date(Date.UTC(year, month - 1, day + days));
+  return toDateISO(next.getUTCFullYear(), next.getUTCMonth() + 1, next.getUTCDate());
+}
+
+function addMonthsISO(date: DateISO, months: number): DateISO {
+  const { year, month, day } = parseDateParts(date);
+  const targetMonthIndex = month - 1 + months;
+  const targetYear = year + Math.floor(targetMonthIndex / 12);
+  const normalizedMonth = ((targetMonthIndex % 12) + 12) % 12;
+  const targetMonth = normalizedMonth + 1;
+  const daysInTargetMonth = new Date(Date.UTC(targetYear, targetMonth, 0)).getUTCDate();
+  const clampedDay = Math.min(day, daysInTargetMonth);
+  return toDateISO(targetYear, targetMonth, clampedDay);
+}
+
+function listRecurringDates(startDate: DateISO, recurrence: MeetingRecurrence, horizonMonths: number): DateISO[] {
+  if (recurrence === "NONE") return [startDate];
+  const horizonDate = addMonthsISO(startDate, horizonMonths);
+  const dates: DateISO[] = [startDate];
+  let current = startDate;
+  while (true) {
+    current =
+      recurrence === "MONTHLY"
+        ? addMonthsISO(current, 1)
+        : addDaysISO(current, recurrence === "WEEKLY" ? 7 : 14);
+    if (current > horizonDate) break;
+    dates.push(current);
+  }
+  return dates;
+}
+
 export function addMeeting(state: AppStateV0, meeting: MeetingEntry): AppStateV0 {
   return { ...state, meetings: [meeting, ...state.meetings] };
+}
+
+export function addMeetingWithRecurrence(
+  state: AppStateV0,
+  meeting: MeetingEntry,
+  horizonMonths = 12
+): AppStateV0 {
+  const recurrence = meeting.recurrence ?? "NONE";
+  if (recurrence === "NONE") return addMeeting(state, meeting);
+  const dates = listRecurringDates(meeting.date, recurrence, horizonMonths);
+  const createdAt = meeting.createdAt;
+  const meetings = dates.map((date, index) => ({
+    ...meeting,
+    id: index === 0 ? meeting.id : makeId("meeting"),
+    date,
+    ym: ymFromDate(date),
+    createdAt,
+  }));
+  return { ...state, meetings: [...meetings, ...state.meetings] };
 }
 
 export function updateMeeting(
@@ -636,12 +742,13 @@ export function createGrandPlan(
   startMonth: YM,
   endMonth?: YM
 ): AppStateV0 {
-  const now = new Date().toISOString();
+  const now = getVirtualTimestamp();
   const grandPlan: GrandPlan = {
     id: makeId("gp"),
     title,
     startMonth,
     endMonth,
+    isClosed: false,
     categories: [],
     milestones: [],
     createdAt: now,
@@ -656,7 +763,7 @@ export function createGrandPlanWithExamples(
   startMonth: YM,
   endMonth?: YM
 ): AppStateV0 {
-  const now = new Date().toISOString();
+  const now = getVirtualTimestamp();
 
   // Create example categories
   const catWork: Category = {
@@ -748,6 +855,7 @@ export function createGrandPlanWithExamples(
     title,
     startMonth,
     endMonth,
+    isClosed: false,
     categories: [catWork, catHealth],
     milestones: [workMs1, workMs2, workMs3, healthMs1, healthMs2, healthMs3],
     createdAt: now,
@@ -755,6 +863,51 @@ export function createGrandPlanWithExamples(
   };
 
   return { ...state, grandPlan };
+}
+
+// v11: Close/Reopen grand plan functionality
+export function closeGrandPlan(state: AppStateV0): AppStateV0 {
+  if (!state.grandPlan) return state;
+  const now = getVirtualTimestamp();
+  const currentYM = now.slice(0, 7) as YM;
+  const endMonth = currentYM < state.grandPlan.startMonth ? state.grandPlan.startMonth : currentYM;
+
+  let next = state;
+
+  // Close today's day (if open)
+  const today = getTodayDate();
+  const day0 = next.days[today];
+  if (day0 && !day0.isClosed && (day0.isWorkingDay === true || !!day0.activeSessionId)) {
+    next = closeDay(next, today);
+  }
+
+  // Close current month (if it exists)
+  next = closeMonth(next, currentYM);
+
+  return {
+    ...next,
+    grandPlan: {
+      ...state.grandPlan,
+      isClosed: true,
+      closedAt: now,
+      endMonth,
+      updatedAt: now,
+    },
+  };
+}
+
+export function reopenGrandPlan(state: AppStateV0): AppStateV0 {
+  if (!state.grandPlan) return state;
+  const now = getVirtualTimestamp();
+  return {
+    ...state,
+    grandPlan: {
+      ...state.grandPlan,
+      isClosed: false,
+      closedAt: undefined,
+      updatedAt: now,
+    },
+  };
 }
 
 export function updateGrandPlan(
@@ -767,7 +920,7 @@ export function updateGrandPlan(
     grandPlan: {
       ...state.grandPlan,
       ...updates,
-      updatedAt: new Date().toISOString(),
+      updatedAt: getVirtualTimestamp(),
     },
   };
 }
@@ -805,14 +958,14 @@ export function addCategory(state: AppStateV0, title: string, color: string): Ap
     title,
     color,
     order: maxOrder + 1,
-    createdAt: new Date().toISOString(),
+    createdAt: getVirtualTimestamp(),
   };
   return {
     ...state,
     grandPlan: {
       ...state.grandPlan,
       categories: [...state.grandPlan.categories, category],
-      updatedAt: new Date().toISOString(),
+      updatedAt: getVirtualTimestamp(),
     },
   };
 }
@@ -830,7 +983,7 @@ export function updateCategory(
       categories: state.grandPlan.categories.map((c) =>
         c.id === categoryId ? { ...c, ...updates } : c
       ),
-      updatedAt: new Date().toISOString(),
+      updatedAt: getVirtualTimestamp(),
     },
   };
 }
@@ -886,7 +1039,7 @@ export function deleteCategory(state: AppStateV0, categoryId: string): AppStateV
       ...state.grandPlan,
       categories: state.grandPlan.categories.filter((c) => c.id !== categoryId),
       milestones: state.grandPlan.milestones.filter((m) => m.categoryId !== categoryId),
-      updatedAt: new Date().toISOString(),
+      updatedAt: getVirtualTimestamp(),
     },
   };
 }
@@ -913,7 +1066,7 @@ export function reorderCategory(state: AppStateV0, categoryId: string, direction
         if (c.id === sorted[swapIdx].id) return { ...c, order: currentOrder };
         return c;
       }),
-      updatedAt: new Date().toISOString(),
+      updatedAt: getVirtualTimestamp(),
     },
   };
 }
@@ -924,7 +1077,8 @@ export function addMilestone(
   state: AppStateV0,
   categoryId: string,
   title: string,
-  parentId: string | null
+  parentId: string | null,
+  description?: string
 ): AppStateV0 {
   if (!state.grandPlan) return state;
 
@@ -939,9 +1093,10 @@ export function addMilestone(
     categoryId,
     parentId,
     title,
+    description: description?.trim() || undefined,
     status: "NOT_STARTED",
     order: maxOrder + 1,
-    createdAt: new Date().toISOString(),
+    createdAt: getVirtualTimestamp(),
   };
 
   return {
@@ -949,7 +1104,7 @@ export function addMilestone(
     grandPlan: {
       ...state.grandPlan,
       milestones: [...state.grandPlan.milestones, milestone],
-      updatedAt: new Date().toISOString(),
+      updatedAt: getVirtualTimestamp(),
     },
   };
 }
@@ -960,14 +1115,26 @@ export function updateMilestone(
   updates: Partial<Pick<MilestoneNode, "title" | "description" | "status" | "parentId">>
 ): AppStateV0 {
   if (!state.grandPlan) return state;
+  const now = getVirtualTimestamp();
   return {
     ...state,
     grandPlan: {
       ...state.grandPlan,
       milestones: state.grandPlan.milestones.map((m) =>
-        m.id === milestoneId ? { ...m, ...updates } : m
+        m.id === milestoneId
+          ? {
+              ...m,
+              ...updates,
+              completedAt:
+                updates.status === undefined
+                  ? m.completedAt
+                  : updates.status === "COMPLETED"
+                    ? m.completedAt ?? now
+                    : undefined,
+            }
+          : m
       ),
-      updatedAt: new Date().toISOString(),
+      updatedAt: getVirtualTimestamp(),
     },
   };
 }
@@ -1031,7 +1198,7 @@ export function deleteMilestone(state: AppStateV0, milestoneId: string, cascadeC
     grandPlan: {
       ...state.grandPlan,
       milestones: state.grandPlan.milestones.filter((m) => !toDelete.has(m.id)),
-      updatedAt: new Date().toISOString(),
+      updatedAt: getVirtualTimestamp(),
     },
   };
 }
@@ -1064,7 +1231,7 @@ export function reorderMilestone(state: AppStateV0, milestoneId: string, directi
         if (m.id === siblings[swapIdx].id) return { ...m, order: currentOrder };
         return m;
       }),
-      updatedAt: new Date().toISOString(),
+      updatedAt: getVirtualTimestamp(),
     },
   };
 }
@@ -1076,7 +1243,8 @@ export function addTaskWithMilestone(
   ym: YM,
   title: string,
   milestoneId: string,
-  parentId: string | null = null
+  parentId: string | null = null,
+  description?: string
 ): { state: AppStateV0; task: TaskNode } | { state: AppStateV0; task: undefined } {
   const plan = getMonth(state, ym);
   if (!plan) return { state, task: undefined };
@@ -1084,6 +1252,7 @@ export function addTaskWithMilestone(
   const task: TaskNode = {
     id: makeId("task"),
     title,
+    description: description?.trim() || undefined,
     parentId,
     status: "NONE",
     linkedMilestoneId: milestoneId,
@@ -1145,7 +1314,10 @@ export function isMonthInGrandPlanPeriod(state: AppStateV0, ym: YM): boolean {
 
 export function canCreateMonth(state: AppStateV0, ym: YM): { allowed: boolean; reason?: string } {
   if (!state.grandPlan) {
-    return { allowed: true }; // No grand plan = no restrictions
+    return { allowed: false, reason: "Create a Grand Plan first" };
+  }
+  if (state.grandPlan.isClosed) {
+    return { allowed: false, reason: "Your Grand Plan is closed (report mode). Reopen it to create new months." };
   }
   if (isMonthInGrandPlanPeriod(state, ym)) {
     return { allowed: true };

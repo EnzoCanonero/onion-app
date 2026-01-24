@@ -2,6 +2,7 @@ import { useMemo, useState, useEffect } from "react";
 import type { FocusTemplate, ProductivitySession } from "../app/types";
 import { APP_MAIN_COLOR } from "../app/theme";
 import { formatWeekdays } from "../app/weekdays";
+import { getVirtualNow } from "../contexts/VirtualClockContext";
 
 type FocusTemplateCardProps = {
   template: FocusTemplate;
@@ -28,14 +29,14 @@ export default function FocusTemplateCard({
   selectedMilestoneId,
   onChangeMilestoneId,
 }: FocusTemplateCardProps) {
-  const [currentTime, setCurrentTime] = useState(new Date());
+  const [currentTime, setCurrentTime] = useState(() => getVirtualNow());
   const [showStartConfirm, setShowStartConfirm] = useState(false);
   const [showStopConfirm, setShowStopConfirm] = useState(false);
 
-  // Update current time every second for progress bar
+  // Update current time every second for progress bar (uses virtual time in dev mode)
   useEffect(() => {
     const interval = setInterval(() => {
-      setCurrentTime(new Date());
+      setCurrentTime(getVirtualNow());
     }, 1000);
     return () => clearInterval(interval);
   }, []);
@@ -91,30 +92,36 @@ export default function FocusTemplateCard({
   };
 
   const stripeColor = accentColor ?? APP_MAIN_COLOR;
+  const barPercent = completedSession ? completedPercentage : activeSession ? progressPercentage : 0;
+  const barLabel = completedSession
+    ? `✓ ${completedSession.actualMinutes ?? 0} / ${plannedMinutes} min`
+    : activeSession
+      ? `${elapsedMinutes} / ${plannedMinutes} min`
+      : `0 / ${plannedMinutes} min`;
 
   return (
     <div
       style={{
-        border: "2px solid #eee",
+        border: "1px solid #eee",
         borderLeft: `6px solid ${stripeColor}`,
-        borderRadius: 12,
+        borderRadius: 14,
         padding: 16,
         marginBottom: 12,
-        backgroundColor: "rgba(255,255,255,0.92)",
-        boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+        backgroundColor: "white",
+        boxShadow: "0 10px 30px rgba(0,0,0,0.08)",
       }}
     >
       {/* Header */}
-	      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+	      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
         <div>
           {milestoneTitle ? (
-            <div style={{ fontSize: 12, fontWeight: 800, color: stripeColor, marginBottom: 10 }}>
+            <div style={{ fontSize: 11, fontWeight: 900, color: stripeColor, marginBottom: 8, letterSpacing: 0.2 }}>
               {milestoneTitle}
             </div>
           ) : null}
-          <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>{template.title}</div>
+          <div style={{ fontSize: 16, fontWeight: 900, marginBottom: 4, color: "#111" }}>{template.title}</div>
           <div style={{ fontSize: 13, color: "#666" }}>
-            📅 Planned: {template.plannedStart} - {template.plannedEnd} ({plannedMinutes} min) · 🗓 {formatWeekdays(template.daysOfWeek)}
+            {template.plannedStart}–{template.plannedEnd} · {plannedMinutes} min · {formatWeekdays(template.daysOfWeek)}
           </div>
           {milestoneOptions && onChangeMilestoneId ? (
             <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -123,9 +130,9 @@ export default function FocusTemplateCard({
                 value={selectedMilestoneId ?? ""}
                 onChange={(e) => onChangeMilestoneId(e.target.value ? e.target.value : undefined)}
                 style={{
-                  padding: "6px 10px",
+                  padding: "7px 10px",
                   borderRadius: 10,
-                  border: `1px solid ${stripeColor}`,
+                  border: "1px solid #ddd",
                   backgroundColor: "white",
                   color: "#333",
                   fontSize: 12,
@@ -149,93 +156,56 @@ export default function FocusTemplateCard({
           <button
             onClick={handleStopClick}
             style={{
-              padding: "8px 16px",
-              fontSize: 14,
-              fontWeight: 600,
-              backgroundColor: "#f44336",
-              color: "white",
-              border: "none",
-              borderRadius: 6,
+              padding: "10px 14px",
+              fontSize: 13,
+              fontWeight: 900,
+              backgroundColor: "white",
+              color: "#ef4444",
+              border: "1px solid #ef4444",
+              borderRadius: 10,
               cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
             }}
           >
-            ⏹ Stop
+            Stop
           </button>
         ) : (
           <button
             onClick={handleStartClick}
             disabled={!!activeSessionId}
             style={{
-              padding: "8px 16px",
-              fontSize: 14,
-              fontWeight: 600,
-              backgroundColor: activeSessionId ? "#ccc" : "#4caf50",
-              color: "white",
+              padding: "10px 14px",
+              fontSize: 13,
+              fontWeight: 900,
+              backgroundColor: activeSessionId ? "#e5e7eb" : stripeColor,
+              color: activeSessionId ? "#9ca3af" : "white",
               border: "none",
-              borderRadius: 6,
+              borderRadius: 10,
               cursor: activeSessionId ? "not-allowed" : "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
+              boxShadow: activeSessionId ? "none" : "0 10px 22px rgba(0,0,0,0.10)",
             }}
           >
-            ▶ Start
+            Start
           </button>
         )}
       </div>
 
-      {/* Progress Bar - Show always (grey before start, green during/after) */}
-      <div style={{ marginBottom: 12 }}>
-        <div
-          style={{
-            width: "100%",
-            height: 24,
-            backgroundColor: "#e0e0e0",
-            borderRadius: 12,
-            overflow: "hidden",
-            position: "relative",
-          }}
-        >
+      {/* Progress */}
+      <div style={{ marginTop: 12, marginBottom: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, marginBottom: 8 }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: "#555" }}>{barLabel}</div>
+          <div style={{ fontSize: 12, color: "#666" }}>
+            {activeSession ? "In progress" : completedSession ? "Completed" : "Planned"}
+          </div>
+        </div>
+        <div style={{ width: "100%", height: 8, backgroundColor: "#e5e7eb", borderRadius: 999, overflow: "hidden" }}>
           <div
             style={{
-              width: completedSession
-                ? `${completedPercentage}%`
-                : activeSession
-                  ? `${progressPercentage}%`
-                  : "0%",
+              width: `${barPercent}%`,
               height: "100%",
-              backgroundColor: completedSession || activeSession ? "#4caf50" : "#e0e0e0",
-              transition: "width 1s linear",
+              backgroundColor: activeSession || completedSession ? stripeColor : "#e5e7eb",
+              transition: "width 300ms ease",
             }}
           />
-          <div
-            style={{
-              position: "absolute",
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: 12,
-              fontWeight: 600,
-              color: completedSession
-                ? completedPercentage > 50 ? "white" : "#333"
-                : activeSession && progressPercentage > 50
-                  ? "white"
-                  : "#333",
-            }}
-          >
-            {completedSession
-              ? `✓ ${completedSession.actualMinutes} / ${plannedMinutes} min`
-              : activeSession
-                ? `${elapsedMinutes} / ${plannedMinutes} min`
-                : `0 / ${plannedMinutes} min`}
-          </div>
         </div>
       </div>
 
