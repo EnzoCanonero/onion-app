@@ -1,12 +1,16 @@
 import { Link } from "react-router-dom";
-import type { YM } from "../app/types";
+import type { DateISO, YM } from "../app/types";
 
 interface EmptyMonthPanelProps {
-  ym: YM;
-  showCreateButton?: boolean;
+  date: DateISO;
 }
 
-export default function EmptyMonthPanel({ ym, showCreateButton = true }: EmptyMonthPanelProps) {
+/**
+ * Panel shown in Daily page when no Month Plan exists.
+ * Redirects user to create a Month Plan.
+ */
+export default function EmptyMonthPanel({ date }: EmptyMonthPanelProps) {
+  const ym = date.slice(0, 7) as YM;
   // Format YM as "Month Year" (e.g., "December 2025")
   const [year, month] = ym.split('-');
   const monthName = new Date(parseInt(year), parseInt(month) - 1).toLocaleDateString('en-US', {
@@ -16,36 +20,31 @@ export default function EmptyMonthPanel({ ym, showCreateButton = true }: EmptyMo
 
   return (
     <div style={{
-      padding: 40,
+      padding: 48,
       textAlign: "center",
-      border: "2px dashed #ccc",
-      borderRadius: 8,
-      background: "#f9f9f9",
-      margin: "20px 0"
     }}>
-      <p style={{ fontSize: 18, color: "#666", marginBottom: 20 }}>
-        No plan yet for <strong>{monthName}</strong>. Create one to get started!
+      <div style={{ fontSize: 48, marginBottom: 16 }}>📅</div>
+      <p style={{ fontSize: 18, marginBottom: 12 }}>
+        No Month Plan for <strong>{monthName}</strong>
       </p>
-      {showCreateButton && (
-        <Link to={`/month/${ym}/setup`}>
-          <button style={{
-            padding: "10px 20px",
-            fontSize: 16,
-            background: "#007bff",
-            color: "white",
-            border: "none",
-            borderRadius: 4,
-            cursor: "pointer"
-          }}>
-            ✨ Create Month Plan
-          </button>
-        </Link>
-      )}
-      {!showCreateButton && (
-        <Link to={`/month/${ym}/setup`} style={{ color: "#007bff" }}>
-          Go to Month Setup →
-        </Link>
-      )}
+      <p style={{ color: "#666", marginBottom: 24, fontSize: 14 }}>
+        Set up your month to start planning your days.
+      </p>
+      <Link to={`/month/${date}/setup`}>
+        <button style={{
+          padding: "12px 24px",
+          fontSize: 16,
+          fontWeight: 600,
+          background: "#2196f3",
+          color: "white",
+          border: "none",
+          borderRadius: 8,
+          cursor: "pointer",
+          boxShadow: "0 4px 6px rgba(0,0,0,0.1)",
+        }}>
+          📅 Go to Month Setup
+        </button>
+      </Link>
     </div>
   );
 }

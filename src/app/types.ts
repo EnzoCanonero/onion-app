@@ -33,6 +33,7 @@ export type MilestoneNode = {
   status: MilestoneStatus;
   order: number;
   createdAt: string;
+  completedAt?: string;
 };
 
 // v6.1: MilestoneDetail removed - tasks now have linkedMilestoneId instead
@@ -50,6 +51,8 @@ export type GrandPlan = {
   title: string;
   startMonth: YM;
   endMonth?: YM;
+  isClosed?: boolean; // v11: true if closed (read-only report mode)
+  closedAt?: string; // v11: ISO timestamp when closed
   categories: Category[];
   milestones: MilestoneNode[];
   createdAt: string;
@@ -122,6 +125,8 @@ export type DayEntry = {
   focusMilestoneByTemplateId?: Record<string, string>; // v10: per-day link focus template -> milestone id (Daily-only)
 };
 
+export type MeetingRecurrence = "NONE" | "WEEKLY" | "BIWEEKLY" | "MONTHLY";
+
 export type MeetingEntry = {
   id: string;
   date: DateISO;
@@ -132,6 +137,7 @@ export type MeetingEntry = {
   description?: string;
   attended?: boolean; // v4: true if meeting was attended
   createdAt: string; // ISO timestamp
+  recurrence?: MeetingRecurrence;
 };
 
 export type AppStateV0 = {

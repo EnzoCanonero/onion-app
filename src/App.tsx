@@ -1,13 +1,25 @@
 import { useState } from "react";
-import { NavLink, Navigate, Route, Routes } from "react-router-dom";
+import { NavLink, Navigate, Route, Routes, useParams } from "react-router-dom";
 import { DateNavigationProvider, useDateNavigation } from "./contexts/DateNavigationContext";
-import { getCurrentYM } from "./app/storage";
+import { useAppMode } from "./contexts/AppModeContext";
+import { getTodayDate } from "./app/storage";
 import { APP_MAIN_COLOR } from "./app/theme";
 import GrandPlanPage from "./pages/GrandPlanPage";
 import MonthSetupPage from "./pages/MonthSetupPage";
 import DailyAgendaPage from "./pages/DailyAgendaPage";
 import DatePickerButton from "./components/DatePickerButton";
 import DatePickerModal from "./components/DatePickerModal";
+import VirtualClockToolbox from "./components/VirtualClockToolbox";
+
+function MonthSetupRoute() {
+  const { date } = useParams();
+  return <MonthSetupPage key={date?.slice(0, 7) ?? "month"} />;
+}
+
+function DailyAgendaRoute() {
+  const { date } = useParams();
+  return <DailyAgendaPage key={date ?? "day"} />;
+}
 
 function withHexAlpha(color: string, alphaHex: string): string {
   const normalizedAlpha = /^[0-9a-fA-F]{2}$/.test(alphaHex) ? alphaHex : "10";
@@ -23,7 +35,8 @@ function withHexAlpha(color: string, alphaHex: string): string {
 }
 
 function Header() {
-  const { selectedDate, selectedMonth, setSelectedDate } = useDateNavigation();
+  const { selectedDate, setSelectedDate } = useDateNavigation();
+  const { isDeveloper } = useAppMode();
   const [showDatePicker, setShowDatePicker] = useState(false);
 
   const navLinkStyle = (isActive: boolean) => ({
@@ -44,6 +57,9 @@ function Header() {
 
   return (
     <>
+      {/* Virtual Clock Toolbox (only in developer mode) */}
+      {isDeveloper && <VirtualClockToolbox />}
+
       <header
         style={{
           display: "flex",
@@ -64,7 +80,7 @@ function Header() {
           <NavLink to="/grand-plan" style={({ isActive }) => navLinkStyle(isActive)}>
             Grand Plan
           </NavLink>
-          <NavLink to={`/month/${selectedMonth}/setup`} style={({ isActive }) => navLinkStyle(isActive)}>
+          <NavLink to={`/month/${selectedDate}/setup`} style={({ isActive }) => navLinkStyle(isActive)}>
             Month Setup
           </NavLink>
           <NavLink to={`/day/${selectedDate}`} style={({ isActive }) => navLinkStyle(isActive)}>
@@ -101,10 +117,10 @@ export default function App() {
         <div style={{ height: 12 }} />
 
         <Routes>
-          <Route path="/" element={<Navigate to={`/month/${getCurrentYM()}/setup`} replace />} />
+          <Route path="/" element={<Navigate to={`/month/${getTodayDate()}/setup`} replace />} />
           <Route path="/grand-plan" element={<GrandPlanPage />} />
-          <Route path="/month/:ym/setup" element={<MonthSetupPage />} />
-          <Route path="/day/:date" element={<DailyAgendaPage />} />
+          <Route path="/month/:date/setup" element={<MonthSetupRoute />} />
+          <Route path="/day/:date" element={<DailyAgendaRoute />} />
           <Route path="*" element={<div>Not found.</div>} />
         </Routes>
       </div>

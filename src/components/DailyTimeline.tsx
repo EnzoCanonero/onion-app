@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { DateISO, MeetingEntry, ProductivitySession } from "../app/types";
 import { APP_MAIN_COLOR } from "../app/theme";
+import { getVirtualNow } from "../contexts/VirtualClockContext";
 
 type ScheduledFocusTemplate = {
   id: string;
@@ -21,6 +22,8 @@ type DailyTimelineProps = {
 const HOUR_HEIGHT = 56 * 2.5;
 const LABEL_WIDTH = 56;
 const TOTAL_MINUTES = 24 * 60;
+const ACTIVE_SESSION_GOLD = "#ffecb3";
+const FOCUS_LABEL_GOLD = "#b8860b";
 
 function pad2(n: number): string {
   return String(n).padStart(2, "0");
@@ -71,6 +74,19 @@ function minutesFromIso(iso: string | undefined): number | null {
   return d.getHours() * 60 + d.getMinutes() + d.getSeconds() / 60 + d.getMilliseconds() / 60000;
 }
 
+function colorWithAlpha(color: string, alpha: number): string {
+  const trimmed = color.trim();
+  const match = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.exec(trimmed);
+  if (!match) return `rgba(0,0,0,${alpha})`;
+
+  let hex = match[1];
+  if (hex.length === 3) hex = hex.split("").map((c) => `${c}${c}`).join("");
+  const r = Number.parseInt(hex.slice(0, 2), 16);
+  const g = Number.parseInt(hex.slice(2, 4), 16);
+  const b = Number.parseInt(hex.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
 export default function DailyTimeline({
   date,
   meetings,
@@ -78,14 +94,15 @@ export default function DailyTimeline({
   sessions,
   matchHeightPx,
 }: DailyTimelineProps) {
-  const [now, setNow] = useState(() => new Date());
+  const [now, setNow] = useState(() => getVirtualNow());
   const containerRef = useRef<HTMLDivElement | null>(null);
   const scrollViewportRef = useRef<HTMLDivElement | null>(null);
   const [chromeHeightPx, setChromeHeightPx] = useState<number | null>(null);
   const [didAutoScrollToNow, setDidAutoScrollToNow] = useState(false);
 
+  // Update "now" every second using virtual time
   useEffect(() => {
-    const id = window.setInterval(() => setNow(new Date()), 1000);
+    const id = window.setInterval(() => setNow(getVirtualNow()), 1000);
     return () => window.clearInterval(id);
   }, []);
 
@@ -144,6 +161,12 @@ export default function DailyTimeline({
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);
   }, [sessions, date, isToday, currentMinutes]);
+
+  const templateColorById = useMemo(() => {
+    return new Map(scheduledTemplates.map((t) => [t.id, t.color] as const));
+  }, [scheduledTemplates]);
+
+  const focusLabelColor = FOCUS_LABEL_GOLD;
 
   const timelineGridHeightPx = HOUR_HEIGHT * 24;
 
@@ -216,8 +239,8 @@ export default function DailyTimeline({
             paddingLeft: LABEL_WIDTH + 8,
           }}
         >
-          <div style={{ fontSize: 11, fontWeight: 800, color: "#1976d2" }}>MEETINGS</div>
-          <div style={{ fontSize: 11, fontWeight: 800, color: APP_MAIN_COLOR }}>FOCUS</div>
+          <div style={{ fontSize: 11, fontWeight: 800, color: APP_MAIN_COLOR, textAlign: "center" }}>MEETINGS</div>
+          <div style={{ fontSize: 11, fontWeight: 800, color: focusLabelColor, textAlign: "center" }}>FOCUS</div>
         </div>
 
         <div style={{ border: "1px solid #eee", borderRadius: 10, overflow: "hidden" }}>
@@ -303,6 +326,7 @@ export default function DailyTimeline({
                   {meetingBlocks.map((m) => {
                     const top = minutesToY(m.start);
                     const height = Math.max(18, minutesToY(m.end) - minutesToY(m.start));
+                    const mainColor = m.attended ? "#4caf50" : APP_MAIN_COLOR;
                     return (
                       <div
                         key={m.id}
@@ -312,8 +336,8 @@ export default function DailyTimeline({
                           left: 0,
                           right: 0,
                           height,
-                          backgroundColor: m.attended ? "rgba(76,175,80,0.18)" : "rgba(33,150,243,0.14)",
-                          border: `1px solid ${m.attended ? "#4caf50" : "#2196f3"}`,
+                          backgroundColor: m.attended ? "rgba(76,175,80,0.18)" : colorWithAlpha(APP_MAIN_COLOR, 0.14),
+                          border: `1px solid ${mainColor}`,
                           borderRadius: 8,
                           padding: "6px 8px",
                           boxSizing: "border-box",
@@ -327,7 +351,7 @@ export default function DailyTimeline({
                           style={{
                             fontSize: 11,
                             fontWeight: 800,
-                            color: m.attended ? "#2e7d32" : "#1565c0",
+                            color: m.attended ? "#2e7d32" : APP_MAIN_COLOR,
                             whiteSpace: "nowrap",
                             overflow: "hidden",
                             textOverflow: "ellipsis",
@@ -393,6 +417,8 @@ export default function DailyTimeline({
                     const top = minutesToY(s.start);
                     const height = Math.max(2, minutesToY(s.end) - minutesToY(s.start));
                     const showLabel = height >= 14;
+                    const sessionColor = templateColorById.get(s.templateId) ?? APP_MAIN_COLOR;
+                    const backgroundColor = ACTIVE_SESSION_GOLD;
                     return (
                       <div
                         key={s.id}
@@ -402,18 +428,20 @@ export default function DailyTimeline({
                           left: 6,
                           right: 6,
                           height,
-                          backgroundColor: s.active ? "rgba(255,152,0,0.22)" : "rgba(76,175,80,0.22)",
-                          border: `1px solid ${s.active ? "#ff9800" : "#4caf50"}`,
+                          backgroundColor,
+                          border: `${s.active ? 2 : 1}px solid ${sessionColor}`,
+                          borderLeft: s.active ? `6px solid ${sessionColor}` : undefined,
                           borderRadius: 8,
                           padding: showLabel ? "4px 6px" : 0,
                           boxSizing: "border-box",
                           overflow: "hidden",
                           zIndex: 3,
+                          boxShadow: s.active ? "0 12px 26px rgba(0,0,0,0.12)" : "none",
                         }}
                         title={s.active ? "Active focus session" : "Completed focus session"}
                       >
                         {showLabel ? (
-                          <div style={{ fontSize: 10, fontWeight: 800, color: s.active ? "#e65100" : "#2e7d32" }}>
+                          <div style={{ fontSize: 10, fontWeight: 900, color: sessionColor }}>
                             {s.active ? "▶ Active" : "✓ Actual"}
                           </div>
                         ) : null}

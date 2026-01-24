@@ -18,19 +18,31 @@ export function DateNavigationProvider({ children }: { children: React.ReactNode
 
   // Extract initial date from URL params (for deep linking)
   const initialDate = useMemo(() => {
+    if (location.pathname === "/") return getTodayDate();
+
     const match = location.pathname.match(/\/(day|month)\/([^/]+)/);
     if (match) {
+      const kind = match[1];
       const param = match[2];
-      // If it's a date (YYYY-MM-DD), use it
-      if (param.length === 10 && isValidDateISO(param)) {
+
+      if (kind === "day" && param.length === 10 && isValidDateISO(param)) {
         return param as DateISO;
       }
-      // If it's a month (YYYY-MM), use first day of the month
-      if (param.length === 7) {
-        return `${param}-01` as DateISO;
+
+      if (kind === "month") {
+        if (param.length === 10 && isValidDateISO(param)) {
+          return param as DateISO;
+        }
+        if (param.length === 7) {
+          const today = getTodayDate();
+          if (today.slice(0, 7) === param) {
+            return today;
+          }
+          return `${param}-01` as DateISO;
+        }
       }
     }
-    // Default to today
+
     return getTodayDate();
   }, []); // Only run on mount
 
@@ -49,9 +61,9 @@ export function DateNavigationProvider({ children }: { children: React.ReactNode
         navigate(expectedPath, { replace: true });
       }
     } else if (currentPath.includes('/month/')) {
-      // On month page, keep URL in sync with selected month
+      // On month page, keep URL in sync with selected date (YYYY-MM-DD)
       const pageType = currentPath.endsWith('/setup') ? 'setup' : 'report';
-      const expectedPath = `/month/${selectedMonth}/${pageType}`;
+      const expectedPath = `/month/${selectedDate}/${pageType}`;
       if (currentPath !== expectedPath) {
         navigate(expectedPath, { replace: true });
       }

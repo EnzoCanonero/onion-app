@@ -9,6 +9,10 @@ interface DateContextMenuProps {
   onGoToDate: () => void;
   onAddMeeting: () => void;
   onClose: () => void;
+  /** If false, the "Go to date" option is hidden */
+  canGoToDate?: boolean;
+  /** If false, the "Add meeting" option is hidden */
+  canAddMeeting?: boolean;
 }
 
 export default function DateContextMenu({
@@ -17,6 +21,8 @@ export default function DateContextMenu({
   onGoToDate,
   onAddMeeting,
   onClose,
+  canGoToDate = true,
+  canAddMeeting = true,
 }: DateContextMenuProps) {
   // Close on Escape key
   useEffect(() => {
@@ -95,52 +101,69 @@ export default function DateContextMenu({
 
         {/* Menu Options */}
         <div>
-          <button
-            onClick={onGoToDate}
-            style={{
-              width: "100%",
-              padding: "12px 16px",
-              textAlign: "left",
-              backgroundColor: "white",
-              border: "none",
-              cursor: "pointer",
-              fontSize: 14,
-              fontWeight: 500,
-              borderBottom: "1px solid #f0f0f0",
-              transition: "background-color 0.15s",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = "#f5f5f5";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = "white";
-            }}
-          >
-            📅 Go to date
-          </button>
+          {canGoToDate && (
+            <button
+              onClick={onGoToDate}
+              style={{
+                width: "100%",
+                padding: "12px 16px",
+                textAlign: "left",
+                backgroundColor: "white",
+                border: "none",
+                cursor: "pointer",
+                fontSize: 14,
+                fontWeight: 500,
+                borderBottom: canAddMeeting ? "1px solid #f0f0f0" : "none",
+                transition: "background-color 0.15s",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = "#f5f5f5";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = "white";
+              }}
+            >
+              📅 Go to date
+            </button>
+          )}
 
-          <button
-            onClick={onAddMeeting}
-            style={{
-              width: "100%",
-              padding: "12px 16px",
-              textAlign: "left",
-              backgroundColor: "white",
-              border: "none",
-              cursor: "pointer",
-              fontSize: 14,
-              fontWeight: 500,
-              transition: "background-color 0.15s",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = "#f5f5f5";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = "white";
-            }}
-          >
-            ➕ Add meeting
-          </button>
+          {canAddMeeting && (
+            <button
+              onClick={onAddMeeting}
+              style={{
+                width: "100%",
+                padding: "12px 16px",
+                textAlign: "left",
+                backgroundColor: "white",
+                border: "none",
+                cursor: "pointer",
+                fontSize: 14,
+                fontWeight: 500,
+                transition: "background-color 0.15s",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = "#f5f5f5";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = "white";
+              }}
+            >
+              ➕ Add meeting
+            </button>
+          )}
+
+          {!canGoToDate && !canAddMeeting && (
+            <div
+              style={{
+                padding: "12px 16px",
+                fontSize: 13,
+                color: "#999",
+                fontStyle: "italic",
+              }}
+            >
+              No actions available
+            </div>
+          )}
         </div>
       </div>
     </>
