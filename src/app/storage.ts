@@ -700,6 +700,57 @@ export function toggleMeetingAttended(state: AppStateV0, meetingId: string): App
   };
 }
 
+export function setMeetingSkipped(state: AppStateV0, meetingId: string, skipped: boolean): AppStateV0 {
+  return {
+    ...state,
+    meetings: state.meetings.map((m) =>
+      m.id === meetingId ? { ...m, skipped, attended: skipped ? false : m.attended } : m
+    ),
+  };
+}
+
+export function setFocusTemplateOverrideForDay(
+  state: AppStateV0,
+  date: DateISO,
+  templateId: string,
+  override: { plannedStart: string; plannedEnd: string }
+): AppStateV0 {
+  const ym = ymFromDate(date);
+  const { state: withDay, day } = getOrCreateDay(state, date, ym);
+  const nextMap = { ...(day.focusTemplateOverridesById ?? {}) };
+  nextMap[templateId] = override;
+  return updateDay(withDay, { ...day, focusTemplateOverridesById: nextMap });
+}
+
+export function clearFocusTemplateOverrideForDay(
+  state: AppStateV0,
+  date: DateISO,
+  templateId: string
+): AppStateV0 {
+  const ym = ymFromDate(date);
+  const { state: withDay, day } = getOrCreateDay(state, date, ym);
+  if (!day.focusTemplateOverridesById) return withDay;
+  const nextMap = { ...day.focusTemplateOverridesById };
+  delete nextMap[templateId];
+  return updateDay(withDay, { ...day, focusTemplateOverridesById: nextMap });
+}
+
+export function toggleFocusTemplateSkippedForDay(
+  state: AppStateV0,
+  date: DateISO,
+  templateId: string
+): AppStateV0 {
+  const ym = ymFromDate(date);
+  const { state: withDay, day } = getOrCreateDay(state, date, ym);
+  const current = new Set(day.skippedFocusTemplateIds ?? []);
+  if (current.has(templateId)) {
+    current.delete(templateId);
+  } else {
+    current.add(templateId);
+  }
+  return updateDay(withDay, { ...day, skippedFocusTemplateIds: Array.from(current) });
+}
+
 // v4: Daily reminders toggle functions
 
 export function toggleEmailChecked(state: AppStateV0, date: DateISO): AppStateV0 {

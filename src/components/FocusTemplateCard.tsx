@@ -8,13 +8,18 @@ type FocusTemplateCardProps = {
   template: FocusTemplate;
   activeSessionId?: string;
   completedSessions: ProductivitySession[];
-  onStartSession: (templateId: string) => void;
-  onEndSession: () => void;
+  onStartSession?: (templateId: string) => void;
+  onEndSession?: () => void;
   accentColor?: string;
   milestoneTitle?: string;
   milestoneOptions?: { id: string; title: string; disabled?: boolean }[];
   selectedMilestoneId?: string;
   onChangeMilestoneId?: (milestoneId: string | undefined) => void;
+  isSkipped?: boolean;
+  onToggleSkipped?: () => void;
+  onReschedule?: (override: { plannedStart: string; plannedEnd: string }) => void;
+  onClearReschedule?: () => void;
+  hasOverride?: boolean;
 };
 
 export default function FocusTemplateCard({
@@ -28,10 +33,19 @@ export default function FocusTemplateCard({
   milestoneOptions,
   selectedMilestoneId,
   onChangeMilestoneId,
+  isSkipped,
+  onToggleSkipped,
+  onReschedule,
+  onClearReschedule,
+  hasOverride,
 }: FocusTemplateCardProps) {
   const [currentTime, setCurrentTime] = useState(() => getVirtualNow());
   const [showStartConfirm, setShowStartConfirm] = useState(false);
   const [showStopConfirm, setShowStopConfirm] = useState(false);
+  const [showReschedule, setShowReschedule] = useState(false);
+  const [rescheduleStart, setRescheduleStart] = useState(template.plannedStart);
+  const [rescheduleEnd, setRescheduleEnd] = useState(template.plannedEnd);
+  const [rescheduleError, setRescheduleError] = useState<string | null>(null);
 
   // Update current time every second for progress bar (uses virtual time in dev mode)
   useEffect(() => {
@@ -40,6 +54,11 @@ export default function FocusTemplateCard({
     }, 1000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    setRescheduleStart(template.plannedStart);
+    setRescheduleEnd(template.plannedEnd);
+  }, [template.plannedStart, template.plannedEnd]);
 
   const activeSession = useMemo(() => {
     return completedSessions.find((s) => s.id === activeSessionId && s.templateId === template.id);
@@ -74,21 +93,41 @@ export default function FocusTemplateCard({
     : 0;
 
   const handleStartClick = () => {
+    if (!onStartSession) return;
     setShowStartConfirm(true);
   };
 
   const confirmStart = () => {
-    onStartSession(template.id);
+    onStartSession?.(template.id);
     setShowStartConfirm(false);
   };
 
   const handleStopClick = () => {
+    if (!onEndSession) return;
     setShowStopConfirm(true);
   };
 
   const confirmStop = () => {
-    onEndSession();
+    onEndSession?.();
     setShowStopConfirm(false);
+  };
+
+  const handleRescheduleSave = () => {
+    const [startHour, startMin] = rescheduleStart.split(":").map(Number);
+    const [endHour, endMin] = rescheduleEnd.split(":").map(Number);
+    if ([startHour, startMin, endHour, endMin].some((v) => Number.isNaN(v))) {
+      setRescheduleError("Invalid time format.");
+      return;
+    }
+    const startMinutes = startHour * 60 + startMin;
+    const endMinutes = endHour * 60 + endMin;
+    if (endMinutes <= startMinutes) {
+      setRescheduleError("End time must be after start time.");
+      return;
+    }
+    setRescheduleError(null);
+    onReschedule?.({ plannedStart: rescheduleStart, plannedEnd: rescheduleEnd });
+    setShowReschedule(false);
   };
 
   const stripeColor = accentColor ?? APP_MAIN_COLOR;
@@ -99,6 +138,8 @@ export default function FocusTemplateCard({
       ? `${elapsedMinutes} / ${plannedMinutes} min`
       : `0 / ${plannedMinutes} min`;
 
+  const showSessionControls = Boolean(onStartSession && onEndSession);
+
   return (
     <div
       style={{
@@ -107,8 +148,9 @@ export default function FocusTemplateCard({
         borderRadius: 14,
         padding: 16,
         marginBottom: 12,
-        backgroundColor: "white",
+        backgroundColor: isSkipped ? "#f8fafc" : "white",
         boxShadow: "0 10px 30px rgba(0,0,0,0.08)",
+        opacity: isSkipped ? 0.72 : 1,
       }}
     >
       {/* Header */}
@@ -123,6 +165,11 @@ export default function FocusTemplateCard({
           <div style={{ fontSize: 13, color: "#666" }}>
             {template.plannedStart}–{template.plannedEnd} · {plannedMinutes} min · {formatWeekdays(template.daysOfWeek)}
           </div>
+          {hasOverride ? (
+            <div style={{ marginTop: 6, fontSize: 11, fontWeight: 800, color: "#b45309" }}>
+              Custom schedule for today
+            </div>
+          ) : null}
           {milestoneOptions && onChangeMilestoneId ? (
             <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <span style={{ fontSize: 12, fontWeight: 800, color: "#666" }}>Link to:</span>
@@ -151,43 +198,172 @@ export default function FocusTemplateCard({
           ) : null}
         </div>
 
-        {/* Play/Stop Button - Hide Play if completed */}
-        {completedSession ? null : activeSession ? (
-          <button
-            onClick={handleStopClick}
-            style={{
-              padding: "10px 14px",
-              fontSize: 13,
-              fontWeight: 900,
-              backgroundColor: "white",
-              color: "#ef4444",
-              border: "1px solid #ef4444",
-              borderRadius: 10,
-              cursor: "pointer",
-            }}
-          >
-            Stop
-          </button>
-        ) : (
-          <button
-            onClick={handleStartClick}
-            disabled={!!activeSessionId}
-            style={{
-              padding: "10px 14px",
-              fontSize: 13,
-              fontWeight: 900,
-              backgroundColor: activeSessionId ? "#e5e7eb" : stripeColor,
-              color: activeSessionId ? "#9ca3af" : "white",
-              border: "none",
-              borderRadius: 10,
-              cursor: activeSessionId ? "not-allowed" : "pointer",
-              boxShadow: activeSessionId ? "none" : "0 10px 22px rgba(0,0,0,0.10)",
-            }}
-          >
-            Start
-          </button>
-        )}
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
+          {(onToggleSkipped || onReschedule) && (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+              {onReschedule ? (
+                <button
+                  type="button"
+                  onClick={() => setShowReschedule((v) => !v)}
+                  style={{
+                    padding: "6px 10px",
+                    fontSize: 12,
+                    fontWeight: 800,
+                    backgroundColor: "white",
+                    color: "#444",
+                    border: "1px solid #ddd",
+                    borderRadius: 10,
+                    cursor: "pointer",
+                  }}
+                >
+                  Reschedule
+                </button>
+              ) : null}
+              {onToggleSkipped ? (
+                <button
+                  type="button"
+                  onClick={onToggleSkipped}
+                  style={{
+                    padding: "6px 10px",
+                    fontSize: 12,
+                    fontWeight: 800,
+                    backgroundColor: isSkipped ? "#e5e7eb" : "white",
+                    color: isSkipped ? "#555" : "#b45309",
+                    border: "1px solid #ddd",
+                    borderRadius: 10,
+                    cursor: "pointer",
+                  }}
+                >
+                  {isSkipped ? "Unskip" : "Skip"}
+                </button>
+              ) : null}
+            </div>
+          )}
+
+          {showSessionControls ? (
+            completedSession ? null : activeSession ? (
+              <button
+                onClick={handleStopClick}
+                style={{
+                  padding: "10px 14px",
+                  fontSize: 13,
+                  fontWeight: 900,
+                  backgroundColor: "white",
+                  color: "#ef4444",
+                  border: "1px solid #ef4444",
+                  borderRadius: 10,
+                  cursor: "pointer",
+                }}
+              >
+                Stop
+              </button>
+            ) : (
+              <button
+                onClick={handleStartClick}
+                disabled={!!activeSessionId || isSkipped}
+                style={{
+                  padding: "10px 14px",
+                  fontSize: 13,
+                  fontWeight: 900,
+                  backgroundColor: activeSessionId || isSkipped ? "#e5e7eb" : stripeColor,
+                  color: activeSessionId || isSkipped ? "#9ca3af" : "white",
+                  border: "none",
+                  borderRadius: 10,
+                  cursor: activeSessionId || isSkipped ? "not-allowed" : "pointer",
+                  boxShadow: activeSessionId || isSkipped ? "none" : "0 10px 22px rgba(0,0,0,0.10)",
+                }}
+              >
+                Start
+              </button>
+            )
+          ) : null}
+        </div>
       </div>
+
+      {showReschedule && onReschedule ? (
+        <div
+          style={{
+            padding: "10px 12px",
+            borderRadius: 12,
+            border: "1px solid #eee",
+            backgroundColor: "rgba(255,255,255,0.9)",
+            marginBottom: 12,
+          }}
+        >
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label style={{ fontSize: 11, fontWeight: 800, color: "#555" }}>Start</label>
+              <input
+                type="time"
+                value={rescheduleStart}
+                onChange={(e) => setRescheduleStart(e.target.value)}
+                style={{
+                  padding: "6px 8px",
+                  borderRadius: 8,
+                  border: "1px solid #ddd",
+                  fontSize: 12,
+                }}
+              />
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label style={{ fontSize: 11, fontWeight: 800, color: "#555" }}>End</label>
+              <input
+                type="time"
+                value={rescheduleEnd}
+                onChange={(e) => setRescheduleEnd(e.target.value)}
+                style={{
+                  padding: "6px 8px",
+                  borderRadius: 8,
+                  border: "1px solid #ddd",
+                  fontSize: 12,
+                }}
+              />
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+              <button
+                type="button"
+                onClick={handleRescheduleSave}
+                style={{
+                  padding: "6px 10px",
+                  fontSize: 12,
+                  fontWeight: 800,
+                  backgroundColor: stripeColor,
+                  color: "white",
+                  border: "none",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                }}
+              >
+                Save
+              </button>
+              {onClearReschedule && hasOverride ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClearReschedule();
+                    setShowReschedule(false);
+                  }}
+                  style={{
+                    padding: "6px 10px",
+                    fontSize: 12,
+                    fontWeight: 800,
+                    backgroundColor: "white",
+                    color: "#444",
+                    border: "1px solid #ddd",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                  }}
+                >
+                  Reset
+                </button>
+              ) : null}
+            </div>
+          </div>
+          {rescheduleError ? (
+            <div style={{ marginTop: 6, fontSize: 12, color: "#ef4444" }}>{rescheduleError}</div>
+          ) : null}
+        </div>
+      ) : null}
 
       {/* Progress */}
       <div style={{ marginTop: 12, marginBottom: 12 }}>
