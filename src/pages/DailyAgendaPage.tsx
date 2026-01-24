@@ -1,5 +1,5 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { MeetingEntry, DailyReminderTemplate, DayLogEvent, DateISO, YM } from "../app/types";
+import { useLayoutEffect, useMemo, useRef, useState, useEffect } from "react";
+import type { MeetingEntry, DailyReminderTemplate, DayLogEvent, DateISO, YM, FocusTemplate } from "../app/types";
 import {
   loadState,
   saveState,
@@ -23,10 +23,14 @@ import {
   deleteMeeting,
   getMeetingsForDate,
   toggleMeetingAttended,
+  setMeetingSkipped,
   setDailyReminderTemplates,
   toggleReminderChecked,
   getMilestonesInMonth,
   setFocusTemplateMilestoneForDay,
+  setFocusTemplateOverrideForDay,
+  clearFocusTemplateOverrideForDay,
+  toggleFocusTemplateSkippedForDay,
   formatTime,
   appendDayEvent,
   getTodayDate,
@@ -138,8 +142,14 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
 
   const [tick, setTick] = useState(0);
   const [showTaskModal, setShowTaskModal] = useState(false);
-  const [showActivateModal, setShowActivateModal] = useState(false);
+  const [showStartWizard, setShowStartWizard] = useState(false);
+  const [wizardStep, setWizardStep] = useState(0);
   const [showCloseModal, setShowCloseModal] = useState(false);
+  const [wizardTaskDraft, setWizardTaskDraft] = useState<{
+    primaryId?: string;
+    secondaryIds: string[];
+  }>({ primaryId: undefined, secondaryIds: [] });
+  const wizardTaskDraftRef = useRef(wizardTaskDraft);
   const [isEditingReminders, setIsEditingReminders] = useState(false);
   const [reminderDraft, setReminderDraft] = useState<DailyReminderTemplate[]>([]);
   const state = useMemo(() => loadState(), [tick]);
@@ -159,7 +169,7 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
   const [leftColumnHeightPx, setLeftColumnHeightPx] = useState<number | undefined>(undefined);
 
   useLayoutEffect(() => {
-    if (!day.isWorkingDay) {
+    if (!day.isWorkingDay || day.isClosed) {
       setLeftColumnHeightPx(undefined);
       return;
     }
@@ -178,7 +188,7 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
     const ro = new ResizeObserver(() => update());
     ro.observe(el);
     return () => ro.disconnect();
-  }, [day.isWorkingDay, dateSafe]);
+  }, [day.isWorkingDay, day.isClosed, dateSafe]);
 
   // Persist newly created day entry (only once)
   if (withDay !== state) {
@@ -295,8 +305,23 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
       };
       return appendDayEvent(next, dateSafe, event);
     });
-    setShowActivateModal(false);
+    setShowStartWizard(true);
+    setWizardStep(0);
   };
+
+  useEffect(() => {
+    if (!showStartWizard) return;
+    const nextDraft = {
+      primaryId: day.primaryTaskId,
+      secondaryIds: [...day.secondaryTaskIds],
+    };
+    wizardTaskDraftRef.current = nextDraft;
+    setWizardTaskDraft(nextDraft);
+  }, [showStartWizard, day.primaryTaskId, day.secondaryTaskIds]);
+
+  useEffect(() => {
+    wizardTaskDraftRef.current = wizardTaskDraft;
+  }, [wizardTaskDraft]);
 
   const sessionsForDate = useMemo(
     () => state.sessions.filter((s) => s.date === dateSafe),
@@ -309,6 +334,12 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
     return session?.templateId;
   }, [state.sessions, day.activeSessionId]);
 
+  const focusOverridesById = day.focusTemplateOverridesById ?? {};
+  const skippedFocusTemplateIds = useMemo(
+    () => new Set(day.skippedFocusTemplateIds ?? []),
+    [day.skippedFocusTemplateIds]
+  );
+
   const scheduledTemplatesForTimeline = useMemo(() => {
     const milestonesById = new Map(state.grandPlan?.milestones.map((m) => [m.id, m] as const) ?? []);
     const categoriesById = new Map(state.grandPlan?.categories.map((c) => [c.id, c] as const) ?? []);
@@ -317,7 +348,9 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
     return plan.templates
       .filter((t) => isTemplateScheduledForWeekday(t.daysOfWeek, weekday))
       .filter((t) => !t.isSuspended)
+      .filter((t) => !skippedFocusTemplateIds.has(t.id))
       .map((t) => {
+        const override = focusOverridesById[t.id];
         const milestoneId = focusMilestoneByTemplateId[t.id];
         const milestone = milestoneId ? milestonesById.get(milestoneId) : undefined;
         const category = milestone ? categoriesById.get(milestone.categoryId) : undefined;
@@ -325,12 +358,19 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
         return {
           id: t.id,
           title: t.title,
-          plannedStart: t.plannedStart,
-          plannedEnd: t.plannedEnd,
+          plannedStart: override?.plannedStart ?? t.plannedStart,
+          plannedEnd: override?.plannedEnd ?? t.plannedEnd,
           color,
         };
       });
-  }, [plan.templates, state.grandPlan, weekday, day.focusMilestoneByTemplateId]);
+  }, [
+    plan.templates,
+    state.grandPlan,
+    weekday,
+    day.focusMilestoneByTemplateId,
+    focusOverridesById,
+    skippedFocusTemplateIds,
+  ]);
 
   const eligibleFocusTemplates = useMemo(() => {
     return plan.templates.filter((t) => {
@@ -339,9 +379,11 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
     });
   }, [plan.templates, activeTemplateId]);
 
-  const eligibleFocusTemplatesTodayCount = useMemo(() => {
-    return eligibleFocusTemplates.filter((t) => isTemplateScheduledForWeekday(t.daysOfWeek, weekday)).length;
-  }, [eligibleFocusTemplates, weekday]);
+  const focusTemplatesForToday = useMemo(
+    () => eligibleFocusTemplates.filter((t) => isTemplateScheduledForWeekday(t.daysOfWeek, weekday)),
+    [eligibleFocusTemplates, weekday]
+  );
+  const eligibleFocusTemplatesTodayCount = focusTemplatesForToday.length;
 
   const focusMilestoneOptions = useMemo(() => {
     return getMilestonesInMonth(state, ym).map((m) => ({
@@ -350,6 +392,9 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
       disabled: m.status === "COMPLETED",
     }));
   }, [state, ym]);
+
+  const wizardSteps = ["Tasks", "Meetings", "Focus Sessions"] as const;
+  const wizardStepTitle = wizardSteps[wizardStep] ?? wizardSteps[0];
 
   const handleTaskSelectionConfirm = (primaryId: string | undefined, secondaryIds: string[]) => {
     mutate((s0) => {
@@ -363,6 +408,40 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
       return setDayTasks(withDay0, dateSafe, safePrimaryId, safeSecondaryIds);
     });
     setShowTaskModal(false);
+  };
+
+  const closeStartWizard = () => {
+    setShowStartWizard(false);
+    setWizardStep(0);
+  };
+
+  const updateWizardTaskDraft = (primaryId: string | undefined, secondaryIds: string[]) => {
+    const current = wizardTaskDraftRef.current;
+    const sameSecondary =
+      current.secondaryIds.length === secondaryIds.length &&
+      current.secondaryIds.every((id, index) => id === secondaryIds[index]);
+    if (current.primaryId === primaryId && sameSecondary) return;
+    const nextDraft = { primaryId, secondaryIds };
+    wizardTaskDraftRef.current = nextDraft;
+    setWizardTaskDraft(nextDraft);
+  };
+
+  const applyWizardTaskDraft = () => {
+    mutate((s0) => {
+      const { state: withDay0 } = getOrCreateDay(s0, dateSafe, ym);
+      const draft = wizardTaskDraftRef.current;
+      const primaryId = draft.primaryId;
+      const safePrimaryId = primaryId && selectableTaskIds.has(primaryId) ? primaryId : undefined;
+      const safeSecondaryIds = (draft.secondaryIds ?? [])
+        .filter((id) => selectableTaskIds.has(id))
+        .filter((id) => id !== safePrimaryId);
+      return setDayTasks(withDay0, dateSafe, safePrimaryId, safeSecondaryIds);
+    });
+  };
+
+  const handleWizardStartDay = () => {
+    applyWizardTaskDraft();
+    closeStartWizard();
   };
 
   // v2: Last working day info (not just previous day)
@@ -412,6 +491,7 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
     () => getMeetingsForDate(state.meetings, dateSafe),
     [state.meetings, dateSafe]
   );
+  const timelineMeetings = useMemo(() => dayMeetings.filter((m) => !m.skipped), [dayMeetings]);
 
   const handleSaveMeeting = (meetingData: Omit<MeetingEntry, "id" | "createdAt">) => {
     mutate((s0) => {
@@ -439,6 +519,7 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
   const handleToggleAttended = (meetingId: string) => {
     mutate((s0) => {
       const meeting0 = s0.meetings.find((m) => m.id === meetingId);
+      if (meeting0?.skipped) return s0;
       const willBeAttended = !(meeting0?.attended ?? false);
       let next = toggleMeetingAttended(s0, meetingId);
       if (willBeAttended && meeting0) {
@@ -451,6 +532,189 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
       }
       return next;
     });
+  };
+
+  const handleToggleMeetingSkipped = (meetingId: string) => {
+    mutate((s0) => {
+      const meeting0 = s0.meetings.find((m) => m.id === meetingId);
+      if (!meeting0) return s0;
+      return setMeetingSkipped(s0, meetingId, !meeting0.skipped);
+    });
+  };
+
+  const renderMeetingCard = (meeting: MeetingEntry, showAttendance: boolean) => {
+    const isSkipped = !!meeting.skipped;
+    return (
+      <div
+        key={meeting.id}
+        style={{
+          border: "2px solid #eee",
+          borderLeft: `6px solid ${isSkipped ? "#e5e7eb" : APP_MAIN_COLOR}`,
+          borderRadius: 12,
+          padding: 16,
+          backgroundColor: isSkipped ? "#f8fafc" : "rgba(255,255,255,0.92)",
+          boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+          opacity: isSkipped ? 0.75 : 1,
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>{meeting.title}</div>
+            <div style={{ fontSize: 14, color: "#333", opacity: 0.8, fontWeight: 600 }}>🕒 {meeting.time}</div>
+            {showAttendance ? (
+              <div style={{ display: "flex", alignItems: "center", marginTop: 8 }}>
+                {isSkipped ? (
+                  <div style={{ fontSize: 12, fontWeight: 800, color: "#9ca3af" }}>Skipped</div>
+                ) : (
+                  <button
+                    onClick={() => handleToggleAttended(meeting.id)}
+                    style={{
+                      padding: "6px 12px",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      backgroundColor: meeting.attended ? "#4caf50" : "white",
+                      color: meeting.attended ? "white" : "#4caf50",
+                      border: "2px solid #4caf50",
+                      borderRadius: 6,
+                      cursor: "pointer",
+                    }}
+                  >
+                    ✓ Attended
+                  </button>
+                )}
+              </div>
+            ) : isSkipped ? (
+              <div style={{ marginTop: 8, fontSize: 12, fontWeight: 800, color: "#9ca3af" }}>Skipped</div>
+            ) : null}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={() => handleToggleMeetingSkipped(meeting.id)}
+              style={{
+                padding: "6px 10px",
+                fontSize: 12,
+                fontWeight: 800,
+                backgroundColor: isSkipped ? "#e5e7eb" : "white",
+                color: isSkipped ? "#6b7280" : "#b45309",
+                border: "1px solid #ddd",
+                borderRadius: 10,
+                cursor: "pointer",
+              }}
+              title={isSkipped ? "Unskip meeting" : "Skip meeting"}
+            >
+              {isSkipped ? "Unskip" : "Skip"}
+            </button>
+            <button
+              onClick={() => {
+                setEditingMeeting(meeting);
+                setShowMeetingForm(true);
+              }}
+              style={{
+                padding: "6px 10px",
+                fontSize: 12,
+                fontWeight: 800,
+                backgroundColor: "white",
+                border: "1px solid #ddd",
+                borderRadius: 10,
+                cursor: "pointer",
+                opacity: 0.9,
+              }}
+              title="Edit meeting"
+            >
+              ✏️
+            </button>
+            <button
+              onClick={() => handleDeleteMeeting(meeting.id)}
+              style={{
+                padding: "6px 10px",
+                fontSize: 12,
+                fontWeight: 800,
+                backgroundColor: "white",
+                border: "1px solid #f44336",
+                color: "#f44336",
+                borderRadius: 10,
+                cursor: "pointer",
+              }}
+            >
+              🗑️
+            </button>
+          </div>
+        </div>
+
+        {meeting.link && (
+          <div style={{ marginBottom: 8 }}>
+            <a
+              href={meeting.link}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                color: "#1976d2",
+                fontSize: 13,
+                textDecoration: "none",
+                fontWeight: 500,
+              }}
+            >
+              🔗 Join Meeting
+            </a>
+          </div>
+        )}
+
+        {meeting.description && (
+          <div
+            style={{
+              fontSize: 13,
+              color: "#555",
+              whiteSpace: "pre-wrap",
+              marginTop: 8,
+              paddingTop: 8,
+              borderTop: "1px solid #eee",
+            }}
+          >
+            {meeting.description}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderFocusTemplateCard = (template: FocusTemplate, showSessionControls: boolean) => {
+    const override = focusOverridesById[template.id];
+    const displayTemplate = override
+      ? { ...template, plannedStart: override.plannedStart, plannedEnd: override.plannedEnd }
+      : template;
+    const isSkipped = skippedFocusTemplateIds.has(template.id);
+    const hasOverride = !!override;
+    const milestoneId = day.focusMilestoneByTemplateId?.[template.id];
+    const milestone = milestoneId ? state.grandPlan?.milestones.find((m) => m.id === milestoneId) : undefined;
+    const categoryColor = milestone
+      ? state.grandPlan?.categories.find((c) => c.id === milestone.categoryId)?.color
+      : undefined;
+    const accentColor = categoryColor ?? APP_MAIN_COLOR;
+
+    return (
+      <FocusTemplateCard
+        key={template.id}
+        template={displayTemplate}
+        accentColor={accentColor}
+        milestoneTitle={milestone?.title}
+        milestoneOptions={focusMilestoneOptions.length > 0 ? focusMilestoneOptions : undefined}
+        selectedMilestoneId={milestoneId}
+        onChangeMilestoneId={(nextMilestoneId) =>
+          mutate((s0) => setFocusTemplateMilestoneForDay(s0, dateSafe, template.id, nextMilestoneId))
+        }
+        activeSessionId={day.activeSessionId}
+        completedSessions={sessionsForDate}
+        onStartSession={showSessionControls ? startSession : undefined}
+        onEndSession={showSessionControls ? endSession : undefined}
+        isSkipped={isSkipped}
+        onToggleSkipped={() => mutate((s0) => toggleFocusTemplateSkippedForDay(s0, dateSafe, template.id))}
+        onReschedule={(nextOverride) =>
+          mutate((s0) => setFocusTemplateOverrideForDay(s0, dateSafe, template.id, nextOverride))
+        }
+        onClearReschedule={() => mutate((s0) => clearFocusTemplateOverrideForDay(s0, dateSafe, template.id))}
+        hasOverride={hasOverride}
+      />
+    );
   };
 
   // v4: If day is closed, show journal-style read-only view
@@ -881,7 +1145,7 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
                 Activate today to start tracking your focus sessions and tasks.
               </p>
               <button
-                onClick={() => setShowActivateModal(true)}
+                onClick={handleActivateDay}
                 style={{
                   padding: "12px 24px",
                   fontSize: 16,
@@ -896,71 +1160,6 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
               >
                 ☀️ Start Working Day
               </button>
-
-          {/* Activation Confirmation Modal */}
-          {showActivateModal && (
-            <div
-              style={{
-                position: "fixed",
-                top: 0,
-                left: 0,
-                right: 0,
-                bottom: 0,
-                backgroundColor: "rgba(0,0,0,0.5)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                zIndex: 1000,
-              }}
-              onClick={() => setShowActivateModal(false)}
-            >
-              <div
-                style={{
-                  backgroundColor: "white",
-                  borderRadius: 12,
-                  padding: 24,
-                  maxWidth: 400,
-                  boxShadow: "0 8px 16px rgba(0,0,0,0.2)",
-                }}
-                onClick={(e) => e.stopPropagation()}
-              >
-                <h3 style={{ marginTop: 0, marginBottom: 16 }}>⚠️ Activate Working Day</h3>
-                <p style={{ marginBottom: 24, lineHeight: 1.6 }}>
-                  This will mark <strong>{dateSafe}</strong> as a working day. This action <strong>cannot be undone</strong>.
-                </p>
-                <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
-                  <button
-                    onClick={() => setShowActivateModal(false)}
-                    style={{
-                      padding: "8px 16px",
-                      fontSize: 14,
-                      backgroundColor: "white",
-                      border: "1px solid #ddd",
-                      borderRadius: 6,
-                      cursor: "pointer",
-                    }}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handleActivateDay}
-                    style={{
-                      padding: "8px 16px",
-                      fontSize: 14,
-                      fontWeight: 600,
-                      backgroundColor: "#4caf50",
-                      color: "white",
-                      border: "none",
-                      borderRadius: 6,
-                      cursor: "pointer",
-                    }}
-                  >
-                    ✓ Activate
-                  </button>
-                </div>
-              </div>
-            </div>
-            )}
             </div>
           )
         ) : (
@@ -1419,128 +1618,7 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
             ) : (
               <>
                 <div style={{ display: "grid", gap: 12 }}>
-                  {dayMeetings.map((meeting) => (
-		                    <div
-		                      key={meeting.id}
-		                      style={{
-		                        border: "2px solid #eee",
-				                        borderLeft: `6px solid ${APP_MAIN_COLOR}`,
-			                        borderRadius: 12,
-			                        padding: 16,
-			                        backgroundColor: "rgba(255,255,255,0.92)",
-			                        boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
-		                      }}
-		                    >
-                      <div
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "flex-start",
-                          marginBottom: 8,
-                        }}
-                      >
-                        <div style={{ flex: 1 }}>
-		                          <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>
-		                            {meeting.title}
-		                          </div>
-		                          <div style={{ fontSize: 14, color: "#333", opacity: 0.8, fontWeight: 600 }}>
-		                            🕒 {meeting.time}
-		                          </div>
-		                          <div style={{ display: "flex", alignItems: "center", marginTop: 8 }}>
-                            <label
-                              style={{
-                                display: "flex",
-                                alignItems: "center",
-                                cursor: "pointer",
-                                fontSize: 13,
-                                color: "#555",
-                              }}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={meeting.attended || false}
-                                onChange={() => handleToggleAttended(meeting.id)}
-                                style={{
-                                  marginRight: 6,
-                                  cursor: "pointer",
-                                  width: 16,
-                                  height: 16,
-                                }}
-                              />
-                              Attended
-                            </label>
-                          </div>
-                        </div>
-                        <div style={{ display: "flex", gap: 8 }}>
-                          <button
-                            onClick={() => {
-                              setEditingMeeting(meeting);
-                              setShowMeetingForm(true);
-                            }}
-                            style={{
-                              padding: "4px 10px",
-                              fontSize: 12,
-                              backgroundColor: "white",
-                              border: "1px solid #ddd",
-                              borderRadius: 4,
-                              cursor: "pointer",
-                              opacity: 0.9,
-                            }}
-                            title="Edit meeting"
-                          >
-                            ✏️
-                          </button>
-                          <button
-                            onClick={() => handleDeleteMeeting(meeting.id)}
-                            style={{
-                              padding: "4px 10px",
-                              fontSize: 12,
-                              backgroundColor: "white",
-                              border: "1px solid #f44336",
-                              color: "#f44336",
-                              borderRadius: 4,
-                              cursor: "pointer",
-                            }}
-                          >
-                            🗑️
-                          </button>
-                        </div>
-                      </div>
-
-                      {meeting.link && (
-                        <div style={{ marginBottom: 8 }}>
-                          <a
-                            href={meeting.link}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={{
-                              color: "#1976d2",
-                              fontSize: 13,
-                              textDecoration: "none",
-                              fontWeight: 500,
-                            }}
-                          >
-                            🔗 Join Meeting
-                          </a>
-                        </div>
-                      )}
-
-                      {meeting.description && (
-                        <div
-		                          style={{
-		                            fontSize: 13,
-		                            color: "#555",
-		                            whiteSpace: "pre-wrap",
-		                            marginTop: 8,
-		                            paddingTop: 8,
-		                            borderTop: "1px solid #eee",
-		                          }}
-		                        >
-		                          {meeting.description}
-		                        </div>
-		                      )}
-                    </div>
-                  ))}
+                  {dayMeetings.map((meeting) => renderMeetingCard(meeting, true))}
                 </div>
 
 		                <button
@@ -1597,36 +1675,7 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
                     No focus templates scheduled for today. Edit templates in Month Setup to assign weekdays.
                   </p>
                 ) : (
-                  eligibleFocusTemplates
-                    .filter((t) => isTemplateScheduledForWeekday(t.daysOfWeek, weekday))
-                    .map((template) => {
-                      const milestoneId = day.focusMilestoneByTemplateId?.[template.id];
-                      const milestone = milestoneId
-                        ? state.grandPlan?.milestones.find((m) => m.id === milestoneId)
-                        : undefined;
-                      const categoryColor = milestone
-                        ? state.grandPlan?.categories.find((c) => c.id === milestone.categoryId)?.color
-                        : undefined;
-                      const accentColor = categoryColor ?? APP_MAIN_COLOR;
-
-                      return (
-                        <FocusTemplateCard
-                          key={template.id}
-                          template={template}
-                          accentColor={accentColor}
-                          milestoneTitle={milestone?.title}
-                          milestoneOptions={focusMilestoneOptions.length > 0 ? focusMilestoneOptions : undefined}
-                          selectedMilestoneId={milestoneId}
-                          onChangeMilestoneId={(nextMilestoneId) =>
-                            mutate((s0) => setFocusTemplateMilestoneForDay(s0, dateSafe, template.id, nextMilestoneId))
-                          }
-                          activeSessionId={day.activeSessionId}
-                          completedSessions={sessionsForDate}
-                          onStartSession={startSession}
-                          onEndSession={endSession}
-                        />
-                      );
-                    })
+                  focusTemplatesForToday.map((template) => renderFocusTemplateCard(template, true))
                 )}
               </div>
             </>
@@ -1636,7 +1685,7 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
             <div style={{ flex: "2 1 420px", minWidth: 320 }}>
               <DailyTimeline
                 date={dateSafe}
-                meetings={dayMeetings}
+                meetings={timelineMeetings}
                 scheduledTemplates={scheduledTemplatesForTimeline}
                 sessions={sessionsForDate}
                 matchHeightPx={leftColumnHeightPx}
@@ -1779,6 +1828,250 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
                   >
                     ✓ Close Day
                   </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {showStartWizard && (
+            <div
+              style={{
+                position: "fixed",
+                inset: 0,
+                backgroundColor: "rgba(17, 24, 39, 0.55)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                zIndex: 2200,
+                padding: 20,
+              }}
+              onClick={closeStartWizard}
+            >
+              <div
+                style={{
+                  width: "100%",
+                  maxWidth: 980,
+                  backgroundColor: "white",
+                  borderRadius: 18,
+                  border: "1px solid #eee",
+                  boxShadow: "0 24px 70px rgba(0,0,0,0.35)",
+                  overflow: "hidden",
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div
+                  style={{
+                    padding: "18px 22px",
+                    borderBottom: "1px solid #eee",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 16,
+                    background: "linear-gradient(180deg, #ffffff 0%, #fafafa 100%)",
+                  }}
+                >
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 900, color: "#6b7280", letterSpacing: 0.4 }}>
+                      Day setup
+                    </div>
+                    <div style={{ marginTop: 6, fontSize: 22, fontWeight: 900, color: "#111" }}>{wizardStepTitle}</div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <div
+                      style={{
+                        padding: "6px 10px",
+                        borderRadius: 999,
+                        backgroundColor: "#f3f4f6",
+                        fontSize: 12,
+                        fontWeight: 800,
+                        color: "#6b7280",
+                      }}
+                    >
+                      {wizardStep + 1} / {wizardSteps.length}
+                    </div>
+                    <button
+                      onClick={closeStartWizard}
+                      style={{
+                        padding: "6px 10px",
+                        fontSize: 14,
+                        fontWeight: 900,
+                        backgroundColor: "white",
+                        border: "1px solid #ddd",
+                        borderRadius: 10,
+                        cursor: "pointer",
+                        color: "#666",
+                      }}
+                      title="Close"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    padding: 22,
+                    maxHeight: wizardStep === 0 ? "none" : "70vh",
+                    overflowY: wizardStep === 0 ? "visible" : "auto",
+                  }}
+                >
+                  {wizardStep === 0 ? (
+                    <div style={{ display: "flex", justifyContent: "center" }}>
+                      <TaskSelectionModal
+                        tasks={selectableTasks}
+                        currentPrimaryId={wizardTaskDraft.primaryId}
+                        currentSecondaryIds={wizardTaskDraft.secondaryIds}
+                        onConfirm={handleTaskSelectionConfirm}
+                        onCancel={() => undefined}
+                        suggestedSecondaryIds={suggestedSecondaryIds}
+                        variant="inline"
+                        showHeader={false}
+                        showFooter={false}
+                        surface="none"
+                        onDraftChange={updateWizardTaskDraft}
+                      />
+                    </div>
+                  ) : wizardStep === 1 ? (
+                    <div>
+                      {dayMeetings.length === 0 ? (
+                        <div
+                          style={{
+                            textAlign: "center",
+                            padding: 24,
+                          }}
+                        >
+                          <div style={{ fontSize: 32, marginBottom: 10 }}>📅</div>
+                          <div style={{ fontSize: 14, color: "#6b7280", marginBottom: 16 }}>
+                            No meetings scheduled yet.
+                          </div>
+                          <button
+                            onClick={() => setShowMeetingForm(true)}
+                            style={{
+                              padding: "10px 16px",
+                              fontSize: 13,
+                              fontWeight: 800,
+                              backgroundColor: APP_MAIN_COLOR,
+                              color: "white",
+                              border: "none",
+                              borderRadius: 10,
+                              cursor: "pointer",
+                              boxShadow: "0 10px 22px rgba(0,0,0,0.10)",
+                            }}
+                          >
+                            + Add meeting
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <div style={{ display: "grid", gap: 12 }}>
+                            {dayMeetings.map((meeting) => renderMeetingCard(meeting, false))}
+                          </div>
+                          <button
+                            onClick={() => setShowMeetingForm(true)}
+                            style={{
+                              marginTop: 14,
+                              padding: "10px 16px",
+                              fontSize: 13,
+                              fontWeight: 800,
+                              backgroundColor: APP_MAIN_COLOR,
+                              color: "white",
+                              border: "none",
+                              borderRadius: 10,
+                              cursor: "pointer",
+                              boxShadow: "0 10px 22px rgba(0,0,0,0.10)",
+                            }}
+                          >
+                            + Add another meeting
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  ) : (
+                    <div>
+                      {focusTemplatesForToday.length === 0 ? (
+                        <div
+                          style={{
+                            textAlign: "center",
+                            padding: 24,
+                          }}
+                        >
+                          <div style={{ fontSize: 32, marginBottom: 10 }}>🎯</div>
+                          <div style={{ fontSize: 14, color: "#6b7280" }}>
+                            No focus sessions scheduled for today.
+                          </div>
+                        </div>
+                      ) : (
+                        <div style={{ display: "grid", gap: 12 }}>
+                          {focusTemplatesForToday.map((template) => renderFocusTemplateCard(template, false))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div
+                  style={{
+                    padding: "14px 22px",
+                    borderTop: "1px solid #eee",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: 12,
+                    backgroundColor: "#fafafa",
+                  }}
+                >
+                  <button
+                    onClick={() => setWizardStep((prev) => Math.max(0, prev - 1))}
+                    disabled={wizardStep === 0}
+                    style={{
+                      padding: "8px 14px",
+                      fontSize: 13,
+                      fontWeight: 800,
+                      backgroundColor: "white",
+                      border: "1px solid #ddd",
+                      borderRadius: 10,
+                      cursor: wizardStep === 0 ? "not-allowed" : "pointer",
+                      color: "#555",
+                      opacity: wizardStep === 0 ? 0.5 : 1,
+                    }}
+                  >
+                    ← Previous
+                  </button>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <button
+                      onClick={handleWizardStartDay}
+                      style={{
+                        padding: "8px 16px",
+                        fontSize: 13,
+                        fontWeight: 900,
+                        backgroundColor: APP_MAIN_COLOR,
+                        color: "white",
+                        border: "none",
+                        borderRadius: 10,
+                        cursor: "pointer",
+                        boxShadow: "0 10px 22px rgba(0,0,0,0.12)",
+                      }}
+                    >
+                      ✓ Start Day
+                    </button>
+                    <button
+                      onClick={() => setWizardStep((prev) => Math.min(wizardSteps.length - 1, prev + 1))}
+                      disabled={wizardStep >= wizardSteps.length - 1}
+                      style={{
+                        padding: "8px 14px",
+                        fontSize: 13,
+                        fontWeight: 800,
+                        backgroundColor: "white",
+                        border: "1px solid #ddd",
+                        borderRadius: 10,
+                        cursor: wizardStep >= wizardSteps.length - 1 ? "not-allowed" : "pointer",
+                        color: "#555",
+                        opacity: wizardStep >= wizardSteps.length - 1 ? 0.5 : 1,
+                      }}
+                    >
+                      Next →
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
