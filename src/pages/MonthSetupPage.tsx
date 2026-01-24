@@ -1,7 +1,6 @@
 
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { Navigate } from "react-router-dom";
-import type { MonthPlan, YM, TaskNode, MilestoneNode, MilestoneStatus, FocusTemplate, Weekday } from "../app/types";
+import type { DateISO, MonthPlan, YM, TaskNode, MilestoneNode, MilestoneStatus, FocusTemplate, Weekday } from "../app/types";
 import {
   loadState,
   saveState,
@@ -17,10 +16,35 @@ import {
   updateTaskInMonth,
   updateMilestone,
 } from "../app/storage";
-import { MON_FRI, WEEKDAY_ORDER, WEEKDAY_SHORT, formatWeekdays, sortWeekdays } from "../app/weekdays";
+import { checkMonthAccess } from "../app/dateAccess";
+import {
+  MON_FRI,
+  WEEKDAY_ORDER,
+  WEEKDAY_SHORT,
+  dayOfWeekFromDateISO,
+  formatWeekdays,
+  isTemplateScheduledForWeekday,
+  sortWeekdays,
+} from "../app/weekdays";
 import { useDateNavigation } from "../contexts/DateNavigationContext";
+import { getVirtualTimestamp } from "../contexts/VirtualClockContext";
 import FireworksOverlay from "../components/FireworksOverlay";
-import { APP_MAIN_COLOR } from "../app/theme";
+import NoGrandPlanPanel from "../components/NoGrandPlanPanel";
+import PastUnactivatedMonthPanel from "../components/PastUnactivatedMonthPanel";
+import FutureMonthPanel from "../components/FutureMonthPanel";
+import TitleDescriptionModal from "../components/TitleDescriptionModal";
+import {
+  BadgePanel,
+  DonutChart,
+  ReportCard,
+  ReportLegend,
+  StackedHistogram,
+  type BadgeItem,
+  type DonutSlice,
+  type StackedDatum,
+} from "../components/ReportCharts";
+import { formatDateLabel, getCategoryMeta, listDatesInMonth, UNKNOWN_CATEGORY, UNCATEGORIZED_CATEGORY } from "../app/reporting";
+import { APP_MAIN_COLOR, REPORT_THEME } from "../app/theme";
 
 function parseTimeToMinutes(time: string): number | null {
   const parts = time.split(":").map((x) => Number(x));
@@ -51,7 +75,7 @@ function seedPlan(ym: YM): MonthPlan {
     tasks: [],
     templates: [],
     pinnedMilestoneIds: [],
-    createdAt: new Date().toISOString(),
+    createdAt: getVirtualTimestamp(),
   };
 }
 
@@ -157,7 +181,7 @@ function TaskGroup({
   const accentColor = isCompleted ? "#FFD700" : color;
   const uiAccent = chromeless ? "#000" : accentColor;
   const noteBorderColor = chromeless ? "#000" : accentColor;
-  const noteBackgroundColor = chromeless ? "rgba(255,255,255,0.96)" : "#fffde7";
+  const noteBackgroundColor = "white";
   const canEditBoard = !isCompleted;
 
   const baseBoardWidth = Math.max(800, boardSize.width);
@@ -579,31 +603,36 @@ function TaskGroup({
       ) : null}
 
       <div>
-        {/* Tasks whiteboard */}
+        {/* Tasks whiteboard - Modern toolbar */}
         <div
           style={{
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
-            gap: 12,
-            flexWrap: "wrap",
-            marginBottom: 10,
+            gap: 16,
+            marginBottom: 16,
+            padding: "12px 16px",
+            backgroundColor: "#f8f9fa",
+            borderRadius: 12,
+            border: "1px solid #e9ecef",
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             {!isCompleted && !hideAddButton && (
               <button
                 onClick={() => onAddTask(milestoneId)}
                 style={{
-                  padding: "8px 12px",
-                  fontSize: 12,
-                  fontWeight: 900,
-                  backgroundColor: "white",
-                  color: noteBorderColor,
-                  border: `2px solid ${noteBorderColor}`,
-                  borderRadius: 10,
+                  padding: "8px 16px",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  backgroundColor: noteBorderColor,
+                  color: "white",
+                  border: "none",
+                  borderRadius: 8,
                   cursor: "pointer",
                   whiteSpace: "nowrap",
+                  boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
+                  transition: "transform 0.1s, box-shadow 0.1s",
                 }}
               >
                 + Add Task
@@ -614,19 +643,20 @@ function TaskGroup({
               <button
                 onClick={() => setIsLinkMode((v) => !v)}
                 style={{
-                  padding: "8px 12px",
-                  fontSize: 12,
-                  fontWeight: 900,
-                  backgroundColor: isLinkMode ? "#f4433612" : "white",
-                  color: "#f44336",
-                  border: isLinkMode ? "2px solid #f44336" : "2px dashed #f44336",
-                  borderRadius: 10,
+                  padding: "8px 14px",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  backgroundColor: isLinkMode ? "#fee2e2" : "white",
+                  color: isLinkMode ? "#dc2626" : "#6b7280",
+                  border: isLinkMode ? "1px solid #fca5a5" : "1px solid #d1d5db",
+                  borderRadius: 8,
                   cursor: "pointer",
                   whiteSpace: "nowrap",
+                  transition: "all 0.15s",
                 }}
                 title="Create red links between tasks"
               >
-                {isLinkMode ? "Done Linking" : "Link Tasks"}
+                {isLinkMode ? "✓ Done Linking" : "⤳ Link"}
               </button>
             )}
 
@@ -634,83 +664,108 @@ function TaskGroup({
               <button
                 onClick={handleExtendBoardClick}
                 style={{
-                  padding: "8px 12px",
-                  fontSize: 12,
-                  fontWeight: 900,
+                  padding: "8px 14px",
+                  fontSize: 13,
+                  fontWeight: 600,
                   backgroundColor: "white",
-                  color: "#333",
-                  border: "2px dashed #bbb",
-                  borderRadius: 10,
+                  color: "#6b7280",
+                  border: "1px solid #d1d5db",
+                  borderRadius: 8,
                   cursor: "pointer",
                   whiteSpace: "nowrap",
+                  transition: "all 0.15s",
                 }}
                 title="Add more whiteboard space"
               >
-                Extend Board
+                ⊕ Expand
               </button>
             )}
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             {isCompleted ? (
               <span
                 style={{
-                  padding: "8px 12px",
-                  fontSize: 12,
-                  fontWeight: 900,
-                  backgroundColor: "#fff8e1",
-                  color: "#8d6e63",
-                  border: "2px solid #FFD700",
-                  borderRadius: 10,
-                  whiteSpace: "nowrap",
-                }}
-              >
-                ✓ Completed
-              </span>
-            ) : milestoneId && onMarkMilestoneCompleted ? (
-              <button
-                onClick={() => onMarkMilestoneCompleted(milestoneId)}
-                style={{
-                  padding: "8px 12px",
-                  fontSize: 12,
-                  fontWeight: 900,
-                  backgroundColor: "white",
-                  color: noteBorderColor,
-                  border: `2px solid ${noteBorderColor}`,
-                  borderRadius: 10,
-                  cursor: "pointer",
+                  padding: "8px 14px",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  backgroundColor: "#fef3c7",
+                  color: "#92400e",
+                  borderRadius: 8,
                   whiteSpace: "nowrap",
                   display: "flex",
                   alignItems: "center",
                   gap: 6,
                 }}
+              >
+                <span style={{ color: "#f59e0b" }}>★</span> Completed
+              </span>
+            ) : milestoneId && onMarkMilestoneCompleted ? (
+              <button
+                onClick={() => onMarkMilestoneCompleted(milestoneId)}
+                style={{
+                  padding: "8px 14px",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  backgroundColor: "white",
+                  color: "#6b7280",
+                  border: "1px solid #d1d5db",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  transition: "all 0.15s",
+                }}
                 title="Mark this milestone as completed"
               >
-                <span style={{ color: "#FFD700" }}>★</span> Mark Completed
+                <span style={{ color: "#f59e0b" }}>★</span> Complete
               </button>
             ) : null}
           </div>
         </div>
 
         {isLinkMode && !isCompleted && (
-          <div style={{ marginBottom: 10, fontSize: 12, fontWeight: 800, color: "#f44336" }}>
+          <div style={{
+            marginBottom: 12,
+            padding: "10px 14px",
+            fontSize: 13,
+            fontWeight: 500,
+            color: "#dc2626",
+            backgroundColor: "#fef2f2",
+            borderRadius: 8,
+            border: "1px solid #fecaca",
+          }}>
             {linkFromTaskId
-              ? "Click another task to create a red arrow (click the same task to cancel)."
-              : "Click a task, then click another to create a red arrow."}
+              ? "→ Click another task to create a link (click the same task to cancel)"
+              : "→ Click a task, then click another to create a link"}
           </div>
         )}
 
 	        <div
 	          style={{
-	            border: `2px solid ${noteBorderColor}`,
 	            borderRadius: 16,
-	            backgroundColor: "rgba(255,255,255,0.86)",
-	            boxShadow: "0 2px 0 rgba(0,0,0,0.05), 0 14px 26px rgba(0,0,0,0.08)",
+	            backgroundColor: "#ffffff",
+	            boxShadow: "0 1px 3px rgba(0,0,0,0.08), 0 8px 24px rgba(0,0,0,0.06)",
 	            overflow: "hidden",
 	            position: "relative",
+	            border: "1px solid #e5e7eb",
 	          }}
 	        >
-	          <div style={{ position: "absolute", top: 12, right: 12, zIndex: 20, display: "flex", flexDirection: "column", gap: 8 }}>
+	          {/* Modern zoom controls */}
+	          <div style={{
+	            position: "absolute",
+	            top: 16,
+	            right: 16,
+	            zIndex: 20,
+	            display: "flex",
+	            backgroundColor: "white",
+	            borderRadius: 10,
+	            boxShadow: "0 2px 8px rgba(0,0,0,0.12)",
+	            border: "1px solid #e5e7eb",
+	            overflow: "hidden",
+	          }}>
 	            <button
 	              type="button"
 	              onClick={() =>
@@ -722,20 +777,36 @@ function TaskGroup({
 	              aria-label="Zoom in"
 	              title="Zoom in"
 	              style={{
-	                width: 34,
-	                height: 34,
-	                borderRadius: 10,
-	                backgroundColor: "white",
-	                color: noteBorderColor,
-	                border: `2px solid ${noteBorderColor}`,
+	                width: 36,
+	                height: 36,
+	                backgroundColor: "transparent",
+	                color: "#374151",
+	                border: "none",
+	                borderRight: "1px solid #e5e7eb",
 	                fontSize: 18,
-	                fontWeight: 900,
+	                fontWeight: 500,
 	                lineHeight: 1,
 	                cursor: "pointer",
+	                transition: "background-color 0.15s",
 	              }}
+	              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "#f3f4f6"}
+	              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "transparent"}
 	            >
 	              +
 	            </button>
+	            <div style={{
+	              width: 48,
+	              height: 36,
+	              display: "flex",
+	              alignItems: "center",
+	              justifyContent: "center",
+	              fontSize: 12,
+	              fontWeight: 600,
+	              color: "#6b7280",
+	              borderRight: "1px solid #e5e7eb",
+	            }}>
+	              {Math.round(boardZoom * 100)}%
+	            </div>
 	            <button
 	              type="button"
 	              onClick={() =>
@@ -747,17 +818,19 @@ function TaskGroup({
 	              aria-label="Zoom out"
 	              title="Zoom out"
 	              style={{
-	                width: 34,
-	                height: 34,
-	                borderRadius: 10,
-	                backgroundColor: "white",
-	                color: noteBorderColor,
-	                border: `2px solid ${noteBorderColor}`,
+	                width: 36,
+	                height: 36,
+	                backgroundColor: "transparent",
+	                color: "#374151",
+	                border: "none",
 	                fontSize: 18,
-	                fontWeight: 900,
+	                fontWeight: 500,
 	                lineHeight: 1,
 	                cursor: "pointer",
+	                transition: "background-color 0.15s",
 	              }}
+	              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "#f3f4f6"}
+	              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "transparent"}
 	            >
 	              −
 	            </button>
@@ -773,7 +846,9 @@ function TaskGroup({
 		                  height: baseBoardHeight,
 		                  transform: `scale(${boardZoom})`,
 		                  transformOrigin: "0 0",
-		                  backgroundColor: "white",
+		                  backgroundColor: "#fafbfc",
+		                  backgroundImage: "radial-gradient(circle, #d1d5db 1px, transparent 1px)",
+		                  backgroundSize: "24px 24px",
 		                }}
 		              >
 		                {/* Links layer */}
@@ -868,11 +943,11 @@ function TaskGroup({
 	                if (!rect) return null;
 
                 const statusGlyph = task.status === "GREEN" ? "✓" : task.status === "YELLOW" ? "◐" : "○";
-                const statusColor = task.status === "GREEN" ? "#4caf50" : task.status === "YELLOW" ? "#ff9800" : "#999";
+                const statusColor = task.status === "GREEN" ? "#10b981" : task.status === "YELLOW" ? "#f59e0b" : "#9ca3af";
+                const statusBgColor = task.status === "GREEN" ? "#d1fae5" : task.status === "YELLOW" ? "#fef3c7" : "#f3f4f6";
                 const description = (task.description ?? "").trim();
 
                 const isLinkSelected = isLinkMode && linkFromTaskId === task.id;
-                const border = isLinkSelected ? "2px dashed #f44336" : `2px solid ${noteBorderColor}`;
                 const isDragging = dragPreview?.taskId === task.id;
 
                 return (
@@ -895,19 +970,19 @@ function TaskGroup({
                       top: rect.y,
                       width: rect.w,
                       height: rect.h,
-                      padding: "12px 12px 20px",
+                      padding: "14px 14px 28px",
                       boxSizing: "border-box",
-                      borderRadius: 14,
-                      backgroundColor: noteBackgroundColor,
-                      backgroundImage: "linear-gradient(180deg, rgba(255,255,255,0.55), rgba(0,0,0,0.02))",
-                      border,
+                      borderRadius: 12,
+                      backgroundColor: "#ffffff",
+                      border: isLinkSelected ? "2px dashed #ef4444" : "1px solid #e5e7eb",
                       boxShadow: isDragging
-                        ? "0 4px 0 rgba(0,0,0,0.06), 0 20px 34px rgba(0,0,0,0.18)"
-                        : "0 2px 0 rgba(0,0,0,0.05), 0 12px 22px rgba(0,0,0,0.10)",
+                        ? "0 20px 40px rgba(0,0,0,0.15), 0 0 0 2px rgba(59,130,246,0.5)"
+                        : "0 1px 3px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04)",
                       cursor: isLinkMode ? "crosshair" : canEditBoard ? "grab" : "pointer",
                       userSelect: "none",
                       overflow: "hidden",
                       zIndex: isDragging ? 5 : 2,
+                      transition: "box-shadow 0.15s, transform 0.1s",
                     }}
                     title={isLinkMode ? "Click to link" : task.title}
                   >
@@ -915,10 +990,10 @@ function TaskGroup({
                       <div
                         style={{
                           flex: 1,
-                          fontWeight: 900,
-                          fontSize: 13,
-                          color: "#222",
-                          lineHeight: 1.2,
+                          fontWeight: 600,
+                          fontSize: 14,
+                          color: "#111827",
+                          lineHeight: 1.3,
                           overflow: "hidden",
                           textOverflow: "ellipsis",
                           whiteSpace: "nowrap",
@@ -938,14 +1013,23 @@ function TaskGroup({
                             onDeleteTask(task.id);
                           }}
                           style={{
-                            padding: "2px 8px",
-                            fontSize: 12,
+                            padding: "2px 6px",
+                            fontSize: 11,
                             backgroundColor: "transparent",
-                            color: "#f44336",
+                            color: "#9ca3af",
                             border: "none",
                             cursor: "pointer",
-                            opacity: 0.85,
                             lineHeight: 1,
+                            borderRadius: 4,
+                            transition: "color 0.15s, background-color 0.15s",
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.color = "#ef4444";
+                            e.currentTarget.style.backgroundColor = "#fef2f2";
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.color = "#9ca3af";
+                            e.currentTarget.style.backgroundColor = "transparent";
                           }}
                           title="Delete task"
                         >
@@ -957,10 +1041,10 @@ function TaskGroup({
                     <div
                       style={{
                         marginTop: 8,
-                        fontSize: 12,
-                        color: description ? "#444" : "#888",
+                        fontSize: 13,
+                        color: description ? "#4b5563" : "#9ca3af",
                         fontStyle: description ? "normal" : "italic",
-                        lineHeight: 1.35,
+                        lineHeight: 1.45,
                         display: "-webkit-box",
                         WebkitLineClamp: 4,
                         WebkitBoxOrient: "vertical",
@@ -968,10 +1052,23 @@ function TaskGroup({
                         whiteSpace: "pre-wrap",
                       }}
                     >
-                      {description || "Add a short description…"}
+                      {description || "Add description…"}
                     </div>
 
-                    <div style={{ position: "absolute", bottom: 8, left: 12, fontSize: 12, fontWeight: 900, color: statusColor }}>
+                    <div style={{
+                      position: "absolute",
+                      bottom: 8,
+                      left: 14,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 4,
+                      padding: "3px 8px",
+                      borderRadius: 6,
+                      backgroundColor: statusBgColor,
+                      fontSize: 11,
+                      fontWeight: 600,
+                      color: statusColor,
+                    }}>
                       {statusGlyph}
                     </div>
 
@@ -982,16 +1079,18 @@ function TaskGroup({
                         onPointerUp={handleResizePointerUp}
                         style={{
                           position: "absolute",
-                          right: 6,
-                          bottom: 6,
-                          width: 16,
-                          height: 16,
+                          right: 4,
+                          bottom: 4,
+                          width: 14,
+                          height: 14,
                           cursor: "se-resize",
-                          opacity: 0.7,
-                          borderRight: `2px solid ${noteBorderColor}`,
-                          borderBottom: `2px solid ${noteBorderColor}`,
+                          opacity: 0.4,
+                          backgroundImage: "linear-gradient(135deg, transparent 50%, #9ca3af 50%)",
                           borderRadius: 2,
+                          transition: "opacity 0.15s",
                         }}
+                        onMouseEnter={(e) => e.currentTarget.style.opacity = "0.8"}
+                        onMouseLeave={(e) => e.currentTarget.style.opacity = "0.4"}
                         title="Resize"
                       />
                     )}
@@ -1010,12 +1109,12 @@ function TaskGroup({
 	          style={{
 	            position: "fixed",
 	            inset: 0,
-            backgroundColor: "rgba(0, 0, 0, 0.45)",
+            backgroundColor: "rgba(0, 0, 0, 0.5)",
             display: "flex",
-            alignItems: "stretch",
-            justifyContent: "stretch",
+            alignItems: "center",
+            justifyContent: "center",
             zIndex: 1200,
-            padding: 0,
+            padding: 16,
           }}
           onClick={closeTaskModal}
         >
@@ -1023,17 +1122,21 @@ function TaskGroup({
             style={{
               backgroundColor: noteBackgroundColor,
               backgroundImage: "linear-gradient(180deg, rgba(255,255,255,0.65), rgba(0,0,0,0.02))",
-              borderRadius: 0,
+              borderRadius: 12,
               padding: 24,
               width: "100%",
-              height: "100%",
+              maxWidth: 560,
+              maxHeight: "90vh",
               overflow: "auto",
-              boxShadow: "0 14px 60px rgba(0,0,0,0.35)",
-              border: `3px solid ${noteBorderColor}`,
+              boxShadow: "0 10px 40px rgba(0,0,0,0.30)",
+              border: `2px solid ${noteBorderColor}`,
             }}
             onClick={(e) => e.stopPropagation()}
 	          >
-	            <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "flex-start", marginBottom: 14 }}>
+	            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+	              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 900, color: "#111" }}>
+	                Task Details
+	              </h3>
 	              <button
 	                onClick={closeTaskModal}
 	                style={{
@@ -1261,9 +1364,7 @@ function FocusTemplatesPanel({
         }}
       >
         <div>
-          <div style={{ fontSize: 16, fontWeight: 900, color: "#333", display: "flex", alignItems: "center", gap: 8 }}>
-            ⏱️ Focus templates
-          </div>
+          <div style={{ fontSize: 16, fontWeight: 900, color: "#333" }}>Focus templates</div>
           <div style={{ fontSize: 13, color: "#666", marginTop: 6, lineHeight: 1.5 }}>
             Define monthly focus sessions here. You can link them to milestones day-by-day in the Daily page.
           </div>
@@ -1272,18 +1373,19 @@ function FocusTemplatesPanel({
         <button
           onClick={onAddTemplate}
           style={{
-            padding: "8px 16px",
-            fontSize: 14,
-            fontWeight: 600,
-            backgroundColor: "white",
-            color: "#666",
-            border: "2px dashed #ccc",
-            borderRadius: 20,
+            padding: "10px 14px",
+            fontSize: 13,
+            fontWeight: 800,
+            backgroundColor: uiAccent,
+            color: "white",
+            border: "none",
+            borderRadius: 10,
             cursor: "pointer",
             whiteSpace: "nowrap",
+            boxShadow: "0 10px 22px rgba(0,0,0,0.10)",
           }}
         >
-          + Add Focus Template
+          + Add focus template
         </button>
       </div>
 
@@ -1618,10 +1720,39 @@ export default function MonthSetupPage() {
 
   const [fireworks, setFireworks] = useState<{ key: number; colors: string[] } | null>(null);
 
-  // v6: Grand Plan is mandatory - redirect if not exists
-  if (!state.grandPlan) {
-    return <Navigate to="/grand-plan" replace />;
-  }
+  // Check month access (uses virtual time in dev mode)
+  const monthAccess = useMemo(
+    () => checkMonthAccess(state, ymSafe),
+    [state, ymSafe]
+  );
+
+  // Header component for blocked/empty states
+  const BlockedHeader = () => (
+    <div style={{ marginBottom: 24, paddingBottom: 12, borderBottom: "1px solid #eee" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "end", gap: 12 }}>
+        <div />
+        <div style={{ textAlign: "center" }}>
+          <h2 style={{ margin: 0, fontSize: 28, fontWeight: 900, color: "#111", letterSpacing: 0.2 }}>
+            Month Plan
+          </h2>
+          <div
+            style={{
+              margin: "10px auto 0",
+              width: 56,
+              height: 4,
+              borderRadius: 999,
+              backgroundColor: APP_MAIN_COLOR,
+              opacity: 0.9,
+            }}
+          />
+          <p style={{ margin: "8px 0 0", color: "#666", fontSize: 13 }}>
+            {ymSafe} · Configure your monthly tasks and focus templates
+          </p>
+        </div>
+        <div />
+      </div>
+    </div>
+  );
 
   // v6: Check if month is within Grand Plan period
   const isInPeriod = isMonthInGrandPlanPeriod(state, ymSafe);
@@ -1634,6 +1765,8 @@ export default function MonthSetupPage() {
 
   // v9.3: Confirm milestone completion
   const [confirmCompleteMilestoneId, setConfirmCompleteMilestoneId] = useState<string | null>(null);
+
+  const [creatingTask, setCreatingTask] = useState<{ milestoneId: string | null } | null>(null);
 
   // v8: Pin navigation (null = Standalone)
   const selectedPinStorageKey = `focustree:month-setup:selected-pin:${ymSafe}`;
@@ -1700,37 +1833,23 @@ export default function MonthSetupPage() {
 
   // v5: Close/reopen month handlers
   const handleCloseMonth = () => {
-    const next = closeMonth(state, ymSafe);
+    const current = loadState();
+    const next = closeMonth(current, ymSafe);
     saveState(next);
     setTick((x) => x + 1);
     setShowCloseModal(false);
   };
 
   const handleReopenMonth = () => {
-    const next = reopenMonth(state, ymSafe);
+    const current = loadState();
+    const next = reopenMonth(current, ymSafe);
     saveState(next);
     setTick((x) => x + 1);
   };
 
   // v6.1: Task handlers
   const handleAddTask = (milestoneId: string | null) => {
-    const title = prompt("New task:");
-    if (!title?.trim()) return;
-
-    if (milestoneId) {
-      mutate((s) => addTaskWithMilestone(s, ymSafe, title.trim(), milestoneId).state);
-    } else {
-      // Add standalone task
-      if (!plan) return;
-      const task: TaskNode = {
-        id: makeId("task"),
-        title: title.trim(),
-        parentId: null,
-        status: "NONE",
-      };
-      const nextPlan: MonthPlan = { ...plan, tasks: [...plan.tasks, task] };
-      handlePlanUpdate(nextPlan);
-    }
+    setCreatingTask({ milestoneId });
   };
 
   const handleUpdateTask = (
@@ -1766,6 +1885,36 @@ export default function MonthSetupPage() {
       setSelectedMilestoneId(plan.pinnedMilestoneIds[0] ?? null);
     }
   }, [pinnedIdsKey, selectedMilestoneId]);
+
+  // If month is not allowed, show appropriate blocked panel
+  if (!monthAccess.allowed) {
+    if (monthAccess.reason === "future") {
+      return (
+        <div>
+          <BlockedHeader />
+          <FutureMonthPanel ym={ymSafe} />
+        </div>
+      );
+    }
+    if (monthAccess.reason === "past_unactivated") {
+      return (
+        <div>
+          <BlockedHeader />
+          <PastUnactivatedMonthPanel ym={ymSafe} />
+        </div>
+      );
+    }
+  }
+
+  // v6: Grand Plan is mandatory - show panel to create one if not exists
+  if (!state.grandPlan) {
+    return (
+      <div>
+        <BlockedHeader />
+        <NoGrandPlanPanel />
+      </div>
+    );
+  }
 
   // v6.1: Get standalone tasks (no linkedMilestoneId)
   const standaloneTasks = plan?.tasks.filter((t) => !t.linkedMilestoneId) ?? [];
@@ -1889,250 +2038,288 @@ export default function MonthSetupPage() {
 
   // v5: If month is closed, show read-only report view
   if (plan?.isClosed) {
-    // Calculate all metrics
-    const tasksAddedCount = plan.tasks.length;
+    const grandPlan = state.grandPlan;
+
+    const tasksTotalCount = plan.tasks.length;
     const tasksCompletedCount = plan.tasks.filter((t) => t.status === "GREEN").length;
+    const completionRate = tasksTotalCount > 0 ? Math.round((tasksCompletedCount / tasksTotalCount) * 100) : 0;
 
-    const sessions = state.sessions.filter((s) => s.ym === ymSafe && s.endedAt && typeof s.actualMinutes === "number");
+    const dates = listDatesInMonth(ymSafe);
+    const tasksById = new Map(plan.tasks.map((t) => [t.id, t] as const));
+    const templatesById = new Map(plan.templates.map((t) => [t.id, t] as const));
 
-    const byTemplate = plan.templates.map((tpl) => {
-      const list = sessions.filter((s) => s.templateId === tpl.id);
-      const totalMinutes = list.reduce((a, b) => a + (b.actualMinutes ?? 0), 0);
-      return { tpl, count: list.length, totalMinutes };
+    const categoryMetas = [
+      ...(grandPlan?.categories ?? [])
+        .slice()
+        .sort((a, b) => a.order - b.order)
+        .map((c) => ({ id: c.id, title: c.title, color: c.color })),
+      UNCATEGORIZED_CATEGORY,
+      UNKNOWN_CATEGORY,
+    ];
+
+    const [yearStr, monthStr] = ymSafe.split("-");
+    const yearNum = Number(yearStr);
+    const monthNum = Number(monthStr);
+    const daysInMonth = Number.isFinite(yearNum) && Number.isFinite(monthNum) ? new Date(yearNum, monthNum, 0).getDate() : 30;
+    const monthStart = `${ymSafe}-01`;
+    const monthEnd = `${ymSafe}-${String(daysInMonth).padStart(2, "0")}`;
+
+    const categoryById = new Map((grandPlan?.categories ?? []).map((c) => [c.id, c]));
+    const monthBadges = (grandPlan?.milestones ?? [])
+      .filter((m) => m.status === "COMPLETED")
+      .map((m) => {
+        const completedAt = m.completedAt ?? m.createdAt;
+        const dateISO = completedAt.slice(0, 10);
+        const category = categoryById.get(m.categoryId);
+        const color = category?.color ?? UNKNOWN_CATEGORY.color;
+        const categoryLabel = category?.title ?? UNKNOWN_CATEGORY.title;
+        return {
+          dateISO,
+          badge: {
+            id: m.id,
+            title: m.title,
+            dateLabel: formatDateLabel(dateISO as DateISO, { withYear: false }),
+            categoryLabel,
+            color,
+            isGoal: m.parentId === null,
+          } satisfies BadgeItem,
+        };
+      })
+      .filter((b) => b.dateISO >= monthStart && b.dateISO <= monthEnd)
+      .sort((a, b) => (a.dateISO < b.dateISO ? -1 : 1))
+      .map((b) => b.badge);
+
+    const emptyBadgeState = (
+      <div style={{ display: "grid", placeItems: "center", gap: 8, padding: "10px 0" }}>
+        <svg width="120" height="72" viewBox="0 0 120 72" aria-hidden>
+          <defs>
+            <linearGradient id="badge-empty-grad" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stopColor="#dbeafe" />
+              <stop offset="100%" stopColor="#ede9fe" />
+            </linearGradient>
+          </defs>
+          <rect x="12" y="12" width="96" height="48" rx="18" fill="url(#badge-empty-grad)" />
+          <circle cx="50" cy="36" r="10" fill="#ffffff" opacity="0.9" />
+          <circle cx="70" cy="36" r="10" fill="#ffffff" opacity="0.9" />
+          <circle cx="50" cy="36" r="2" fill="#6b7280" />
+          <circle cx="70" cy="36" r="2" fill="#6b7280" />
+          <path d="M54 44c4 3 8 3 12 0" stroke="#6b7280" strokeWidth="2" strokeLinecap="round" fill="none" />
+          <path d="M90 24l4 4-4 4-4-4z" fill="#fca5a5" />
+        </svg>
+        <div style={{ fontSize: 13, fontWeight: 800, color: REPORT_THEME.textPrimary }}>No badges this month</div>
+        <div style={{ fontSize: 12, color: REPORT_THEME.textMuted }}>Small wins add up — keep going.</div>
+      </div>
+    );
+
+    // ---- Histogram: tasks completed per day (stacked by category) ----
+    const completedTasksByDate: StackedDatum[] = dates.map((date) => {
+      const day = state.days[date];
+      const counts = new Map<string, number>();
+
+      if (day) {
+        const ids = [day.primaryTaskId, ...(day.secondaryTaskIds ?? [])].filter(
+          (x): x is string => typeof x === "string" && x.length > 0
+        );
+        ids.forEach((taskId) => {
+          if (day.outcomeByTaskId?.[taskId] !== "COMPLETED") return;
+          const task = tasksById.get(taskId);
+          const cat = task ? getCategoryMeta(grandPlan, task.linkedMilestoneId) : UNKNOWN_CATEGORY;
+          counts.set(cat.id, (counts.get(cat.id) ?? 0) + 1);
+        });
+      }
+
+      const segments = categoryMetas
+        .map((c) => ({ key: c.id, label: c.title, value: counts.get(c.id) ?? 0, color: c.color }))
+        .filter((s) => s.value > 0);
+
+      const total = segments.reduce((a, b) => a + b.value, 0);
+      return { key: date, label: date.slice(8, 10), total, segments };
     });
 
-    const totalSessions = sessions.length;
-    const totalMinutes = sessions.reduce((a, b) => a + (b.actualMinutes ?? 0), 0);
+    const completedTaskTotalByCategoryId = new Map<string, number>();
+    completedTasksByDate.forEach((d) => {
+      d.segments.forEach((s) => {
+        completedTaskTotalByCategoryId.set(s.key, (completedTaskTotalByCategoryId.get(s.key) ?? 0) + s.value);
+      });
+    });
 
-    const completionRate = tasksAddedCount > 0 ? Math.round((tasksCompletedCount / tasksAddedCount) * 100) : 0;
-    const avgSessionDuration = totalSessions > 0 ? Math.round(totalMinutes / totalSessions) : 0;
+    const completedTaskSlices: DonutSlice[] = categoryMetas.map((c) => ({
+      key: c.id,
+      label: c.title,
+      value: completedTaskTotalByCategoryId.get(c.id) ?? 0,
+      color: c.color,
+    }));
 
-    const daysWithSessions = new Set(
-      state.sessions
-        .filter((s) => s.ym === ymSafe && s.endedAt)
-        .map((s) => s.date)
-    ).size;
+    // ---- Histogram: focus hours per day (stacked by category) ----
+    const activeTemplates = plan.templates.filter((t) => !t.isSuspended);
+    const plannedFocusSessionsCount = dates.reduce((acc, date) => {
+      const weekday = dayOfWeekFromDateISO(date);
+      return acc + activeTemplates.filter((t) => isTemplateScheduledForWeekday(t.daysOfWeek, weekday)).length;
+    }, 0);
 
-    const daysWithCompletedPrimary = Object.values(state.days).filter(
-      (d) => d.ym === ymSafe && d.primaryTaskId && d.outcomeByTaskId[d.primaryTaskId] === "COMPLETED"
-    ).length;
+    const completedSessionsInMonth = state.sessions.filter(
+      (s) => s.ym === ymSafe && s.endedAt && typeof s.actualMinutes === "number"
+    );
+    const completedFocusSessionsCount = completedSessionsInMonth.length;
+    const focusCompletionDenom = Math.max(plannedFocusSessionsCount, completedFocusSessionsCount);
+    const focusCompletionRate = focusCompletionDenom > 0 ? Math.round((completedFocusSessionsCount / focusCompletionDenom) * 100) : 0;
 
-    const maxMinutes = Math.max(...byTemplate.map((x) => x.totalMinutes), 1);
-    const createBar = (minutes: number) => {
-      const percentage = Math.round((minutes / maxMinutes) * 100);
-      const filled = Math.round(percentage / 10);
-      const empty = 10 - filled;
-      return "█".repeat(filled) + "░".repeat(empty);
-    };
+    const focusHoursByDate: StackedDatum[] = dates.map((date) => {
+      const day = state.days[date];
+      const sessions = completedSessionsInMonth.filter((s) => s.date === date);
+      const hoursByCat = new Map<string, number>();
 
-    // Return closed view
+      sessions.forEach((s) => {
+        const minutes = typeof s.actualMinutes === "number" ? Math.max(0, s.actualMinutes) : 0;
+        if (minutes <= 0) return;
+
+        const milestoneId =
+          day?.focusMilestoneByTemplateId?.[s.templateId] ??
+          templatesById.get(s.templateId)?.linkedMilestoneId ??
+          undefined;
+        const cat = getCategoryMeta(grandPlan, milestoneId);
+        hoursByCat.set(cat.id, (hoursByCat.get(cat.id) ?? 0) + minutes / 60);
+      });
+
+      const segments = categoryMetas
+        .map((c) => ({ key: c.id, label: c.title, value: hoursByCat.get(c.id) ?? 0, color: c.color }))
+        .filter((s) => s.value > 0);
+
+      const total = segments.reduce((a, b) => a + b.value, 0);
+      return { key: date, label: date.slice(8, 10), total, segments };
+    });
+
+    const focusHoursTotalByCategoryId = new Map<string, number>();
+    focusHoursByDate.forEach((d) => {
+      d.segments.forEach((s) => {
+        focusHoursTotalByCategoryId.set(s.key, (focusHoursTotalByCategoryId.get(s.key) ?? 0) + s.value);
+      });
+    });
+
+    const focusSlices: DonutSlice[] = categoryMetas.map((c) => ({
+      key: c.id,
+      label: c.title,
+      value: Number((focusHoursTotalByCategoryId.get(c.id) ?? 0).toFixed(1)),
+      color: c.color,
+    }));
+
     return (
-      <div style={{
-        minHeight: "100vh",
-        backgroundColor: "#fef9e7",
-        padding: "32px 24px",
-        fontFamily: "Georgia, serif"
-      }}>
-        <div style={{ maxWidth: 1200, margin: "0 auto" }}>
-	          <h2 style={{ textAlign: "center", marginBottom: 8, fontSize: 28, color: "#5d4037" }}>
-	            Monthly Report
-	          </h2>
-          <p style={{ textAlign: "center", marginBottom: 32, opacity: 0.7, fontSize: 16 }}>
-            {ymSafe}
-          </p>
-
-          {/* Task Completion Section */}
-          <div style={{
-            border: "2px solid #4caf50",
-            borderRadius: 12,
-            padding: 16,
-            marginBottom: 24,
-            backgroundColor: "#f1f8f4",
-          }}>
-	            <h3 style={{ marginTop: 0, marginBottom: 16, color: "#2e7d32" }}>Task Completion</h3>
-	            <div style={{ display: "grid", gap: 12 }}>
-	              <div style={{
-	                padding: "12px",
-	                backgroundColor: "white",
-                borderRadius: 8,
-                border: "1px solid #c8e6c9",
-              }}>
-                <div style={{ fontSize: 14, marginBottom: 4, color: "#666" }}>Completion Rate</div>
-	                <div style={{ fontSize: 24, fontWeight: 700, color: "#2e7d32" }}>
-	                  {completionRate}%
-	                </div>
-	                <div style={{ fontSize: 13, color: "#666", marginTop: 4 }}>
-	                  {tasksCompletedCount} / {tasksAddedCount} tasks
-	                </div>
-	              </div>
-
-	              <div style={{
-	                padding: "12px",
-                backgroundColor: "white",
-                borderRadius: 8,
-                border: "1px solid #c8e6c9",
-              }}>
-	                <div style={{ fontSize: 14, marginBottom: 4, color: "#666" }}>Tasks Added</div>
-	                <div style={{ fontSize: 24, fontWeight: 700, color: "#2e7d32" }}>
-	                  {tasksAddedCount}
-	                </div>
-	                <div style={{ fontSize: 13, color: "#666", marginTop: 4 }}>total tasks in this month plan</div>
-	              </div>
-
-	              <div style={{
-	                padding: "12px",
-	                backgroundColor: "white",
-                borderRadius: 8,
-                border: "1px solid #c8e6c9",
-              }}>
-	                <div style={{ fontSize: 14, marginBottom: 4, color: "#666" }}>Tasks Completed</div>
-	                <div style={{ fontSize: 24, fontWeight: 700, color: "#2e7d32" }}>
-	                  {tasksCompletedCount}
-	                </div>
-	                <div style={{ fontSize: 13, color: "#666", marginTop: 4 }}>completed (GREEN) tasks</div>
-	              </div>
-	            </div>
-	          </div>
-
-          {/* Focus Sessions Summary */}
-          <div style={{
-            border: "2px solid #ff9800",
-            borderRadius: 12,
-            padding: 16,
-            marginBottom: 24,
-            backgroundColor: "#fff8e1",
-          }}>
-            <h3 style={{ marginTop: 0, marginBottom: 16, color: "#e65100" }}>Focus Sessions</h3>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
-              <div style={{
-                padding: "12px",
-                backgroundColor: "white",
-                borderRadius: 8,
-                border: "1px solid #ffe0b2",
-              }}>
-                <div style={{ fontSize: 13, color: "#666", marginBottom: 4 }}>Total Sessions</div>
-                <div style={{ fontSize: 28, fontWeight: 700, color: "#e65100" }}>{totalSessions}</div>
-              </div>
-
-              <div style={{
-                padding: "12px",
-                backgroundColor: "white",
-                borderRadius: 8,
-                border: "1px solid #ffe0b2",
-              }}>
-                <div style={{ fontSize: 13, color: "#666", marginBottom: 4 }}>Total Minutes</div>
-                <div style={{ fontSize: 28, fontWeight: 700, color: "#e65100" }}>{totalMinutes}</div>
-              </div>
-
-              <div style={{
-                padding: "12px",
-                backgroundColor: "white",
-                borderRadius: 8,
-                border: "1px solid #ffe0b2",
-              }}>
-                <div style={{ fontSize: 13, color: "#666", marginBottom: 4 }}>Avg Duration</div>
-                <div style={{ fontSize: 28, fontWeight: 700, color: "#e65100" }}>{avgSessionDuration}</div>
-                <div style={{ fontSize: 12, color: "#666" }}>min/session</div>
-              </div>
+      <div
+        style={{
+          minHeight: "100vh",
+          backgroundColor: REPORT_THEME.pageBg,
+          padding: "32px 24px",
+          fontFamily: "system-ui, sans-serif",
+        }}
+      >
+        <div style={{ maxWidth: 1020, margin: "0 auto" }}>
+          <div style={{ textAlign: "center", marginBottom: 24 }}>
+            <div style={{ fontSize: 26, fontWeight: 900, color: REPORT_THEME.textPrimary, letterSpacing: 0.2 }}>
+              Monthly Report
             </div>
+            <div style={{ marginTop: 6, fontSize: 13, color: REPORT_THEME.textMuted }}>{ymSafe}</div>
           </div>
 
-          {/* Focus Distribution */}
-          <div style={{
-            border: "2px solid #2196f3",
-            borderRadius: 12,
-            padding: 16,
-            marginBottom: 24,
-            backgroundColor: "#e3f2fd",
-          }}>
-            <h3 style={{ marginTop: 0, marginBottom: 16, color: "#1565c0" }}>Focus Distribution</h3>
-            {byTemplate.length === 0 ? (
-              <p style={{
-                opacity: 0.6,
-                fontStyle: "italic",
-                textAlign: "center",
-                padding: "24px",
-                backgroundColor: "white",
-                borderRadius: 8,
-              }}>
-                No sessions logged yet
-              </p>
-            ) : (
-              <div style={{ display: "grid", gap: 12 }}>
-                {byTemplate.map(({ tpl, count, totalMinutes: mins }) => {
-                  const percentage = maxMinutes > 0 ? Math.round((mins / maxMinutes) * 100) : 0;
-                  return (
-                    <div key={tpl.id} style={{
-                      backgroundColor: "white",
-                      borderRadius: 8,
-                      padding: 12,
-                      border: "1px solid #bbdefb",
-                    }}>
-                      <div style={{ fontWeight: 600, marginBottom: 8, color: "#1565c0" }}>{tpl.title}</div>
-                      <div style={{ fontFamily: "monospace", fontSize: 14, marginBottom: 4 }}>
-                        {createBar(mins)} {percentage}%
-                      </div>
-                      <div style={{ fontSize: 12, color: "#666" }}>
-                        {mins} min · {count} sessions
-                      </div>
-                    </div>
-                  );
-                })}
+          <div style={{ display: "grid", gap: 16 }}>
+            <BadgePanel badges={monthBadges} emptyState={emptyBadgeState} />
+            <ReportCard title="Task Completion">
+              <div style={{ display: "flex", gap: 18, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
+                <div style={{ flex: "1 1 320px", minWidth: 260, maxWidth: 520 }}>
+                  <ReportLegend slices={completedTaskSlices} valueFormatter={(n) => `${n}`} maxItems={10} layout="table" />
+                </div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", flex: "0 0 auto" }}>
+                  <div style={{ marginRight: 72 }}>
+                  <DonutChart
+                    slices={[
+                      { key: "done", label: "Completed", value: tasksCompletedCount, color: APP_MAIN_COLOR },
+                      {
+                        key: "rest",
+                        label: "Remaining",
+                        value: Math.max(0, tasksTotalCount - tasksCompletedCount),
+                        color: REPORT_THEME.borderLight,
+                      },
+                    ]}
+                    size={150}
+                    thickness={18}
+                    centerMain={`${completionRate}%`}
+                  />
+                  </div>
+                  <DonutChart slices={completedTaskSlices} size={150} thickness={18} />
+                </div>
               </div>
-            )}
-          </div>
+            </ReportCard>
 
-          {/* Consistency Metrics */}
-          <div style={{
-            border: "2px solid #f44336",
-            borderRadius: 12,
-            padding: 16,
-            marginBottom: 24,
-            backgroundColor: "#ffebee",
-          }}>
-            <h3 style={{ marginTop: 0, marginBottom: 16, color: "#c62828" }}>Consistency</h3>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
-              <div style={{
-                padding: "12px",
-                backgroundColor: "white",
-                borderRadius: 8,
-                border: "1px solid #ffcdd2",
-              }}>
-                <div style={{ fontSize: 13, color: "#666", marginBottom: 4 }}>Days with Focus</div>
-                <div style={{ fontSize: 28, fontWeight: 700, color: "#c62828" }}>{daysWithSessions}</div>
-                <div style={{ fontSize: 12, color: "#666" }}>days with sessions</div>
-              </div>
+            <ReportCard title="Tasks Completed Over Time">
+              <StackedHistogram
+                data={completedTasksByDate}
+                height={190}
+                barWidth={12}
+                gap={6}
+                xLabelEvery={3}
+                formatTotal={(n) => `${n}`}
+                fill
+                minMaxTotal={8}
+              />
+            </ReportCard>
 
-              <div style={{
-                padding: "12px",
-                backgroundColor: "white",
-                borderRadius: 8,
-                border: "1px solid #ffcdd2",
-              }}>
-                <div style={{ fontSize: 13, color: "#666", marginBottom: 4 }}>Primary Completed</div>
-                <div style={{ fontSize: 28, fontWeight: 700, color: "#c62828" }}>{daysWithCompletedPrimary}</div>
-                <div style={{ fontSize: 12, color: "#666" }}>days completed</div>
+            <ReportCard title="Focus Sessions">
+              <div style={{ display: "flex", gap: 18, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
+                <div style={{ flex: "1 1 320px", minWidth: 260, maxWidth: 520 }}>
+                  <ReportLegend slices={focusSlices} valueFormatter={(n) => `${n.toFixed(1)}h`} maxItems={10} layout="table" />
+                </div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", flex: "0 0 auto" }}>
+                  <div style={{ marginRight: 72 }}>
+                  <DonutChart
+                    slices={[
+                      { key: "done", label: "Completed", value: completedFocusSessionsCount, color: APP_MAIN_COLOR },
+                      {
+                        key: "rest",
+                        label: "Remaining",
+                        value: Math.max(0, plannedFocusSessionsCount - completedFocusSessionsCount),
+                        color: REPORT_THEME.borderLight,
+                      },
+                    ]}
+                    size={150}
+                    thickness={18}
+                    centerMain={`${focusCompletionRate}%`}
+                  />
+                  </div>
+                  <DonutChart slices={focusSlices} size={150} thickness={18} />
+                </div>
               </div>
+            </ReportCard>
+
+            <ReportCard title="Focus Hours Over Time">
+              <StackedHistogram
+                data={focusHoursByDate}
+                height={190}
+                barWidth={12}
+                gap={6}
+                xLabelEvery={3}
+                formatTotal={(n) => `${n.toFixed(1)}h`}
+                fill
+                minMaxTotal={8}
+              />
+            </ReportCard>
+
+            <div style={{ textAlign: "center", marginTop: 28, paddingTop: 18, borderTop: `1px solid ${REPORT_THEME.borderLight}` }}>
+              <button
+                onClick={handleReopenMonth}
+                style={{
+                  padding: "12px 32px",
+                  fontSize: 14,
+                  fontWeight: 800,
+                  backgroundColor: "white",
+                  color: REPORT_THEME.textPrimary,
+                  border: `1px solid ${REPORT_THEME.borderLight}`,
+                  borderRadius: 12,
+                  cursor: "pointer",
+                  boxShadow: REPORT_THEME.cardShadow,
+                }}
+              >
+                Reopen for Editing
+              </button>
             </div>
-          </div>
-
-          {/* Reopen Button */}
-          <div style={{ textAlign: "center", marginTop: 48, paddingTop: 24, borderTop: "2px solid #d7ccc8" }}>
-            <button
-              onClick={handleReopenMonth}
-              style={{
-                padding: "12px 32px",
-                fontSize: 16,
-                fontWeight: 600,
-                backgroundColor: "#4caf50",
-                color: "white",
-                border: "none",
-                borderRadius: 8,
-                cursor: "pointer",
-              }}
-            >
-              Reopen Month for Editing
-            </button>
           </div>
         </div>
       </div>
@@ -2179,7 +2366,7 @@ export default function MonthSetupPage() {
 	      {!plan ? (
 	        <div
 	          style={{
-            padding: 32,
+            padding: 48,
             border: "2px dashed #ddd",
             borderRadius: 12,
             textAlign: "center",
@@ -2188,19 +2375,21 @@ export default function MonthSetupPage() {
         >
           {!isInPeriod ? (
             <>
-              <p style={{ fontSize: 18, marginBottom: 16, color: "#f44336" }}>Month Outside Grand Plan Period</p>
-              <p style={{ color: "#666", marginBottom: 16 }}>
+              <div style={{ fontSize: 48, marginBottom: 16 }}>⚠️</div>
+              <p style={{ fontSize: 18, marginBottom: 12, color: "#f44336" }}>Month Outside Grand Plan Period</p>
+              <p style={{ color: "#666", marginBottom: 16, fontSize: 14 }}>
                 This month ({ymSafe}) is outside your Grand Plan period
                 ({state.grandPlan.startMonth} - {state.grandPlan.endMonth ?? "Ongoing"}).
               </p>
-              <p style={{ fontSize: 13, color: "#666" }}>
+              <p style={{ fontSize: 13, color: "#888" }}>
                 Adjust your Grand Plan dates or navigate to a month within the plan period.
               </p>
             </>
-          ) : (
+          ) : monthAccess.canActivate ? (
             <>
-              <p style={{ fontSize: 18, marginBottom: 16 }}>No plan for {ymSafe} yet</p>
-              <p style={{ color: "#666", marginBottom: 24 }}>
+              <div style={{ fontSize: 48, marginBottom: 16 }}>📅</div>
+              <p style={{ fontSize: 18, marginBottom: 12 }}>No plan for {ymSafe} yet</p>
+              <p style={{ color: "#666", marginBottom: 24, fontSize: 14 }}>
                 Create a monthly plan to start tracking tasks and focus sessions.
               </p>
               <button
@@ -2217,8 +2406,16 @@ export default function MonthSetupPage() {
                   boxShadow: "0 4px 6px rgba(0,0,0,0.1)",
                 }}
               >
-                Create Month Plan
+                📅 Create Month Plan
               </button>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 48, marginBottom: 16 }}>📭</div>
+              <p style={{ fontSize: 18, marginBottom: 12 }}>Nothing to see here</p>
+              <p style={{ color: "#666", fontSize: 14 }}>
+                This month was never set up.
+              </p>
             </>
           )}
         </div>
@@ -2439,17 +2636,18 @@ export default function MonthSetupPage() {
 	            <button
               onClick={() => setShowCloseModal(true)}
               style={{
-                padding: "12px 32px",
+                padding: "16px 32px",
                 fontSize: 16,
                 fontWeight: 600,
-                backgroundColor: "#ff9800",
+                backgroundColor: APP_MAIN_COLOR,
                 color: "white",
                 border: "none",
                 borderRadius: 8,
                 cursor: "pointer",
+                boxShadow: "0 4px 6px rgba(0,0,0,0.1)",
               }}
             >
-              Close Month
+              🔒 Close Month
             </button>
             <p style={{ marginTop: 8, fontSize: 14, color: "#666" }}>
               Mark this month as complete and view the final report
@@ -2588,199 +2786,256 @@ export default function MonthSetupPage() {
                 alignItems: "center",
                 justifyContent: "center",
                 zIndex: 1200,
+                padding: 16,
               }}
               onClick={closeAddTemplateModal}
             >
               <div
                 style={{
                   backgroundColor: "white",
-                  borderRadius: 12,
-                  padding: 24,
-                  maxWidth: 520,
-                  width: "90%",
-                  boxShadow: "0 8px 16px rgba(0,0,0,0.2)",
+                  borderRadius: 14,
+                  border: "1px solid #eee",
+                  maxWidth: 560,
+                  width: "100%",
+                  boxShadow: "0 20px 60px rgba(0,0,0,0.35)",
+                  overflow: "hidden",
                 }}
                 onClick={(e) => e.stopPropagation()}
               >
 	                {(() => {
 	                  const accentColor = APP_MAIN_COLOR;
+                    const selectedBg = withHexAlpha(accentColor, "12");
+                    const selectedBorder = withHexAlpha(accentColor, "55");
+                    const startMinutes = parseTimeToMinutes(newTemplateStart);
+                    const endMinutes = parseTimeToMinutes(newTemplateEnd);
+                    const canSubmit =
+                      newTemplateTitle.trim().length > 0 &&
+                      startMinutes != null &&
+                      endMinutes != null &&
+                      endMinutes > startMinutes;
 
                   return (
                     <>
-                      <h3 style={{ marginTop: 0, marginBottom: 16, color: accentColor }}>
-                        New Focus Template
-                      </h3>
-                <div style={{ display: "grid", gap: 12 }}>
-                  <div>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: "#666", marginBottom: 6 }}>
-                      Template name
-                    </div>
-                    <input
-                      type="text"
-                      value={newTemplateTitle}
-                      onChange={(e) => {
-                        setNewTemplateTitle(e.target.value);
-                        setAddTemplateError(null);
-                      }}
-                      placeholder="e.g. Deep Work"
-                      autoFocus
-                      style={{
-                        width: "100%",
-                        padding: "10px 12px",
-                        borderRadius: 8,
-                        border: `1px solid ${accentColor}`,
-                        fontSize: 14,
-                        boxSizing: "border-box",
-                      }}
-                    />
-                  </div>
-	                  <div>
-	                    <div style={{ fontSize: 12, fontWeight: 600, color: "#666", marginBottom: 6 }}>
-	                      Hour range
-	                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "center" }}>
-                      <div>
-                        <div style={{ fontSize: 11, fontWeight: 600, color: "#777", marginBottom: 6 }}>Start</div>
-                        <input
-                          type="time"
-                          value={newTemplateStart}
-                          onChange={(e) => {
-                            setNewTemplateStart(e.target.value);
-                            setAddTemplateError(null);
-                          }}
-                          style={{
-                            width: "100%",
-                            padding: "10px 12px",
-                            borderRadius: 8,
-                            border: `1px solid ${accentColor}`,
-                            fontSize: 14,
-                            boxSizing: "border-box",
-                          }}
-                        />
+                      <div style={{ padding: "18px 20px", borderBottom: "1px solid #eee" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+                          <div>
+                            <div style={{ fontSize: 16, fontWeight: 900, color: "#111" }}>New focus template</div>
+                            <div style={{ marginTop: 6, fontSize: 13, color: "#666", lineHeight: 1.4 }}>
+                              Create a reusable focus block for your Daily page.
+                            </div>
+                          </div>
+                          <button
+                            onClick={closeAddTemplateModal}
+                            style={{
+                              padding: "6px 10px",
+                              fontSize: 14,
+                              fontWeight: 900,
+                              backgroundColor: "white",
+                              border: "1px solid #ddd",
+                              borderRadius: 10,
+                              cursor: "pointer",
+                              color: "#666",
+                            }}
+                            title="Close"
+                          >
+                            ✕
+                          </button>
+                        </div>
                       </div>
-                      <div>
-                        <div style={{ fontSize: 11, fontWeight: 600, color: "#777", marginBottom: 6 }}>End</div>
-                        <input
-                          type="time"
-                          value={newTemplateEnd}
-                          onChange={(e) => {
-                            setNewTemplateEnd(e.target.value);
-                            setAddTemplateError(null);
-                          }}
-                          style={{
-                            width: "100%",
-                            padding: "10px 12px",
-                            borderRadius: 8,
-                            border: `1px solid ${accentColor}`,
-                            fontSize: 14,
-                            boxSizing: "border-box",
-                          }}
-                        />
-                      </div>
-	                    </div>
-	                  </div>
-	                  <div>
-	                    <div style={{ fontSize: 12, fontWeight: 600, color: "#666", marginBottom: 6 }}>
-	                      Days of week
-	                    </div>
-	                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-	                      {WEEKDAY_ORDER.map((day) => {
-	                        const isSelected = newTemplateDays.includes(day);
-	                        return (
-	                          <button
-	                            key={day}
-	                            type="button"
-	                            onClick={() => toggleNewTemplateDay(day)}
-	                            style={{
-	                              padding: "6px 10px",
-	                              fontSize: 12,
-	                              fontWeight: 800,
-	                              backgroundColor: isSelected ? accentColor : "white",
-	                              color: isSelected ? "white" : accentColor,
-	                              border: `1px solid ${accentColor}`,
-	                              borderRadius: 999,
-	                              cursor: "pointer",
-	                            }}
-	                            title={WEEKDAY_SHORT[day]}
-	                          >
-	                            {WEEKDAY_SHORT[day]}
-	                          </button>
-	                        );
-	                      })}
-	                      <button
-	                        type="button"
-	                        onClick={() => setNewTemplateDays([...MON_FRI])}
-	                        style={{
-	                          padding: "6px 10px",
-	                          fontSize: 12,
-	                          fontWeight: 800,
-	                          backgroundColor: "white",
-	                          color: accentColor,
-	                          border: `1px dashed ${accentColor}`,
-	                          borderRadius: 999,
-	                          cursor: "pointer",
-	                        }}
-	                      >
-	                        Mon–Fri (default)
-	                      </button>
-	                      <button
-	                        type="button"
-	                        onClick={() => setNewTemplateDays([])}
-	                        style={{
-	                          padding: "6px 10px",
-	                          fontSize: 12,
-	                          fontWeight: 800,
-	                          backgroundColor: "white",
-	                          color: accentColor,
-	                          border: `1px dashed ${accentColor}`,
-	                          borderRadius: 999,
-	                          cursor: "pointer",
-	                        }}
-	                      >
-	                        Any day
-	                      </button>
-	                    </div>
-	                    <div style={{ marginTop: 6, fontSize: 11, color: "#777" }}>
-	                      Applies: {formatWeekdays(newTemplateDays)}
-	                    </div>
-	                  </div>
-	                  {addTemplateError && (
-	                    <div style={{ color: "#d32f2f", fontSize: 13 }}>
-	                      {addTemplateError}
-	                    </div>
-	                  )}
-                </div>
 
-                <div style={{ display: "flex", gap: 12, justifyContent: "flex-end", marginTop: 20 }}>
-                  <button
-                    onClick={closeAddTemplateModal}
-                    style={{
-                      padding: "8px 16px",
-                      fontSize: 14,
-                      backgroundColor: "white",
-                      border: "1px solid #ddd",
-                      borderRadius: 6,
-                      cursor: "pointer",
-                    }}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={confirmAddTemplate}
-                    style={{
-                      padding: "8px 16px",
-                      fontSize: 14,
-                      fontWeight: 600,
-                      backgroundColor: accentColor,
-                      color: "white",
-                      border: "none",
-                      borderRadius: 6,
-                      cursor: "pointer",
-                    }}
-                  >
-                    Add Template
-                  </button>
-                </div>
+                      <div style={{ padding: 20, display: "grid", gap: 14 }}>
+                        <div>
+                          <div style={{ fontSize: 12, fontWeight: 800, color: "#555", marginBottom: 6 }}>
+                            Template name <span style={{ color: "#f44336" }}>*</span>
+                          </div>
+                          <input
+                            type="text"
+                            value={newTemplateTitle}
+                            onChange={(e) => {
+                              setNewTemplateTitle(e.target.value);
+                              setAddTemplateError(null);
+                            }}
+                            placeholder="e.g. Deep work"
+                            autoFocus
+                            style={{
+                              width: "100%",
+                              padding: "10px 12px",
+                              borderRadius: 10,
+                              border: "1px solid #ddd",
+                              fontSize: 14,
+                              boxSizing: "border-box",
+                            }}
+                          />
+                        </div>
+
+                        <div>
+                          <div style={{ fontSize: 12, fontWeight: 800, color: "#555", marginBottom: 6 }}>Time</div>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                            <div>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: "#777", marginBottom: 6 }}>Start</div>
+                              <input
+                                type="time"
+                                value={newTemplateStart}
+                                onChange={(e) => {
+                                  setNewTemplateStart(e.target.value);
+                                  setAddTemplateError(null);
+                                }}
+                                style={{
+                                  width: "100%",
+                                  padding: "10px 12px",
+                                  borderRadius: 10,
+                                  border: "1px solid #ddd",
+                                  fontSize: 14,
+                                  boxSizing: "border-box",
+                                }}
+                              />
+                            </div>
+                            <div>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: "#777", marginBottom: 6 }}>End</div>
+                              <input
+                                type="time"
+                                value={newTemplateEnd}
+                                onChange={(e) => {
+                                  setNewTemplateEnd(e.target.value);
+                                  setAddTemplateError(null);
+                                }}
+                                style={{
+                                  width: "100%",
+                                  padding: "10px 12px",
+                                  borderRadius: 10,
+                                  border: "1px solid #ddd",
+                                  fontSize: 14,
+                                  boxSizing: "border-box",
+                                }}
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        <div>
+                          <div style={{ fontSize: 12, fontWeight: 800, color: "#555", marginBottom: 6 }}>Schedule</div>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                            {WEEKDAY_ORDER.map((day) => {
+                              const isSelected = newTemplateDays.includes(day);
+                              return (
+                                <button
+                                  key={day}
+                                  type="button"
+                                  onClick={() => {
+                                    toggleNewTemplateDay(day);
+                                    setAddTemplateError(null);
+                                  }}
+                                  style={{
+                                    padding: "7px 10px",
+                                    fontSize: 12,
+                                    fontWeight: 800,
+                                    backgroundColor: isSelected ? selectedBg : "white",
+                                    color: isSelected ? accentColor : "#555",
+                                    border: `1px solid ${isSelected ? selectedBorder : "#ddd"}`,
+                                    borderRadius: 10,
+                                    cursor: "pointer",
+                                  }}
+                                  title={WEEKDAY_SHORT[day]}
+                                >
+                                  {WEEKDAY_SHORT[day]}
+                                </button>
+                              );
+                            })}
+                            <span style={{ width: 6 }} />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setNewTemplateDays([...MON_FRI]);
+                                setAddTemplateError(null);
+                              }}
+                              style={{
+                                padding: "7px 10px",
+                                fontSize: 12,
+                                fontWeight: 800,
+                                backgroundColor: "white",
+                                color: "#555",
+                                border: "1px solid #ddd",
+                                borderRadius: 10,
+                                cursor: "pointer",
+                              }}
+                            >
+                              Mon–Fri
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setNewTemplateDays([]);
+                                setAddTemplateError(null);
+                              }}
+                              style={{
+                                padding: "7px 10px",
+                                fontSize: 12,
+                                fontWeight: 800,
+                                backgroundColor: "white",
+                                color: "#555",
+                                border: "1px solid #ddd",
+                                borderRadius: 10,
+                                cursor: "pointer",
+                              }}
+                            >
+                              Any day
+                            </button>
+                          </div>
+                          <div style={{ marginTop: 8, fontSize: 12, color: "#777" }}>
+                            Applies: {formatWeekdays(newTemplateDays)}
+                          </div>
+                        </div>
+
+                        {addTemplateError && (
+                          <div style={{ color: "#d32f2f", fontSize: 13, fontWeight: 700 }}>
+                            {addTemplateError}
+                          </div>
+                        )}
+                      </div>
+
+                      <div
+                        style={{
+                          padding: "14px 20px",
+                          borderTop: "1px solid #eee",
+                          display: "flex",
+                          justifyContent: "flex-end",
+                          gap: 10,
+                          backgroundColor: "#fafafa",
+                        }}
+                      >
+                        <button
+                          onClick={closeAddTemplateModal}
+                          style={{
+                            padding: "10px 14px",
+                            fontSize: 14,
+                            fontWeight: 700,
+                            backgroundColor: "white",
+                            border: "1px solid #ddd",
+                            borderRadius: 10,
+                            cursor: "pointer",
+                            color: "#555",
+                          }}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={confirmAddTemplate}
+                          disabled={!canSubmit}
+                          style={{
+                            padding: "10px 14px",
+                            fontSize: 14,
+                            fontWeight: 900,
+                            backgroundColor: canSubmit ? accentColor : "#ddd",
+                            color: "white",
+                            border: "none",
+                            borderRadius: 10,
+                            cursor: canSubmit ? "pointer" : "not-allowed",
+                            boxShadow: canSubmit ? "0 10px 22px rgba(0,0,0,0.10)" : "none",
+                          }}
+                        >
+                          Add template
+                        </button>
+                      </div>
                     </>
                   );
                 })()}
@@ -2873,6 +3128,56 @@ export default function MonthSetupPage() {
 	          )}
 
 	          {/* v5: Close Month Confirmation Modal */}
+	          {creatingTask && (
+	            <TitleDescriptionModal
+	              title="Add Task"
+	              subtitle={
+                  creatingTask.milestoneId
+                    ? `This task will be linked to “${state.grandPlan?.milestones.find((m) => m.id === creatingTask.milestoneId)?.title ?? "Milestone"}”.`
+                    : "This task will be standalone (not linked to a milestone)."
+                }
+	              accentColor={(() => {
+                  const milestoneId = creatingTask.milestoneId;
+                  if (!milestoneId) return APP_MAIN_COLOR;
+                  const milestone = state.grandPlan?.milestones.find((m) => m.id === milestoneId);
+                  const category = milestone
+                    ? state.grandPlan?.categories.find((c) => c.id === milestone.categoryId)
+                    : null;
+                  return category?.color ?? APP_MAIN_COLOR;
+                })()}
+	              titlePlaceholder="Task title..."
+	              descriptionLabel="Short Description"
+	              descriptionPlaceholder="What needs to be done (optional)..."
+	              confirmLabel="Add Task"
+	              onCancel={() => setCreatingTask(null)}
+	              onConfirm={(title, description) => {
+                  const nextDescription = description.trim() || undefined;
+                  const milestoneId = creatingTask.milestoneId;
+
+                  mutate((s0) => {
+                    const plan0 = getMonth(s0, ymSafe);
+                    if (!plan0) return s0;
+
+                    if (milestoneId) {
+                      return addTaskWithMilestone(s0, ymSafe, title.trim(), milestoneId, null, nextDescription).state;
+                    }
+
+                    const task: TaskNode = {
+                      id: makeId("task"),
+                      title: title.trim(),
+                      description: nextDescription,
+                      parentId: null,
+                      status: "NONE",
+                    };
+
+                    return upsertMonth(s0, { ...plan0, tasks: [...plan0.tasks, task] });
+                  });
+
+                  setCreatingTask(null);
+                }}
+	            />
+	          )}
+
 	          {showCloseModal && (
 	            <div
 	              style={{
@@ -2897,9 +3202,10 @@ export default function MonthSetupPage() {
                 }}
                 onClick={(e) => e.stopPropagation()}
               >
-                <h3 style={{ marginTop: 0, marginBottom: 16 }}>Close Month</h3>
+                <h3 style={{ marginTop: 0, marginBottom: 16 }}>🔒 Close Month</h3>
                 <p style={{ marginBottom: 24, lineHeight: 1.6 }}>
                   This will close the month and convert it to a read-only report view.
+                  If this is the current month, it will also close today (ending any active focus session).
                   You can reopen the month later if needed.
                 </p>
                 <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
@@ -2922,14 +3228,14 @@ export default function MonthSetupPage() {
                       padding: "8px 16px",
                       fontSize: 14,
                       fontWeight: 600,
-                      backgroundColor: "#ff9800",
+                      backgroundColor: APP_MAIN_COLOR,
                       color: "white",
                       border: "none",
                       borderRadius: 6,
                       cursor: "pointer",
                     }}
                   >
-                    Close Month
+                    ✓ Close Month
                   </button>
                 </div>
               </div>

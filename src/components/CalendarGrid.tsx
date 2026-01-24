@@ -1,5 +1,6 @@
-import type { DateISO, YM } from "../app/types";
-import { getTodayDate } from "../app/storage";
+import { useRef, useState } from "react";
+import type { DateISO, MeetingEntry, YM } from "../app/types";
+import { formatDateDisplay, getTodayDate } from "../app/storage";
 import { APP_MAIN_COLOR } from "../app/theme";
 
 interface CalendarGridProps {
@@ -7,6 +8,11 @@ interface CalendarGridProps {
   selectedDate: DateISO;
   onDayClick: (date: DateISO, event: React.MouseEvent) => void;
   onMonthChange: (direction: "prev" | "next") => void;
+  /** Returns true if the date is fully restricted (no navigation allowed) */
+  isDateRestricted?: (date: DateISO) => boolean;
+  /** Returns true if the date is future (meetings only, navigation blocked) */
+  isDateMeetingsOnly?: (date: DateISO) => boolean;
+  meetingsByDate?: Record<DateISO, MeetingEntry[]>;
 }
 
 interface DayCell {
@@ -75,9 +81,19 @@ export default function CalendarGrid({
   selectedDate,
   onDayClick,
   onMonthChange,
+  isDateRestricted,
+  isDateMeetingsOnly,
+  meetingsByDate,
 }: CalendarGridProps) {
   const cells = generateCalendarGrid(currentMonth, selectedDate);
   const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const gridRef = useRef<HTMLDivElement | null>(null);
+  const [hoverCard, setHoverCard] = useState<{
+    date: DateISO;
+    meetings: MeetingEntry[];
+    x: number;
+    y: number;
+  } | null>(null);
 
   return (
     <div style={{ width: "100%" }}>
@@ -87,7 +103,7 @@ export default function CalendarGrid({
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-          marginBottom: 16,
+          marginBottom: 18,
           padding: "0 4px",
         }}
       >
@@ -95,7 +111,7 @@ export default function CalendarGrid({
           onClick={() => onMonthChange("prev")}
           style={{
             padding: "8px 12px",
-            fontSize: 18,
+            fontSize: 20,
             backgroundColor: "white",
             border: "2px solid #eee",
             borderRadius: 12,
@@ -108,7 +124,7 @@ export default function CalendarGrid({
           ‹
         </button>
 
-        <h3 style={{ margin: 0, fontSize: 18, fontWeight: 900, color: "#333" }}>
+        <h3 style={{ margin: 0, fontSize: 20, fontWeight: 900, color: "#333" }}>
           {formatMonthYear(currentMonth)}
         </h3>
 
@@ -116,7 +132,7 @@ export default function CalendarGrid({
           onClick={() => onMonthChange("next")}
           style={{
             padding: "8px 12px",
-            fontSize: 18,
+            fontSize: 20,
             backgroundColor: "white",
             border: "2px solid #eee",
             borderRadius: 12,
@@ -144,10 +160,10 @@ export default function CalendarGrid({
             key={day}
             style={{
               textAlign: "center",
-              fontSize: 11,
+              fontSize: 12,
               fontWeight: 900,
               color: "#666",
-              padding: "8px 0",
+              padding: "10px 0",
               letterSpacing: 0.5,
             }}
           >
@@ -158,27 +174,40 @@ export default function CalendarGrid({
 
       {/* Calendar Grid */}
       <div
+        ref={gridRef}
         style={{
+          position: "relative",
           display: "grid",
           gridTemplateColumns: "repeat(7, 1fr)",
-          gap: 4,
+          gap: 6,
         }}
       >
         {cells.map((cell) => {
+          const isRestricted = isDateRestricted?.(cell.date) ?? false;
+          const isMeetingsOnly = isDateMeetingsOnly?.(cell.date) ?? false;
           const highlightBg = withHexAlpha(APP_MAIN_COLOR, "12");
+          const meetings = meetingsByDate?.[cell.date] ?? [];
+          const meetingCount = meetings.length;
+
           const baseStyle: React.CSSProperties = {
-            padding: "10px 0",
+            position: "relative",
+            height: 58,
             textAlign: "center",
-            cursor: "pointer",
+            cursor: isRestricted ? "not-allowed" : "pointer",
             borderRadius: 12,
-            fontSize: 13,
+            fontSize: 14,
             fontWeight: cell.isCurrentMonth ? 900 : 700,
-            color: cell.isCurrentMonth ? "#222" : "#999",
+            color: isRestricted
+              ? "#bbb"
+              : cell.isCurrentMonth
+              ? "#222"
+              : "#999",
+            opacity: isRestricted ? 0.5 : 1,
             backgroundColor: cell.isSelected ? highlightBg : "rgba(255,255,255,0.92)",
             border: cell.isSelected
               ? `2px solid ${APP_MAIN_COLOR}`
               : cell.isToday
-              ? `2px dashed ${APP_MAIN_COLOR}`
+              ? `2px solid ${APP_MAIN_COLOR}`
               : "1px solid #e6e6e6",
             boxShadow: cell.isSelected
               ? `0 10px 22px ${withHexAlpha(APP_MAIN_COLOR, "1a")}`
@@ -187,11 +216,19 @@ export default function CalendarGrid({
             transition: "transform 120ms ease, background-color 120ms ease, box-shadow 120ms ease, border-color 120ms ease",
           };
 
-          const hoverStyle: React.CSSProperties = {
-            backgroundColor: cell.isSelected ? withHexAlpha(APP_MAIN_COLOR, "18") : "rgba(0,0,0,0.03)",
-            transform: "translateY(-1px)",
-            boxShadow: "0 8px 18px rgba(0,0,0,0.12)",
-          };
+          const hoverStyle: React.CSSProperties = isRestricted
+            ? {}
+            : {
+                backgroundColor: cell.isSelected ? withHexAlpha(APP_MAIN_COLOR, "18") : "rgba(0,0,0,0.03)",
+                transform: "translateY(-1px)",
+                boxShadow: "0 8px 18px rgba(0,0,0,0.12)",
+              };
+
+          const titleText = isRestricted
+            ? `${cell.date} (restricted)`
+            : isMeetingsOnly
+            ? `${cell.date} (meetings only)`
+            : cell.date;
 
           return (
             <div
@@ -199,17 +236,86 @@ export default function CalendarGrid({
               onClick={(e) => onDayClick(cell.date, e)}
               style={baseStyle}
               onMouseEnter={(e) => {
-                Object.assign(e.currentTarget.style, hoverStyle);
+                if (!isRestricted) {
+                  Object.assign(e.currentTarget.style, hoverStyle);
+                }
+                if (meetingCount > 0 && gridRef.current) {
+                  const gridRect = gridRef.current.getBoundingClientRect();
+                  const cellRect = e.currentTarget.getBoundingClientRect();
+                  setHoverCard({
+                    date: cell.date,
+                    meetings,
+                    x: cellRect.left - gridRect.left + cellRect.width / 2,
+                    y: cellRect.top - gridRect.top + cellRect.height + 8,
+                  });
+                }
               }}
               onMouseLeave={(e) => {
                 Object.assign(e.currentTarget.style, baseStyle);
+                setHoverCard(null);
               }}
-              title={cell.date}
+              title={titleText}
             >
-              {cell.dayOfMonth}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
+                {cell.dayOfMonth}
+              </div>
+              {meetingCount > 0 ? (
+                <div
+                  style={{
+                    position: "absolute",
+                    right: 6,
+                    bottom: 6,
+                    minWidth: 18,
+                    height: 18,
+                    padding: "0 6px",
+                    borderRadius: 999,
+                    backgroundColor: "#ef4444",
+                    color: "white",
+                    fontSize: 10,
+                    fontWeight: 800,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    boxShadow: "0 4px 10px rgba(0,0,0,0.18)",
+                  }}
+                >
+                  {meetingCount}
+                </div>
+              ) : null}
             </div>
           );
         })}
+
+        {hoverCard ? (
+          <div
+            style={{
+              position: "absolute",
+              left: hoverCard.x,
+              top: hoverCard.y,
+              transform: "translateX(-50%)",
+              width: 240,
+              backgroundColor: "white",
+              border: "1px solid #e4e4e7",
+              borderRadius: 12,
+              padding: "10px 12px",
+              boxShadow: "0 12px 28px rgba(15, 23, 42, 0.2)",
+              zIndex: 10,
+              pointerEvents: "none",
+            }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 900, color: "#111", marginBottom: 6 }}>
+              {formatDateDisplay(hoverCard.date)}
+            </div>
+            <div style={{ display: "grid", gap: 6, maxHeight: 180, overflowY: "auto" }}>
+              {hoverCard.meetings.map((meeting) => (
+                <div key={meeting.id} style={{ display: "grid", gridTemplateColumns: "64px 1fr", gap: 8 }}>
+                  <div style={{ fontSize: 11, fontWeight: 900, color: "#4b5563" }}>{meeting.time}</div>
+                  <div style={{ fontSize: 12, color: "#111", fontWeight: 600 }}>{meeting.title}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );

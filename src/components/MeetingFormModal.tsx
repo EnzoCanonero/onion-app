@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import type { DateISO, MeetingEntry } from "../app/types";
+import type { DateISO, MeetingEntry, MeetingRecurrence } from "../app/types";
 import { formatDateDisplay } from "../app/storage";
 
 interface MeetingFormModalProps {
@@ -14,6 +14,7 @@ interface FormState {
   time: string;
   link: string;
   description: string;
+  recurrence: MeetingRecurrence;
 }
 
 interface ValidationErrors {
@@ -71,6 +72,7 @@ export default function MeetingFormModal({
     time: meeting?.time ?? "",
     link: meeting?.link ?? "",
     description: meeting?.description ?? "",
+    recurrence: meeting?.recurrence ?? "NONE",
   });
 
   const [errors, setErrors] = useState<ValidationErrors>({});
@@ -89,7 +91,10 @@ export default function MeetingFormModal({
   }, [onCancel]);
 
   const handleChange = (field: keyof FormState, value: string) => {
-    setForm((prev) => ({ ...prev, [field]: value }));
+    setForm((prev) => ({
+      ...prev,
+      [field]: field === "recurrence" ? (value as MeetingRecurrence) : value,
+    }));
     setTouched((prev) => ({ ...prev, [field]: true }));
   };
 
@@ -108,6 +113,7 @@ export default function MeetingFormModal({
         time: form.time.trim(),
         link: form.link.trim() || undefined,
         description: form.description.trim() || undefined,
+        recurrence: form.recurrence === "NONE" ? undefined : form.recurrence,
       });
     }
   };
@@ -290,6 +296,34 @@ export default function MeetingFormModal({
               <div style={{ marginTop: 4, fontSize: 12, color: "#666", textAlign: "right" }}>
                 {form.description.length}/500
               </div>
+            </div>
+
+            <div style={{ marginBottom: 20 }}>
+              <label
+                htmlFor="recurrence"
+                style={{ display: "block", marginBottom: 4, fontSize: 14, fontWeight: 600 }}
+              >
+                Recurrence
+              </label>
+              <select
+                id="recurrence"
+                value={form.recurrence}
+                onChange={(e) => handleChange("recurrence", e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: "8px 12px",
+                  fontSize: 14,
+                  border: "1px solid #ddd",
+                  borderRadius: 6,
+                  boxSizing: "border-box",
+                  backgroundColor: "white",
+                }}
+              >
+                <option value="NONE">One-off</option>
+                <option value="WEEKLY">Weekly</option>
+                <option value="BIWEEKLY">Bi-weekly</option>
+                <option value="MONTHLY">Monthly</option>
+              </select>
             </div>
 
             {/* Action Buttons */}
