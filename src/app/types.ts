@@ -123,6 +123,8 @@ export type DayEntry = {
   shutdownNote?: string; // v2: end-of-day note shown next day
   activeSessionId?: string; // enforces "one active running session"
   focusMilestoneByTemplateId?: Record<string, string>; // v10: per-day link focus template -> milestone id (Daily-only)
+  focusTemplateOverridesById?: Record<string, { plannedStart: string; plannedEnd: string }>;
+  skippedFocusTemplateIds?: string[];
 };
 
 export type MeetingRecurrence = "NONE" | "WEEKLY" | "BIWEEKLY" | "MONTHLY";
@@ -136,6 +138,7 @@ export type MeetingEntry = {
   link?: string;
   description?: string;
   attended?: boolean; // v4: true if meeting was attended
+  skipped?: boolean;
   createdAt: string; // ISO timestamp
   recurrence?: MeetingRecurrence;
 };

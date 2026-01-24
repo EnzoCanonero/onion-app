@@ -9,6 +9,13 @@ type TaskSelectionModalProps = {
   onConfirm: (primaryId: string | undefined, secondaryIds: string[]) => void;
   onCancel: () => void;
   suggestedSecondaryIds?: string[];
+  variant?: "modal" | "inline";
+  showHeader?: boolean;
+  showCancel?: boolean;
+  confirmLabel?: string;
+  showFooter?: boolean;
+  surface?: "card" | "none";
+  onDraftChange?: (primaryId: string | undefined, secondaryIds: string[]) => void;
 };
 
 export default function TaskSelectionModal({
@@ -18,7 +25,18 @@ export default function TaskSelectionModal({
   onConfirm,
   onCancel,
   suggestedSecondaryIds = [],
+  variant = "modal",
+  showHeader = true,
+  showCancel = true,
+  confirmLabel = "Save",
+  showFooter = true,
+  surface = "card",
+  onDraftChange,
 }: TaskSelectionModalProps) {
+  const lastDraftRef = useRef<{ primaryId?: string; secondaryIds: string[] }>({
+    primaryId: currentPrimaryId ?? undefined,
+    secondaryIds: currentSecondaryIds ?? [],
+  });
   const [selectedPrimaryId, setSelectedPrimaryId] = useState<string>(currentPrimaryId ?? "");
   const [selectedSecondaryIds, setSelectedSecondaryIds] = useState<string[]>(currentSecondaryIds);
   const [primaryMenuOpen, setPrimaryMenuOpen] = useState(false);
@@ -32,6 +50,30 @@ export default function TaskSelectionModal({
     setSelectedSecondaryIds((prev) => prev.filter((id) => ids.has(id)));
   }, [tasks]);
 
+  const areArraysEqual = (a: string[], b: string[]) => {
+    if (a === b) return true;
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) {
+      if (a[i] !== b[i]) return false;
+    }
+    return true;
+  };
+
+  useEffect(() => {
+    const nextPrimary = currentPrimaryId ?? "";
+    const nextSecondary = currentSecondaryIds ?? [];
+    const primaryChanged = selectedPrimaryId !== nextPrimary;
+    const secondaryChanged = !areArraysEqual(selectedSecondaryIds, nextSecondary);
+    if (primaryChanged) setSelectedPrimaryId(nextPrimary);
+    if (secondaryChanged) setSelectedSecondaryIds(nextSecondary);
+    if (primaryChanged || secondaryChanged) {
+      lastDraftRef.current = {
+        primaryId: nextPrimary || undefined,
+        secondaryIds: nextSecondary,
+      };
+    }
+  }, [currentPrimaryId, currentSecondaryIds]);
+
   useEffect(() => {
     if (!selectedPrimaryId) {
       setSelectedSecondaryIds([]);
@@ -42,6 +84,17 @@ export default function TaskSelectionModal({
   }, [selectedPrimaryId]);
 
   useEffect(() => {
+    if (!onDraftChange) return;
+    const primaryId = selectedPrimaryId || undefined;
+    const secondaryIds = selectedSecondaryIds;
+    const last = lastDraftRef.current;
+    if (last && last.primaryId === primaryId && areArraysEqual(last.secondaryIds, secondaryIds)) return;
+    lastDraftRef.current = { primaryId, secondaryIds };
+    onDraftChange(primaryId, secondaryIds);
+  }, [selectedPrimaryId, selectedSecondaryIds, onDraftChange]);
+
+  useEffect(() => {
+    if (variant !== "modal") return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (secondaryMenuOpen) {
@@ -56,7 +109,7 @@ export default function TaskSelectionModal({
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [onCancel, secondaryMenuOpen, primaryMenuOpen]);
+  }, [onCancel, secondaryMenuOpen, primaryMenuOpen, variant]);
 
   useEffect(() => {
     if (!primaryMenuOpen) return;
@@ -174,67 +227,106 @@ export default function TaskSelectionModal({
     onConfirm(primaryId, secondaryIds);
   };
 
-  return (
+  const header = showHeader ? (
     <div
       style={{
-        position: "fixed",
-        inset: 0,
-        backgroundColor: "rgba(0, 0, 0, 0.55)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 2500,
-        padding: 16,
+        padding: "18px 20px",
+        borderBottom: "1px solid #eee",
+        borderTopLeftRadius: 14,
+        borderTopRightRadius: 14,
+        background: "linear-gradient(180deg, rgba(255,255,255,1) 0%, rgba(250,250,250,1) 100%)",
       }}
-      onClick={onCancel}
     >
-      <div
-        style={{
-          width: "100%",
-          maxWidth: 640,
-          backgroundColor: "white",
-          borderRadius: 14,
-          border: "1px solid #eee",
-          boxShadow: "0 20px 60px rgba(0,0,0,0.35)",
-          overflow: "visible",
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div
-          style={{
-            padding: "18px 20px",
-            borderBottom: "1px solid #eee",
-            borderTopLeftRadius: 14,
-            borderTopRightRadius: 14,
-            background:
-              "linear-gradient(180deg, rgba(255,255,255,1) 0%, rgba(250,250,250,1) 100%)",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
-            <div>
-              <div style={{ fontSize: 16, fontWeight: 900, color: "#111" }}>Daily task selection</div>
-              <div style={{ marginTop: 6, fontSize: 13, color: "#666", lineHeight: 1.4 }}>
-                Choose a primary task and optional secondary tasks.
-              </div>
-            </div>
-            <button
-              onClick={onCancel}
-              style={{
-                padding: "6px 10px",
-                fontSize: 14,
-                fontWeight: 900,
-                backgroundColor: "white",
-                border: "1px solid #ddd",
-                borderRadius: 10,
-                cursor: "pointer",
-                color: "#666",
-              }}
-              title="Close"
-            >
-              ✕
-            </button>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+        <div>
+          <div style={{ fontSize: 16, fontWeight: 900, color: "#111" }}>Daily task selection</div>
+          <div style={{ marginTop: 6, fontSize: 13, color: "#666", lineHeight: 1.4 }}>
+            Choose a primary task and optional secondary tasks.
           </div>
         </div>
+        <button
+          onClick={onCancel}
+          style={{
+            padding: "6px 10px",
+            fontSize: 14,
+            fontWeight: 900,
+            backgroundColor: "white",
+            border: "1px solid #ddd",
+            borderRadius: 10,
+            cursor: "pointer",
+            color: "#666",
+          }}
+          title="Close"
+        >
+          ✕
+        </button>
+      </div>
+    </div>
+  ) : null;
+
+  const footer = showFooter ? (
+    <div
+      style={{
+        padding: "14px 20px",
+        borderTop: "1px solid #eee",
+        borderBottomLeftRadius: 14,
+        borderBottomRightRadius: 14,
+        display: "flex",
+        justifyContent: "flex-end",
+        gap: 10,
+        backgroundColor: "#fafafa",
+      }}
+    >
+      {showCancel ? (
+        <button
+          onClick={onCancel}
+          style={{
+            padding: "10px 14px",
+            fontSize: 14,
+            fontWeight: 700,
+            backgroundColor: "white",
+            border: "1px solid #ddd",
+            borderRadius: 10,
+            cursor: "pointer",
+            color: "#555",
+          }}
+        >
+          Cancel
+        </button>
+      ) : null}
+      <button
+        onClick={handleSave}
+        style={{
+          padding: "10px 14px",
+          fontSize: 14,
+          fontWeight: 900,
+          backgroundColor: APP_MAIN_COLOR,
+          color: "white",
+          border: "none",
+          borderRadius: 10,
+          cursor: "pointer",
+          boxShadow: "0 10px 22px rgba(0,0,0,0.10)",
+          transition: "transform 120ms ease, box-shadow 120ms ease",
+        }}
+      >
+        {confirmLabel}
+      </button>
+    </div>
+  ) : null;
+
+  const content = (
+    <div
+      style={{
+        width: "100%",
+        maxWidth: surface === "card" ? 640 : "100%",
+        backgroundColor: surface === "card" ? "white" : "transparent",
+        borderRadius: surface === "card" ? 14 : 0,
+        border: surface === "card" ? "1px solid #eee" : "none",
+        boxShadow: surface === "card" ? "0 20px 60px rgba(0,0,0,0.35)" : "none",
+        overflow: "visible",
+      }}
+    >
+      {header}
 
         <div style={{ padding: 20, display: "grid", gap: 16 }}>
           {orderedTasks.length === 0 ? (
@@ -560,52 +652,29 @@ export default function TaskSelectionModal({
           )}
         </div>
 
-        <div
-          style={{
-            padding: "14px 20px",
-            borderTop: "1px solid #eee",
-            borderBottomLeftRadius: 14,
-            borderBottomRightRadius: 14,
-            display: "flex",
-            justifyContent: "flex-end",
-            gap: 10,
-            backgroundColor: "#fafafa",
-          }}
-        >
-          <button
-            onClick={onCancel}
-            style={{
-              padding: "10px 14px",
-              fontSize: 14,
-              fontWeight: 700,
-              backgroundColor: "white",
-              border: "1px solid #ddd",
-              borderRadius: 10,
-              cursor: "pointer",
-              color: "#555",
-            }}
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleSave}
-            style={{
-              padding: "10px 14px",
-              fontSize: 14,
-              fontWeight: 900,
-              backgroundColor: APP_MAIN_COLOR,
-              color: "white",
-              border: "none",
-              borderRadius: 10,
-              cursor: "pointer",
-              boxShadow: "0 10px 22px rgba(0,0,0,0.10)",
-              transition: "transform 120ms ease, box-shadow 120ms ease",
-            }}
-          >
-            Save
-          </button>
-        </div>
-      </div>
+      {footer}
+    </div>
+  );
+
+  if (variant === "inline") {
+    return content;
+  }
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        backgroundColor: "rgba(0, 0, 0, 0.55)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 2500,
+        padding: 16,
+      }}
+      onClick={onCancel}
+    >
+      <div onClick={(e) => e.stopPropagation()}>{content}</div>
     </div>
   );
 }
