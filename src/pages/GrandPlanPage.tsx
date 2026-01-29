@@ -1518,16 +1518,16 @@ export default function GrandPlanPage() {
       {/* Create Milestone Modal */}
       {creatingMilestone && (
         <TitleDescriptionModal
-          title={creatingMilestone.parentId ? "Add Step" : "Add Goal"}
+          title={creatingMilestone.parentId ? "Add Milestone" : "Add Goal"}
           subtitle={
             creatingMilestone.parentId
-              ? `Create a step under “${grandPlan?.milestones.find((m) => m.id === creatingMilestone.parentId)?.title ?? "Milestone"}”.`
+              ? `Create a milestone under “${grandPlan?.milestones.find((m) => m.id === creatingMilestone.parentId)?.title ?? "Milestone"}”.`
               : `Create a new goal inside “${activeCategory?.title ?? "Category"}”.`
           }
           accentColor={activeCategory?.color ?? APP_MAIN_COLOR}
-          titlePlaceholder={creatingMilestone.parentId ? "Step title..." : "Goal title..."}
+          titlePlaceholder={creatingMilestone.parentId ? "Milestone title..." : "Goal title..."}
           descriptionPlaceholder="Add a description (optional)..."
-          confirmLabel={creatingMilestone.parentId ? "Add Step" : "Add Goal"}
+          confirmLabel={creatingMilestone.parentId ? "Add Milestone" : "Add Goal"}
           onCancel={() => setCreatingMilestone(null)}
           onConfirm={(title, description) => {
             const nextDescription = description.trim() || undefined;
