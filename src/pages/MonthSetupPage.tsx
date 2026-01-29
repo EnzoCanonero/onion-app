@@ -1,6 +1,6 @@
 
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import type { DateISO, MonthPlan, YM, TaskNode, MilestoneNode, MilestoneStatus, FocusTemplate, Weekday } from "../app/types";
+import type { DateISO, MonthPlan, YM, TaskNode, MilestoneNode, MilestoneStatus, FocusTemplate, Weekday, Category } from "../app/types";
 import {
   loadState,
   saveState,
@@ -75,60 +75,20 @@ function seedPlan(ym: YM): MonthPlan {
     tasks: [],
     templates: [],
     pinnedMilestoneIds: [],
+    primaryMilestoneId: undefined,
     createdAt: getVirtualTimestamp(),
   };
 }
 
-function PinGlyph({ color }: { color: string }) {
-  return (
-    <span
-      aria-hidden
-      style={{
-        position: "relative",
-        width: 14,
-        height: 16,
-        flex: "0 0 auto",
-        transform: "rotate(-18deg)",
-      }}
-    >
-      <span
-        style={{
-          position: "absolute",
-          top: 0,
-          left: 3,
-          width: 8,
-          height: 8,
-          borderRadius: "50%",
-          backgroundColor: color,
-          boxShadow: "0 1px 2px rgba(0,0,0,0.25)",
-        }}
-      />
-      <span
-        style={{
-          position: "absolute",
-          top: 7,
-          left: 6,
-          width: 2,
-          height: 6,
-          borderRadius: 2,
-          backgroundColor: color,
-        }}
-      />
-      <span
-        style={{
-          position: "absolute",
-          top: 12,
-          left: 4,
-          width: 0,
-          height: 0,
-          borderLeft: "3px solid transparent",
-          borderRight: "3px solid transparent",
-          borderTop: `4px solid ${color}`,
-        }}
-      />
-    </span>
-  );
-}
+// Type for milestone navigation in toolbar
+type MilestoneNavigationProps = {
+  currentMilestoneId: string | null;
+  pinnedMilestones: MilestoneNode[];
+  categories: Category[];
+  primaryMilestoneId: string | null;
+  onSelectMilestone: (id: string | null) => void;
+  onPinMilestone?: () => void;
+};
 
 // Component for editing tasks under a milestone group
 function TaskGroup({
@@ -146,9 +106,13 @@ function TaskGroup({
   onUpdateTask,
   onDeleteTask,
   onMarkMilestoneCompleted,
+  isObjective = false,
+  onSetObjective,
   hideAddButton = false,
   hideTitle = false,
   chromeless = false,
+  floatingToolbar = false,
+  milestoneNavigation,
 }: {
   title: string;
   color: string;
@@ -167,9 +131,13 @@ function TaskGroup({
   ) => void;
   onDeleteTask: (taskId: string) => void;
   onMarkMilestoneCompleted?: (milestoneId: string) => void;
+  isObjective?: boolean;
+  onSetObjective?: (milestoneId: string) => void;
   hideAddButton?: boolean;
   hideTitle?: boolean;
   chromeless?: boolean;
+  floatingToolbar?: boolean;
+  milestoneNavigation?: MilestoneNavigationProps;
 }) {
   const [taskModalTaskId, setTaskModalTaskId] = useState<string | null>(null);
   const [taskModalTitle, setTaskModalTitle] = useState("");
@@ -178,11 +146,13 @@ function TaskGroup({
   const [taskModalError, setTaskModalError] = useState<string | null>(null);
 
   const isCompleted = milestoneStatus === "COMPLETED";
-  const accentColor = isCompleted ? "#FFD700" : color;
+  const accentColor = color;
   const uiAccent = chromeless ? "#000" : accentColor;
   const noteBorderColor = chromeless ? "#000" : accentColor;
   const noteBackgroundColor = "white";
   const canEditBoard = !isCompleted;
+  const canSetObjective = Boolean(milestoneId && onSetObjective && !isObjective && !isCompleted);
+  const objectiveAccent = "#d6a14a";
 
   const baseBoardWidth = Math.max(800, boardSize.width);
   const baseBoardHeight = Math.max(600, boardSize.height);
@@ -216,6 +186,7 @@ function TaskGroup({
 
   const [isLinkMode, setIsLinkMode] = useState(false);
   const [linkFromTaskId, setLinkFromTaskId] = useState<string | null>(null);
+  const [milestoneDropdownOpen, setMilestoneDropdownOpen] = useState(false);
 
   const [boardZoom, setBoardZoom] = useState(() => {
     try {
@@ -251,7 +222,7 @@ function TaskGroup({
     const DEFAULT_H = 180;
     const GAP = 26;
     const START_X = 28;
-    const START_Y = 28;
+    const START_Y = floatingToolbar ? 80 : 28; // Leave space for floating toolbar
 
     const cols = Math.max(1, Math.floor((Math.max(320, boardSize.width) - START_X * 2) / (DEFAULT_W + GAP)));
     const map = new Map<string, TaskRect>();
@@ -287,7 +258,7 @@ function TaskGroup({
     });
 
     return map;
-  }, [tasks, boardSize.width, dragPreview, resizePreview]);
+  }, [tasks, boardSize.width, dragPreview, resizePreview, floatingToolbar]);
 
   const extendBoardToFit = (rect: TaskRect) => {
     const PAD = 160;
@@ -575,27 +546,49 @@ function TaskGroup({
               <span style={{ fontSize: 12, color: uiAccent }}>✓ Completed</span>
             )}
           </div>
-          {/* Mark as completed button - only show for milestones that aren't completed */}
-          {milestoneId && !isCompleted && onMarkMilestoneCompleted && (
-            <button
-              onClick={() => onMarkMilestoneCompleted(milestoneId)}
-              style={{
-                padding: "4px 10px",
-                fontSize: 11,
-                fontWeight: 600,
-                backgroundColor: "white",
-                color,
-                border: `1px solid ${color}`,
-                borderRadius: 6,
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                gap: 4,
-              }}
-              title="Mark this milestone as completed"
-            >
-              ★ Mark Completed
-            </button>
+          {/* Actions for milestones that aren't completed */}
+          {milestoneId && !isCompleted && (onMarkMilestoneCompleted || canSetObjective) && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {canSetObjective && (
+                <button
+                  onClick={() => onSetObjective?.(milestoneId)}
+                  style={{
+                    padding: "4px 8px",
+                    fontSize: 11,
+                    fontWeight: 700,
+                    backgroundColor: "#fff7ed",
+                    color: "#8a5a12",
+                    border: `1px solid ${objectiveAccent}`,
+                    borderRadius: 6,
+                    cursor: "pointer",
+                  }}
+                  title="Make this the month objective"
+                >
+                  Objective
+                </button>
+              )}
+              {milestoneId && onMarkMilestoneCompleted && (
+                <button
+                  onClick={() => onMarkMilestoneCompleted(milestoneId)}
+                  style={{
+                    padding: "4px 10px",
+                    fontSize: 11,
+                    fontWeight: 600,
+                    backgroundColor: "white",
+                    color,
+                    border: `1px solid ${color}`,
+                    borderRadius: 6,
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 4,
+                  }}
+                  title="Mark this milestone as completed"
+                >
+                  ★ Mark Completed
+                </button>
+              )}
+            </div>
           )}
         </div>
       ) : isCompleted || (milestoneId && !isCompleted && onMarkMilestoneCompleted) ? (
@@ -603,7 +596,8 @@ function TaskGroup({
       ) : null}
 
       <div>
-        {/* Tasks whiteboard - Modern toolbar */}
+        {/* Tasks whiteboard - Modern toolbar (hidden when floatingToolbar is true) */}
+        {!floatingToolbar && (
         <div
           style={{
             display: "flex",
@@ -700,33 +694,60 @@ function TaskGroup({
               >
                 <span style={{ color: "#f59e0b" }}>★</span> Completed
               </span>
-            ) : milestoneId && onMarkMilestoneCompleted ? (
-              <button
-                onClick={() => onMarkMilestoneCompleted(milestoneId)}
-                style={{
-                  padding: "8px 14px",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  backgroundColor: "white",
-                  color: "#6b7280",
-                  border: "1px solid #d1d5db",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  transition: "all 0.15s",
-                }}
-                title="Mark this milestone as completed"
-              >
-                <span style={{ color: "#f59e0b" }}>★</span> Complete
-              </button>
+            ) : milestoneId && (onMarkMilestoneCompleted || canSetObjective) ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {canSetObjective && (
+                  <button
+                    onClick={() => onSetObjective?.(milestoneId)}
+                    style={{
+                      padding: "8px 12px",
+                      fontSize: 12,
+                      fontWeight: 800,
+                      backgroundColor: "#fff7ed",
+                      color: "#8a5a12",
+                      border: `1px solid ${objectiveAccent}`,
+                      borderRadius: 8,
+                      cursor: "pointer",
+                      whiteSpace: "nowrap",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                    }}
+                    title="Make this the month objective"
+                  >
+                    ★ Objective
+                  </button>
+                )}
+                {milestoneId && onMarkMilestoneCompleted ? (
+                  <button
+                    onClick={() => onMarkMilestoneCompleted(milestoneId)}
+                    style={{
+                      padding: "8px 14px",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      backgroundColor: "white",
+                      color: "#6b7280",
+                      border: "1px solid #d1d5db",
+                      borderRadius: 8,
+                      cursor: "pointer",
+                      whiteSpace: "nowrap",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      transition: "all 0.15s",
+                    }}
+                    title="Mark this milestone as completed"
+                  >
+                    <span style={{ color: "#f59e0b" }}>★</span> Complete
+                  </button>
+                ) : null}
+              </div>
             ) : null}
           </div>
         </div>
+        )}
 
-        {isLinkMode && !isCompleted && (
+        {!floatingToolbar && isLinkMode && !isCompleted && (
           <div style={{
             marginBottom: 12,
             padding: "10px 14px",
@@ -835,6 +856,428 @@ function TaskGroup({
 	              −
 	            </button>
 	          </div>
+
+	          {/* Floating toolbars inside whiteboard */}
+	          {floatingToolbar && (
+	            <>
+	              {/* Toolbar 1: Milestone Navigation */}
+	              {milestoneNavigation && (
+	                <div
+	                  style={{
+	                    position: "absolute",
+	                    top: 16,
+	                    left: 16,
+	                    zIndex: 20,
+	                    display: "flex",
+	                    gap: 4,
+	                    padding: "6px 8px",
+	                    backgroundColor: "rgba(255,255,255,0.95)",
+	                    backdropFilter: "blur(8px)",
+	                    borderRadius: 10,
+	                    border: "1px solid rgba(0,0,0,0.08)",
+	                    boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+	                  }}
+	                >
+	                  <div
+	                    style={{ position: "relative" }}
+	                    onMouseEnter={() => setMilestoneDropdownOpen(true)}
+	                    onMouseLeave={() => setMilestoneDropdownOpen(false)}
+	                  >
+	                  <button
+	                    style={{
+	                      padding: "8px 12px",
+	                      fontSize: 12,
+	                      fontWeight: 700,
+	                      backgroundColor: "transparent",
+	                      color: "#374151",
+	                      border: "none",
+	                      borderRadius: 8,
+	                      cursor: "pointer",
+	                      display: "flex",
+	                      alignItems: "center",
+	                      gap: 6,
+	                      maxWidth: 180,
+	                    }}
+	                    title="Switch milestone"
+	                  >
+	                    <span
+	                      style={{
+	                        width: 8,
+	                        height: 8,
+	                        borderRadius: "50%",
+	                        backgroundColor: noteBorderColor,
+	                        flexShrink: 0,
+	                      }}
+	                    />
+	                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+	                      {milestoneNavigation.currentMilestoneId
+	                        ? milestoneNavigation.pinnedMilestones.find((m) => m.id === milestoneNavigation.currentMilestoneId)?.title ?? "Milestone"
+	                        : "Standalone"}
+	                    </span>
+	                    <span style={{ fontSize: 10, color: "#9ca3af", marginLeft: 2 }}>▼</span>
+	                  </button>
+
+	                  {/* Dropdown menu with hover bridge */}
+	                  {milestoneDropdownOpen && (
+	                    <div
+	                      style={{
+	                        position: "absolute",
+	                        top: "100%",
+	                        left: 0,
+	                        paddingTop: 8,
+	                        zIndex: 100,
+	                      }}
+	                    >
+	                      <div
+	                        style={{
+	                          minWidth: 240,
+	                          maxWidth: 300,
+	                          backgroundColor: "white",
+	                          borderRadius: 12,
+	                          border: "1px solid #e2e8f0",
+	                          boxShadow: "0 12px 32px rgba(0,0,0,0.12), 0 4px 12px rgba(0,0,0,0.08)",
+	                          padding: "8px 0",
+	                          overflow: "hidden",
+	                        }}
+	                      >
+	                      {/* Section header */}
+	                      <div style={{
+	                        padding: "8px 14px 6px",
+	                        fontSize: 10,
+	                        fontWeight: 700,
+	                        color: "#94a3b8",
+	                        textTransform: "uppercase",
+	                        letterSpacing: "0.5px",
+	                      }}>
+	                        Milestones
+	                      </div>
+	                      {/* Pinned milestones */}
+	                      {milestoneNavigation.pinnedMilestones.map((m) => {
+	                        const cat = milestoneNavigation.categories.find((c) => c.id === m.categoryId);
+	                        const mColor = cat?.color ?? APP_MAIN_COLOR;
+	                        const isPrimary = milestoneNavigation.primaryMilestoneId === m.id;
+	                        const isActive = milestoneNavigation.currentMilestoneId === m.id;
+	                        return (
+	                          <button
+	                            key={m.id}
+	                            onClick={() => {
+	                              milestoneNavigation.onSelectMilestone(m.id);
+	                              setMilestoneDropdownOpen(false);
+	                            }}
+	                            style={{
+	                              width: "100%",
+	                              padding: "10px 14px",
+	                              fontSize: 12,
+	                              fontWeight: isActive ? 800 : 600,
+	                              backgroundColor: isActive ? "#f3f4f6" : "transparent",
+	                              color: "#333",
+	                              border: "none",
+	                              cursor: "pointer",
+	                              display: "flex",
+	                              alignItems: "center",
+	                              gap: 10,
+	                              textAlign: "left",
+	                            }}
+	                            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "#f9fafb"}
+	                            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = isActive ? "#f3f4f6" : "transparent"}
+	                          >
+	                            <span
+	                              style={{
+	                                width: 10,
+	                                height: 10,
+	                                borderRadius: "50%",
+	                                backgroundColor: mColor,
+	                                flexShrink: 0,
+	                              }}
+	                            />
+	                            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+	                              {m.title}
+	                            </span>
+	                            {isPrimary && (
+	                              <span style={{ fontSize: 10, color: "#8a5a12", fontWeight: 800, backgroundColor: "#fef3c7", padding: "2px 6px", borderRadius: 4 }}>
+	                                ★
+	                              </span>
+	                            )}
+	                            {m.status === "COMPLETED" && (
+	                              <span style={{ fontSize: 10, color: "#059669" }}>✓</span>
+	                            )}
+	                          </button>
+	                        );
+	                      })}
+
+	                      {/* Standalone option */}
+	                      <button
+	                        onClick={() => {
+	                          milestoneNavigation.onSelectMilestone(null);
+	                          setMilestoneDropdownOpen(false);
+	                        }}
+	                        style={{
+	                          width: "100%",
+	                          padding: "10px 14px",
+	                          fontSize: 12,
+	                          fontWeight: milestoneNavigation.currentMilestoneId === null ? 800 : 600,
+	                          backgroundColor: milestoneNavigation.currentMilestoneId === null ? "#f3f4f6" : "transparent",
+	                          color: "#333",
+	                          border: "none",
+	                          cursor: "pointer",
+	                          display: "flex",
+	                          alignItems: "center",
+	                          gap: 10,
+	                          textAlign: "left",
+	                        }}
+	                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "#f9fafb"}
+	                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = milestoneNavigation.currentMilestoneId === null ? "#f3f4f6" : "transparent"}
+	                      >
+	                        <span
+	                          style={{
+	                            width: 10,
+	                            height: 10,
+	                            borderRadius: "50%",
+	                            backgroundColor: "#64748b",
+	                            flexShrink: 0,
+	                          }}
+	                        />
+	                        <span>Standalone</span>
+	                      </button>
+
+	                      {/* Pin more option */}
+	                      {milestoneNavigation.onPinMilestone && (
+	                        <>
+	                          <div style={{ height: 1, backgroundColor: "#e5e7eb", margin: "6px 0" }} />
+	                          <button
+	                            onClick={() => {
+	                              milestoneNavigation.onPinMilestone?.();
+	                              setMilestoneDropdownOpen(false);
+	                            }}
+	                            style={{
+	                              width: "100%",
+	                              padding: "10px 14px",
+	                              fontSize: 12,
+	                              fontWeight: 600,
+	                              backgroundColor: "transparent",
+	                              color: "#6b7280",
+	                              border: "none",
+	                              cursor: "pointer",
+	                              display: "flex",
+	                              alignItems: "center",
+	                              gap: 10,
+	                              textAlign: "left",
+	                            }}
+	                            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "#f9fafb"}
+	                            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "transparent"}
+	                          >
+	                            <span style={{ fontSize: 14, color: "#9ca3af" }}>+</span>
+	                            <span>Pin another milestone...</span>
+	                          </button>
+	                        </>
+	                      )}
+
+	                      {/* Milestone actions - only for selected milestone */}
+	                      {milestoneNavigation.currentMilestoneId && (canSetObjective || onMarkMilestoneCompleted) && (
+	                        <>
+	                          <div style={{ height: 1, backgroundColor: "#e5e7eb", margin: "8px 0" }} />
+
+	                          {/* Actions section header */}
+	                          <div style={{
+	                            padding: "8px 14px 6px",
+	                            fontSize: 10,
+	                            fontWeight: 700,
+	                            color: "#94a3b8",
+	                            textTransform: "uppercase",
+	                            letterSpacing: "0.5px",
+	                          }}>
+	                            Actions
+	                          </div>
+
+	                          {/* Set as Objective */}
+	                          {canSetObjective && (
+	                            <button
+	                              onClick={() => {
+	                                onSetObjective?.(milestoneNavigation.currentMilestoneId!);
+	                                setMilestoneDropdownOpen(false);
+	                              }}
+	                              style={{
+	                                width: "100%",
+	                                padding: "10px 14px",
+	                                fontSize: 12,
+	                                fontWeight: 600,
+	                                backgroundColor: "transparent",
+	                                color: "#92400e",
+	                                border: "none",
+	                                cursor: "pointer",
+	                                display: "flex",
+	                                alignItems: "center",
+	                                gap: 10,
+	                                textAlign: "left",
+	                                transition: "background-color 0.15s ease",
+	                              }}
+	                              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "#fef3c7"}
+	                              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "transparent"}
+	                            >
+	                              <span style={{
+	                                width: 20,
+	                                height: 20,
+	                                borderRadius: 6,
+	                                backgroundColor: "#fef3c7",
+	                                display: "flex",
+	                                alignItems: "center",
+	                                justifyContent: "center",
+	                                fontSize: 11,
+	                              }}>★</span>
+	                              <span>Set as Objective</span>
+	                            </button>
+	                          )}
+
+	                          {/* Mark Complete */}
+	                          {onMarkMilestoneCompleted && (
+	                            <button
+	                              onClick={() => {
+	                                onMarkMilestoneCompleted(milestoneNavigation.currentMilestoneId!);
+	                                setMilestoneDropdownOpen(false);
+	                              }}
+	                              style={{
+	                                width: "100%",
+	                                padding: "10px 14px",
+	                                fontSize: 12,
+	                                fontWeight: 600,
+	                                backgroundColor: "transparent",
+	                                color: "#047857",
+	                                border: "none",
+	                                cursor: "pointer",
+	                                display: "flex",
+	                                alignItems: "center",
+	                                gap: 10,
+	                                textAlign: "left",
+	                                transition: "background-color 0.15s ease",
+	                              }}
+	                              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "#d1fae5"}
+	                              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "transparent"}
+	                            >
+	                              <span style={{
+	                                width: 20,
+	                                height: 20,
+	                                borderRadius: 6,
+	                                backgroundColor: "#d1fae5",
+	                                display: "flex",
+	                                alignItems: "center",
+	                                justifyContent: "center",
+	                                fontSize: 11,
+	                              }}>✓</span>
+	                              <span>Mark Complete</span>
+	                            </button>
+	                          )}
+	                        </>
+	                      )}
+	                      </div>
+	                    </div>
+	                  )}
+	                  </div>
+	                </div>
+	              )}
+
+	              {/* Toolbar 2: Editing tools - positioned to the right with gap */}
+	              {!isCompleted && (
+	                <div
+	                  style={{
+	                    position: "absolute",
+	                    top: 16,
+	                    left: 260,
+	                    zIndex: 20,
+	                    display: "flex",
+	                    gap: 4,
+	                    padding: "6px 8px",
+	                    backgroundColor: "rgba(255,255,255,0.95)",
+	                    backdropFilter: "blur(8px)",
+	                    borderRadius: 10,
+	                    border: "1px solid rgba(0,0,0,0.08)",
+	                    boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+	                  }}
+	                >
+	                  {!hideAddButton && (
+	                    <button
+	                      onClick={() => onAddTask(milestoneId)}
+	                      style={{
+	                        padding: "8px 14px",
+	                        fontSize: 12,
+	                        fontWeight: 800,
+	                        backgroundColor: noteBorderColor,
+	                        color: "white",
+	                        border: "none",
+	                        borderRadius: 8,
+	                        cursor: "pointer",
+	                        boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
+	                        display: "flex",
+	                        alignItems: "center",
+	                        gap: 4,
+	                      }}
+	                      title="Add a new task"
+	                    >
+	                      + Add
+	                    </button>
+	                  )}
+	                  <button
+	                    onClick={() => setIsLinkMode((v) => !v)}
+	                    style={{
+	                      padding: "8px 10px",
+	                      fontSize: 14,
+	                      backgroundColor: isLinkMode ? "#fee2e2" : "transparent",
+	                      color: isLinkMode ? "#dc2626" : "#64748b",
+	                      border: "none",
+	                      borderRadius: 8,
+	                      cursor: "pointer",
+	                      display: "flex",
+	                      alignItems: "center",
+	                      justifyContent: "center",
+	                    }}
+	                    title={isLinkMode ? "Exit link mode" : "Create links between tasks"}
+	                  >
+	                    {isLinkMode ? "✓" : "⤳"}
+	                  </button>
+	                  <button
+	                    onClick={handleExtendBoardClick}
+	                    style={{
+	                      padding: "8px 10px",
+	                      fontSize: 14,
+	                      backgroundColor: "transparent",
+	                      color: "#64748b",
+	                      border: "none",
+	                      borderRadius: 8,
+	                      cursor: "pointer",
+	                      display: "flex",
+	                      alignItems: "center",
+	                      justifyContent: "center",
+	                    }}
+	                    title="Add more whiteboard space"
+	                  >
+	                    ⊕
+	                  </button>
+	                </div>
+	              )}
+	            </>
+	          )}
+
+	          {/* Link mode hint below editing toolbar */}
+	          {floatingToolbar && isLinkMode && !isCompleted && (
+	            <div style={{
+	              position: "absolute",
+	              top: 64,
+	              left: 260,
+	              zIndex: 20,
+	              padding: "8px 12px",
+	              fontSize: 11,
+	              fontWeight: 600,
+	              color: "#dc2626",
+	              backgroundColor: "rgba(254,242,242,0.95)",
+	              borderRadius: 8,
+	              border: "1px solid #fecaca",
+	              boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+	            }}>
+	              {linkFromTaskId
+	                ? "Click another task to link"
+	                : "Click a task to start linking"}
+	            </div>
+	          )}
+
 	          <div style={{ overflow: "auto", height: "min(100vh, 1230px)", minHeight: 520 }}>
 	            <div style={{ position: "relative", width: baseBoardWidth * boardZoom, height: baseBoardHeight * boardZoom }}>
 		              <div
@@ -859,7 +1302,7 @@ function TaskGroup({
 		                >
 		                  {(() => {
 		                    const markerId = `taskLinkArrow-${milestoneId ?? "standalone"}`;
-		                    const LINK_COLOR = "#f44336";
+		                    const LINK_COLOR = noteBorderColor;
 		                    const DEFAULT_GAP = 12;
 
 		                    const getEdgePoint = (rect: TaskRect, dirX: number, dirY: number) => {
@@ -881,8 +1324,8 @@ function TaskGroup({
 		                          <marker
 		                            id={markerId}
 		                            viewBox="0 0 10 10"
-		                            markerWidth="6"
-		                            markerHeight="6"
+		                            markerWidth="4"
+		                            markerHeight="4"
 		                            refX="10"
 		                            refY="5"
 		                            orient="auto"
@@ -1097,11 +1540,10 @@ function TaskGroup({
                   </div>
                 );
 	                })}
-	              </div>
-	            </div>
-	          </div>
-	        </div>
-
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
 	      {taskModalTaskId && (
@@ -1280,6 +1722,11 @@ function FocusTemplatesPanel({
   onAddTemplate,
   onUpdateTemplate,
   onDeleteTemplate,
+  variant = "card",
+  showIntro = true,
+  showTitle = true,
+  emptyStateText = "No focus templates yet",
+  addButtonPlacement = "header",
 }: {
   templates: FocusTemplate[];
   onAddTemplate: () => void;
@@ -1288,6 +1735,11 @@ function FocusTemplatesPanel({
     updates: Partial<Pick<FocusTemplate, "title" | "plannedStart" | "plannedEnd" | "daysOfWeek" | "isSuspended">>
   ) => void;
   onDeleteTemplate: (templateId: string) => void;
+  variant?: "card" | "plain";
+  showIntro?: boolean;
+  showTitle?: boolean;
+  emptyStateText?: string | null;
+  addButtonPlacement?: "header" | "footer-left";
 }) {
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
   const [editTemplateTitle, setEditTemplateTitle] = useState("");
@@ -1342,17 +1794,46 @@ function FocusTemplatesPanel({
 
   const uiAccent = APP_MAIN_COLOR;
 
-  return (
-    <div
+  const panelStyle =
+    variant === "card"
+      ? {
+          border: "2px solid #eee",
+          borderRadius: 12,
+          padding: 20,
+          backgroundColor: panelBgColor,
+          backgroundImage: panelBgPattern,
+          backgroundSize: "24px 24px",
+        }
+      : {
+          border: "none",
+          borderRadius: 0,
+          padding: 0,
+          backgroundColor: "transparent",
+          backgroundImage: "none",
+        };
+
+  const addButton = (
+    <button
+      onClick={onAddTemplate}
       style={{
-        border: "2px solid #eee",
-        borderRadius: 12,
-        padding: 20,
-        backgroundColor: panelBgColor,
-        backgroundImage: panelBgPattern,
-        backgroundSize: "24px 24px",
+        padding: "10px 14px",
+        fontSize: 13,
+        fontWeight: 800,
+        backgroundColor: uiAccent,
+        color: "white",
+        border: "none",
+        borderRadius: 10,
+        cursor: "pointer",
+        whiteSpace: "nowrap",
+        boxShadow: "0 10px 22px rgba(0,0,0,0.10)",
       }}
     >
+      + Add focus template
+    </button>
+  );
+
+  return (
+    <div style={panelStyle}>
       <div
         style={{
           display: "flex",
@@ -1364,35 +1845,21 @@ function FocusTemplatesPanel({
         }}
       >
         <div>
-          <div style={{ fontSize: 16, fontWeight: 900, color: "#333" }}>Focus templates</div>
-          <div style={{ fontSize: 13, color: "#666", marginTop: 6, lineHeight: 1.5 }}>
-            Define monthly focus sessions here. You can link them to milestones day-by-day in the Daily page.
-          </div>
+          {showTitle ? <div style={{ fontSize: 16, fontWeight: 900, color: "#333" }}>Focus templates</div> : null}
+          {showIntro ? (
+            <div style={{ fontSize: 13, color: "#666", marginTop: 6, lineHeight: 1.5 }}>
+              Define monthly focus sessions here. You can link them to milestones day-by-day in the Daily page.
+            </div>
+          ) : null}
         </div>
 
-        <button
-          onClick={onAddTemplate}
-          style={{
-            padding: "10px 14px",
-            fontSize: 13,
-            fontWeight: 800,
-            backgroundColor: uiAccent,
-            color: "white",
-            border: "none",
-            borderRadius: 10,
-            cursor: "pointer",
-            whiteSpace: "nowrap",
-            boxShadow: "0 10px 22px rgba(0,0,0,0.10)",
-          }}
-        >
-          + Add focus template
-        </button>
+        {addButtonPlacement === "header" ? addButton : null}
       </div>
 
       {templates.length === 0 ? (
-        <p style={{ fontSize: 14, color: "#999", fontStyle: "italic", margin: 0 }}>
-          No focus templates yet
-        </p>
+        emptyStateText ? (
+          <p style={{ fontSize: 14, color: "#999", fontStyle: "italic", margin: 0 }}>{emptyStateText}</p>
+        ) : null
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {templates.map((template) => (
@@ -1634,6 +2101,10 @@ function FocusTemplatesPanel({
         </div>
       )}
 
+      {addButtonPlacement === "footer-left" ? (
+        <div style={{ marginTop: 14, display: "flex", justifyContent: "flex-start" }}>{addButton}</div>
+      ) : null}
+
       {suspendInfo && (
         <div
           style={{
@@ -1763,6 +2234,16 @@ export default function MonthSetupPage() {
   // v6.1: Milestone picker modal
   const [showMilestonePicker, setShowMilestonePicker] = useState(false);
 
+  // v12: Month setup wizard
+  const [showMonthWizard, setShowMonthWizard] = useState(false);
+  const [monthWizardStep, setMonthWizardStep] = useState(0);
+  const [monthWizardPrimaryId, setMonthWizardPrimaryId] = useState<string | null>(null);
+  const [monthWizardSecondaryIds, setMonthWizardSecondaryIds] = useState<string[]>([]);
+  const [monthWizardPrimaryMenuOpen, setMonthWizardPrimaryMenuOpen] = useState(false);
+  const [monthWizardSecondaryMenuOpen, setMonthWizardSecondaryMenuOpen] = useState(false);
+  const monthWizardPrimaryMenuRef = useRef<HTMLDivElement | null>(null);
+  const monthWizardSecondaryMenuRef = useRef<HTMLDivElement | null>(null);
+
   // v9.3: Confirm milestone completion
   const [confirmCompleteMilestoneId, setConfirmCompleteMilestoneId] = useState<string | null>(null);
 
@@ -1823,6 +2304,8 @@ export default function MonthSetupPage() {
     const next = upsertMonth(current, seedPlan(ymSafe));
     saveState(next);
     setTick((x) => x + 1);
+    setShowMonthWizard(true);
+    setMonthWizardStep(0);
   };
 
   const handlePlanUpdate = (updatedPlan: MonthPlan) => {
@@ -1866,6 +2349,102 @@ export default function MonthSetupPage() {
   // v8: Milestones pinned to this month (shown as "pins" at the top)
   const pinnedMilestones = getMilestonesInMonth(state, ymSafe);
   const pinnedIdsKey = (plan?.pinnedMilestoneIds ?? []).join("|");
+  const primaryMilestoneId = plan?.primaryMilestoneId ?? null;
+  const primaryMilestone = pinnedMilestones.find((m) => m.id === primaryMilestoneId) ?? null;
+  const secondaryMilestones = pinnedMilestones.filter((m) => m.id !== primaryMilestoneId);
+  const orderedPinnedMilestones = primaryMilestone
+    ? [primaryMilestone, ...secondaryMilestones]
+    : secondaryMilestones;
+
+  const wizardMilestoneGroups = useMemo(() => {
+    if (!state.grandPlan) return [] as Array<{ category: Category; milestones: MilestoneNode[] }>;
+    return state.grandPlan.categories
+      .slice()
+      .sort((a, b) => a.order - b.order)
+      .map((category) => {
+        const milestones = state.grandPlan!.milestones
+          .filter((m) => m.categoryId === category.id && m.status !== "COMPLETED")
+          .slice()
+          .sort((a, b) => a.order - b.order);
+        if (milestones.length === 0) return null;
+        return { category, milestones };
+      })
+      .filter((group): group is { category: Category; milestones: MilestoneNode[] } => group !== null);
+  }, [state.grandPlan]);
+
+  const wizardMilestoneIndex = useMemo(() => {
+    const map = new Map<string, { title: string; categoryTitle: string; categoryColor: string }>();
+    for (const group of wizardMilestoneGroups) {
+      for (const milestone of group.milestones) {
+        map.set(milestone.id, {
+          title: milestone.title,
+          categoryTitle: group.category.title,
+          categoryColor: group.category.color,
+        });
+      }
+    }
+    return map;
+  }, [wizardMilestoneGroups]);
+
+  const selectedObjectiveTitle = monthWizardPrimaryId
+    ? wizardMilestoneIndex.get(monthWizardPrimaryId)?.title ?? ""
+    : "";
+
+  useEffect(() => {
+    if (!plan || !showMonthWizard) return;
+    // Only pre-select if already saved, otherwise let user choose
+    const primaryId = plan.primaryMilestoneId ?? null;
+    setMonthWizardPrimaryId(primaryId);
+    setMonthWizardSecondaryIds((plan.pinnedMilestoneIds ?? []).filter((id) => id !== primaryId));
+  }, [showMonthWizard, plan?.primaryMilestoneId, pinnedIdsKey]);
+
+  useEffect(() => {
+    if (!showMonthWizard) {
+      setMonthWizardPrimaryMenuOpen(false);
+      setMonthWizardSecondaryMenuOpen(false);
+    }
+  }, [showMonthWizard]);
+
+  useEffect(() => {
+    if (!monthWizardPrimaryMenuOpen) return;
+    const handlePointerDown = (e: MouseEvent | TouchEvent) => {
+      const node = monthWizardPrimaryMenuRef.current;
+      if (!node) return;
+      if (node.contains(e.target as Node)) return;
+      setMonthWizardPrimaryMenuOpen(false);
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("touchstart", handlePointerDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("touchstart", handlePointerDown);
+    };
+  }, [monthWizardPrimaryMenuOpen]);
+
+  useEffect(() => {
+    if (!monthWizardSecondaryMenuOpen) return;
+    const handlePointerDown = (e: MouseEvent | TouchEvent) => {
+      const node = monthWizardSecondaryMenuRef.current;
+      if (!node) return;
+      if (node.contains(e.target as Node)) return;
+      setMonthWizardSecondaryMenuOpen(false);
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("touchstart", handlePointerDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("touchstart", handlePointerDown);
+    };
+  }, [monthWizardSecondaryMenuOpen]);
+
+  useEffect(() => {
+    if (!monthWizardPrimaryId) {
+      setMonthWizardSecondaryIds([]);
+      setMonthWizardSecondaryMenuOpen(false);
+      return;
+    }
+    setMonthWizardSecondaryIds((prev) => prev.filter((id) => id !== monthWizardPrimaryId));
+  }, [monthWizardPrimaryId]);
 
   useEffect(() => {
     if (!plan) return;
@@ -1885,6 +2464,8 @@ export default function MonthSetupPage() {
       setSelectedMilestoneId(plan.pinnedMilestoneIds[0] ?? null);
     }
   }, [pinnedIdsKey, selectedMilestoneId]);
+
+  // Removed auto-selection of primary milestone - user must explicitly choose via wizard
 
   // If month is not allowed, show appropriate blocked panel
   if (!monthAccess.allowed) {
@@ -1919,9 +2500,9 @@ export default function MonthSetupPage() {
   // v6.1: Get standalone tasks (no linkedMilestoneId)
   const standaloneTasks = plan?.tasks.filter((t) => !t.linkedMilestoneId) ?? [];
 
-  const scopeBgColor = "#fbfaf7";
-  const scopeBgPattern =
-    "radial-gradient(circle at 1px 1px, rgba(0,0,0,0.06) 1px, transparent 0)";
+  const monthWizardSteps = ["Milestones", "Focus sessions"] as const;
+  const monthWizardTitle = monthWizardSteps[monthWizardStep] ?? monthWizardSteps[0];
+
 
   // v6.1: Get tasks for a specific milestone
   const getTasksForMilestone = (milestoneId: string) => {
@@ -1934,9 +2515,63 @@ export default function MonthSetupPage() {
     const nextPinned = plan.pinnedMilestoneIds.includes(milestone.id)
       ? plan.pinnedMilestoneIds
       : [...plan.pinnedMilestoneIds, milestone.id];
-    handlePlanUpdate({ ...plan, pinnedMilestoneIds: nextPinned });
+    const nextPrimary = plan.primaryMilestoneId ?? milestone.id;
+    handlePlanUpdate({ ...plan, pinnedMilestoneIds: nextPinned, primaryMilestoneId: nextPrimary });
     setSelectedMilestoneId(milestone.id);
     setShowMilestonePicker(false);
+  };
+
+  const handleSetObjectiveMilestone = (milestoneId: string) => {
+    if (!plan) return;
+    const nextPinned = plan.pinnedMilestoneIds.includes(milestoneId)
+      ? plan.pinnedMilestoneIds
+      : [...plan.pinnedMilestoneIds, milestoneId];
+    handlePlanUpdate({ ...plan, pinnedMilestoneIds: nextPinned, primaryMilestoneId: milestoneId });
+    setSelectedMilestoneId(milestoneId);
+  };
+
+  const closeMonthWizard = () => {
+    setShowMonthWizard(false);
+    setMonthWizardStep(0);
+  };
+
+  const applyMonthWizardMilestones = () => {
+    if (!plan) return;
+    const fallbackPrimary = monthWizardPrimaryId ?? monthWizardSecondaryIds[0] ?? undefined;
+    const secondaryIds = monthWizardSecondaryIds.filter((id) => id && id !== fallbackPrimary);
+    const nextPinned = Array.from(new Set([...(fallbackPrimary ? [fallbackPrimary] : []), ...secondaryIds]));
+    const nextPlan: MonthPlan = {
+      ...plan,
+      pinnedMilestoneIds: nextPinned,
+      primaryMilestoneId: fallbackPrimary,
+    };
+    handlePlanUpdate(nextPlan);
+    setSelectedMilestoneId(fallbackPrimary ?? nextPinned[0] ?? null);
+  };
+
+  const handleFinishMonthWizard = () => {
+    applyMonthWizardMilestones();
+    closeMonthWizard();
+  };
+
+  const handleWizardPrimarySelect = (milestoneId: string | null) => {
+    setMonthWizardPrimaryId(milestoneId);
+    setMonthWizardPrimaryMenuOpen(false);
+    if (milestoneId) {
+      setMonthWizardSecondaryIds((prev) => prev.filter((id) => id !== milestoneId));
+    }
+  };
+
+  const toggleWizardSecondary = (milestoneId: string) => {
+    setMonthWizardSecondaryIds((prev) => {
+      if (prev.includes(milestoneId)) return prev.filter((id) => id !== milestoneId);
+      if (milestoneId === monthWizardPrimaryId) return prev;
+      return [...prev, milestoneId];
+    });
+  };
+
+  const removeWizardSecondary = (milestoneId: string) => {
+    setMonthWizardSecondaryIds((prev) => prev.filter((id) => id !== milestoneId));
   };
 
   // v6.1: Mark milestone as completed
@@ -2429,120 +3064,18 @@ export default function MonthSetupPage() {
 	            />
 	          )}
 
-	          {/* Pins bar (Grand Plan-like) */}
+	          {/* Whiteboard wrapper - matches FocusTemplatesPanel style */}
 	          <div
 	            style={{
-	              display: "flex",
-	              gap: 12,
 	              marginBottom: 24,
-	              alignItems: "center",
-	              borderBottom: "2px solid #eee",
-	              paddingBottom: 12,
+	              backgroundColor: "#fbfaf7",
+	              backgroundImage: "radial-gradient(circle at 1px 1px, rgba(0,0,0,0.06) 1px, transparent 0)",
+	              backgroundSize: "24px 24px",
+	              border: "2px solid #eee",
+	              borderRadius: 12,
+	              padding: 20,
 	            }}
 	          >
-	            <div style={{ flex: "1 1 auto", minWidth: 0, overflowX: "auto", overflowY: "hidden", paddingBottom: 2 }}>
-	              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "nowrap", width: "max-content" }}>
-		                  <button
-		                    onClick={() => setSelectedMilestoneId(null)}
-		                    style={{
-		                      padding: "8px 12px",
-	                      fontSize: 12,
-	                      fontWeight: 800,
-	                      backgroundColor: selectedMilestoneId === null ? "#00000010" : "white",
-	                      color: "#111",
-	                      border: selectedMilestoneId === null ? "2px solid #111" : "1px solid #ddd",
-	                      borderRadius: 12,
-	                      cursor: "pointer",
-	                      whiteSpace: "nowrap",
-	                      display: "flex",
-	                      alignItems: "center",
-	                      gap: 8,
-	                      boxShadow:
-	                        selectedMilestoneId === null ? "0 8px 18px rgba(0,0,0,0.10)" : "0 2px 8px rgba(0,0,0,0.06)",
-	                      flex: "0 0 auto",
-	                    }}
-	                    title="Standalone (not linked to a milestone)"
-	                  >
-	                    <PinGlyph color="#111" />
-		                    Standalone
-		                  </button>
-
-		                  {pinnedMilestones.map((milestone) => {
-	                    const category = state.grandPlan?.categories.find((c) => c.id === milestone.categoryId);
-		                    const baseColor = category?.color ?? APP_MAIN_COLOR;
-	                    const pinColor = milestone.status === "COMPLETED" ? "#FFD700" : baseColor;
-	                    const active = selectedMilestoneId === milestone.id;
-	                    return (
-	                      <button
-	                        key={milestone.id}
-	                        onClick={() => setSelectedMilestoneId(milestone.id)}
-	                        style={{
-	                          padding: "8px 12px",
-	                          fontSize: 12,
-	                          fontWeight: 800,
-	                          backgroundColor: active ? withHexAlpha(pinColor, "12") : "white",
-	                          color: "#333",
-	                          border: active ? `2px solid ${pinColor}` : `1px solid ${pinColor}`,
-	                          borderRadius: 12,
-	                          cursor: "pointer",
-	                          display: "flex",
-	                          alignItems: "center",
-	                          gap: 8,
-	                          whiteSpace: "nowrap",
-	                          maxWidth: 240,
-	                          overflow: "hidden",
-	                          textOverflow: "ellipsis",
-	                          boxShadow: active
-	                            ? `0 8px 18px ${withHexAlpha(pinColor, "26")}`
-	                            : `0 2px 8px ${withHexAlpha(pinColor, "14")}`,
-	                          transform: active ? "translateY(-1px)" : "none",
-	                          flex: "0 0 auto",
-	                        }}
-	                        title={`${category?.title ?? "Category"} · ${milestone.title}`}
-	                      >
-	                        <PinGlyph color={pinColor} />
-	                        <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{milestone.title}</span>
-	                        {milestone.status === "COMPLETED" && <span style={{ fontSize: 11, opacity: 0.7 }}>✓</span>}
-	                      </button>
-	                    );
-		                  })}
-	              </div>
-	            </div>
-
-	            {isInPeriod && state.grandPlan.milestones.length > 0 && (
-	              <button
-	                onClick={() => setShowMilestonePicker(true)}
-	                style={{
-	                  padding: "8px 16px",
-	                  fontSize: 14,
-	                  fontWeight: 600,
-	                  backgroundColor: "white",
-	                  color: "#666",
-	                  border: "2px dashed #ccc",
-	                  borderRadius: 20,
-	                  cursor: "pointer",
-	                  flex: "0 0 auto",
-	                  whiteSpace: "nowrap",
-	                }}
-	              >
-	                + Pin Milestone
-	              </button>
-	            )}
-	          </div>
-
-	          {/* Board content (Grand Plan-like container) */}
-		          <div
-		            style={{
-		              border: "2px solid #eee",
-		              borderRadius: 12,
-		              padding: 20,
-		              backgroundColor: scopeBgColor,
-		              backgroundImage: scopeBgPattern,
-		              backgroundSize: "24px 24px",
-		              minHeight: 300,
-		              marginBottom: 24,
-		            }}
-		          >
 	              {pinnedMilestones.length === 0 && standaloneTasks.length === 0 && plan.templates.length === 0 && (
 	                <div
 	                  style={{
@@ -2608,6 +3141,8 @@ export default function MonthSetupPage() {
 		                    tasks={tasks}
 		                    milestoneId={milestone ? milestone.id : null}
 		                    milestoneStatus={milestone?.status}
+                        isObjective={Boolean(milestone && primaryMilestoneId === milestone.id)}
+                        onSetObjective={milestone ? handleSetObjectiveMilestone : undefined}
 		                    boardSize={boardSize}
 		                    onUpdateBoardSize={handleUpdateBoardSize}
 			                    links={links}
@@ -2619,6 +3154,15 @@ export default function MonthSetupPage() {
 		                    onMarkMilestoneCompleted={milestone ? handleMarkMilestoneCompleted : undefined}
 		                    hideTitle
 		                    chromeless={!milestone}
+		                    floatingToolbar
+		                    milestoneNavigation={{
+		                      currentMilestoneId: selectedMilestoneId,
+		                      pinnedMilestones: orderedPinnedMilestones,
+		                      categories: state.grandPlan?.categories ?? [],
+		                      primaryMilestoneId,
+		                      onSelectMilestone: setSelectedMilestoneId,
+		                      onPinMilestone: isInPeriod && state.grandPlan && state.grandPlan.milestones.length > 0 ? () => setShowMilestonePicker(true) : undefined,
+		                    }}
 		                  />
 		                );
 		              })()}
@@ -2632,8 +3176,8 @@ export default function MonthSetupPage() {
 	          />
 
 	          {/* v5: Close Month Button */}
-	          <div style={{ textAlign: "center", marginTop: 48, paddingTop: 24, borderTop: "2px solid #ddd" }}>
-	            <button
+          <div style={{ textAlign: "center", marginTop: 48, paddingTop: 24, borderTop: "2px solid #ddd" }}>
+            <button
               onClick={() => setShowCloseModal(true)}
               style={{
                 padding: "16px 32px",
@@ -2653,6 +3197,430 @@ export default function MonthSetupPage() {
               Mark this month as complete and view the final report
             </p>
           </div>
+
+          {showMonthWizard && (
+            <div
+              style={{
+                position: "fixed",
+                inset: 0,
+                backgroundColor: "rgba(17, 24, 39, 0.55)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                zIndex: 1100,
+                padding: 20,
+              }}
+              onClick={closeMonthWizard}
+            >
+              <div
+                style={{
+                  width: "100%",
+                  maxWidth: 980,
+                  backgroundColor: "white",
+                  borderRadius: 18,
+                  border: "1px solid #eee",
+                  boxShadow: "0 24px 70px rgba(0,0,0,0.35)",
+                  overflow: "hidden",
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div
+                  style={{
+                    padding: "18px 22px",
+                    borderBottom: "1px solid #eee",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 16,
+                    background: "linear-gradient(180deg, #ffffff 0%, #fafafa 100%)",
+                  }}
+                >
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 900, color: "#6b7280", letterSpacing: 0.4 }}>
+                      Month setup
+                    </div>
+                    <div style={{ marginTop: 6, fontSize: 22, fontWeight: 900, color: "#111" }}>{monthWizardTitle}</div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <div
+                      style={{
+                        padding: "6px 10px",
+                        borderRadius: 999,
+                        backgroundColor: "#f3f4f6",
+                        fontSize: 12,
+                        fontWeight: 800,
+                        color: "#6b7280",
+                      }}
+                    >
+                      {monthWizardStep + 1} / {monthWizardSteps.length}
+                    </div>
+                    <button
+                      onClick={closeMonthWizard}
+                      style={{
+                        padding: "6px 10px",
+                        fontSize: 14,
+                        fontWeight: 900,
+                        backgroundColor: "white",
+                        border: "1px solid #ddd",
+                        borderRadius: 10,
+                        cursor: "pointer",
+                        color: "#666",
+                      }}
+                      title="Close"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ padding: 22, maxHeight: "70vh", overflowY: "auto" }}>
+                  {monthWizardStep === 0 ? (
+                    <div style={{ display: "grid", gap: 18 }}>
+                      <div style={{ fontSize: 13, color: "#666", lineHeight: 1.6 }}>
+                        Pick the month objective and the secondary milestones you want to focus on. The objective will be highlighted first in your milestone list.
+                      </div>
+
+                      {wizardMilestoneGroups.length === 0 ? (
+                        <div style={{ textAlign: "center", padding: 24, color: "#6b7280" }}>
+                          No milestones available yet.
+                        </div>
+                      ) : (
+                        <div style={{ display: "grid", gap: 16 }}>
+                          <div ref={monthWizardPrimaryMenuRef} style={{ position: "relative" }}>
+                            <label style={{ display: "block", fontSize: 12, fontWeight: 800, color: "#555", marginBottom: 6 }}>
+                              Objective milestone
+                            </label>
+                            <button
+                              type="button"
+                              disabled={wizardMilestoneGroups.length === 0}
+                              onClick={() => {
+                                if (wizardMilestoneGroups.length === 0) return;
+                                setMonthWizardPrimaryMenuOpen((prev) => !prev);
+                              }}
+                              style={{
+                                width: "100%",
+                                padding: "10px 12px",
+                                fontSize: 14,
+                                borderRadius: 10,
+                                border: `1px solid ${monthWizardPrimaryMenuOpen ? APP_MAIN_COLOR : "#ddd"}`,
+                                boxSizing: "border-box",
+                                backgroundColor: wizardMilestoneGroups.length > 0 ? "white" : "#f5f5f5",
+                                color: wizardMilestoneGroups.length > 0 ? "#111" : "#999",
+                                cursor: wizardMilestoneGroups.length > 0 ? "pointer" : "not-allowed",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "space-between",
+                                gap: 10,
+                              }}
+                            >
+                              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {monthWizardPrimaryId && selectedObjectiveTitle
+                                  ? selectedObjectiveTitle
+                                  : "Choose objective milestone…"}
+                              </span>
+                              <span style={{ color: wizardMilestoneGroups.length > 0 ? "#666" : "#aaa", fontSize: 12 }}>
+                                {monthWizardPrimaryMenuOpen ? "▲" : "▼"}
+                              </span>
+                            </button>
+
+                            {monthWizardPrimaryMenuOpen && (
+                              <div
+                                style={{
+                                  position: "absolute",
+                                  top: "calc(100% + 8px)",
+                                  left: 0,
+                                  right: 0,
+                                  backgroundColor: "white",
+                                  border: "1px solid #ddd",
+                                  borderRadius: 12,
+                                  boxShadow: "0 16px 38px rgba(0,0,0,0.16)",
+                                  overflow: "hidden",
+                                  zIndex: 10,
+                                }}
+                              >
+                                <div style={{ maxHeight: 280, overflowY: "auto", padding: 6 }}>
+                                  {wizardMilestoneGroups.map((group) => (
+                                    <div key={group.category.id} style={{ marginBottom: 6 }}>
+                                      <div style={{ fontSize: 11, fontWeight: 800, color: group.category.color, margin: "8px 8px 6px" }}>
+                                        {group.category.title}
+                                      </div>
+                                      {group.milestones.map((milestone) => {
+                                        const isSelected = monthWizardPrimaryId === milestone.id;
+                                        return (
+                                          <label
+                                            key={milestone.id}
+                                            style={{
+                                              display: "flex",
+                                              alignItems: "center",
+                                              gap: 10,
+                                              padding: "8px 10px",
+                                              borderRadius: 10,
+                                              cursor: "pointer",
+                                              backgroundColor: isSelected ? "rgba(245, 201, 105, 0.18)" : "transparent",
+                                              border: isSelected ? "1px solid #f5c469" : "1px solid transparent",
+                                            }}
+                                          >
+                                            <input
+                                              type="radio"
+                                              checked={isSelected}
+                                              onChange={() => handleWizardPrimarySelect(milestone.id)}
+                                              style={{ cursor: "pointer" }}
+                                            />
+                                            <span style={{ flex: 1, color: "#111", fontSize: 14, lineHeight: 1.35 }}>
+                                              {milestone.title}
+                                            </span>
+                                          </label>
+                                        );
+                                      })}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          <div ref={monthWizardSecondaryMenuRef} style={{ position: "relative" }}>
+                            <label style={{ display: "block", fontSize: 12, fontWeight: 800, color: "#555", marginBottom: 6 }}>
+                              Secondary milestones <span style={{ fontWeight: 700, color: "#888" }}>(optional)</span>
+                            </label>
+                            <button
+                              type="button"
+                              disabled={!monthWizardPrimaryId || wizardMilestoneGroups.length === 0}
+                              onClick={() => {
+                                if (!monthWizardPrimaryId || wizardMilestoneGroups.length === 0) return;
+                                setMonthWizardSecondaryMenuOpen((prev) => !prev);
+                              }}
+                              style={{
+                                width: "100%",
+                                padding: "10px 12px",
+                                fontSize: 14,
+                                borderRadius: 10,
+                                border: `1px solid ${monthWizardSecondaryMenuOpen ? APP_MAIN_COLOR : "#ddd"}`,
+                                boxSizing: "border-box",
+                                backgroundColor: monthWizardPrimaryId ? "white" : "#f5f5f5",
+                                color: monthWizardPrimaryId ? "#111" : "#999",
+                                cursor: monthWizardPrimaryId ? "pointer" : "not-allowed",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "space-between",
+                                gap: 10,
+                              }}
+                            >
+                              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {monthWizardSecondaryIds.length > 0
+                                  ? `${monthWizardSecondaryIds.length} selected`
+                                  : "Choose secondary milestones…"}
+                              </span>
+                              <span style={{ color: monthWizardPrimaryId ? "#666" : "#aaa", fontSize: 12 }}>
+                                {monthWizardSecondaryMenuOpen ? "▲" : "▼"}
+                              </span>
+                            </button>
+
+                            {!monthWizardPrimaryId && (
+                              <div style={{ marginTop: 8, fontSize: 12, color: "#888" }}>
+                                Select an objective milestone to enable secondary milestones.
+                              </div>
+                            )}
+
+                            {monthWizardSecondaryMenuOpen && (
+                              <div
+                                style={{
+                                  position: "absolute",
+                                  top: "calc(100% + 8px)",
+                                  left: 0,
+                                  right: 0,
+                                  backgroundColor: "white",
+                                  border: "1px solid #ddd",
+                                  borderRadius: 12,
+                                  boxShadow: "0 16px 38px rgba(0,0,0,0.16)",
+                                  overflow: "hidden",
+                                  zIndex: 10,
+                                }}
+                              >
+                                <div style={{ maxHeight: 280, overflowY: "auto", padding: 6 }}>
+                                  {wizardMilestoneGroups.map((group) => (
+                                    <div key={group.category.id} style={{ marginBottom: 6 }}>
+                                      <div style={{ fontSize: 11, fontWeight: 800, color: group.category.color, margin: "8px 8px 6px" }}>
+                                        {group.category.title}
+                                      </div>
+                                      {group.milestones.map((milestone) => {
+                                        const isPrimary = monthWizardPrimaryId === milestone.id;
+                                        const checked = monthWizardSecondaryIds.includes(milestone.id);
+                                        const highlight = checked ? withHexAlpha(group.category.color, "1a") : "transparent";
+                                        return (
+                                          <label
+                                            key={milestone.id}
+                                            style={{
+                                              display: "flex",
+                                              alignItems: "center",
+                                              gap: 10,
+                                              padding: "8px 10px",
+                                              borderRadius: 10,
+                                              cursor: isPrimary ? "not-allowed" : "pointer",
+                                              backgroundColor: highlight,
+                                              border: checked ? `1px solid ${withHexAlpha(group.category.color, "66")}` : "1px solid transparent",
+                                              opacity: isPrimary ? 0.6 : 1,
+                                            }}
+                                          >
+                                            <input
+                                              type="checkbox"
+                                              checked={checked}
+                                              onChange={() => toggleWizardSecondary(milestone.id)}
+                                              disabled={isPrimary}
+                                              style={{ cursor: isPrimary ? "not-allowed" : "pointer" }}
+                                            />
+                                            <span style={{ flex: 1, color: "#111", fontSize: 14, lineHeight: 1.35 }}>
+                                              {milestone.title}
+                                            </span>
+                                          </label>
+                                        );
+                                      })}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          {(monthWizardPrimaryId || monthWizardSecondaryIds.length > 0) && (
+                            <div style={{ marginTop: 4, display: "flex", flexWrap: "wrap", gap: 8 }}>
+                              {monthWizardPrimaryId && selectedObjectiveTitle ? (
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 6,
+                                    padding: "6px 10px",
+                                    borderRadius: 999,
+                                    backgroundColor: "#fef3c7",
+                                    border: "1px solid #f5c469",
+                                    color: "#8a5a12",
+                                    fontSize: 12,
+                                    fontWeight: 700,
+                                  }}
+                                >
+                                  ★ {selectedObjectiveTitle}
+                                </div>
+                              ) : null}
+                              {monthWizardSecondaryIds.map((id) => {
+                                const meta = wizardMilestoneIndex.get(id);
+                                if (!meta) return null;
+                                return (
+                                  <button
+                                    key={id}
+                                    onClick={() => removeWizardSecondary(id)}
+                                    style={{
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: 6,
+                                      padding: "6px 10px",
+                                      borderRadius: 999,
+                                      backgroundColor: withHexAlpha(meta.categoryColor, "14"),
+                                      border: `1px solid ${withHexAlpha(meta.categoryColor, "66")}`,
+                                      color: "#111",
+                                      fontSize: 12,
+                                      fontWeight: 700,
+                                      cursor: "pointer",
+                                    }}
+                                    title="Remove secondary milestone"
+                                  >
+                                    {meta.title}
+                                    <span style={{ fontWeight: 900, color: "#666" }}>✕</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div style={{ display: "grid", gap: 16 }}>
+                      <div style={{ fontSize: 13, color: "#666", lineHeight: 1.6 }}>
+                        Focus sessions are recurring deep-work blocks you plan for the month. You can attach them to milestones later from the Daily page.
+                      </div>
+                      <FocusTemplatesPanel
+                        templates={plan?.templates ?? []}
+                        onAddTemplate={handleAddTemplate}
+                        onUpdateTemplate={handleUpdateTemplate}
+                        onDeleteTemplate={handleDeleteTemplate}
+                        variant="plain"
+                        showIntro={false}
+                        showTitle={false}
+                        emptyStateText={null}
+                        addButtonPlacement="footer-left"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                <div
+                  style={{
+                    padding: "14px 22px",
+                    borderTop: "1px solid #eee",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: 12,
+                    backgroundColor: "#fafafa",
+                  }}
+                >
+                  <button
+                    onClick={() => setMonthWizardStep((prev) => Math.max(0, prev - 1))}
+                    disabled={monthWizardStep === 0}
+                    style={{
+                      padding: "8px 14px",
+                      fontSize: 13,
+                      fontWeight: 800,
+                      backgroundColor: "white",
+                      border: "1px solid #ddd",
+                      borderRadius: 10,
+                      cursor: monthWizardStep === 0 ? "not-allowed" : "pointer",
+                      color: "#555",
+                      opacity: monthWizardStep === 0 ? 0.5 : 1,
+                    }}
+                  >
+                    ← Previous
+                  </button>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <button
+                      onClick={handleFinishMonthWizard}
+                      style={{
+                        padding: "8px 16px",
+                        fontSize: 13,
+                        fontWeight: 900,
+                        backgroundColor: APP_MAIN_COLOR,
+                        color: "white",
+                        border: "none",
+                        borderRadius: 10,
+                        cursor: "pointer",
+                        boxShadow: "0 10px 22px rgba(0,0,0,0.12)",
+                      }}
+                    >
+                      ✓ Start Month
+                    </button>
+                    <button
+                      onClick={() => setMonthWizardStep((prev) => Math.min(monthWizardSteps.length - 1, prev + 1))}
+                      disabled={monthWizardStep >= monthWizardSteps.length - 1}
+                      style={{
+                        padding: "8px 14px",
+                        fontSize: 13,
+                        fontWeight: 800,
+                        backgroundColor: "white",
+                        border: "1px solid #ddd",
+                        borderRadius: 10,
+                        cursor: monthWizardStep >= monthWizardSteps.length - 1 ? "not-allowed" : "pointer",
+                        color: "#555",
+                        opacity: monthWizardStep >= monthWizardSteps.length - 1 ? 0.5 : 1,
+                      }}
+                    >
+                      Next →
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* v6.1: Milestone Picker Modal */}
           {showMilestonePicker && (

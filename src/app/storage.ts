@@ -108,6 +108,13 @@ export function loadState(): AppStateV0 {
       (plan as any).pinnedMilestoneIds =
         validMilestoneIds.size > 0 ? pinsToUse.filter((id: string) => validMilestoneIds.has(id)) : pinsToUse;
 
+      if (typeof (plan as any).primaryMilestoneId !== "string") {
+        const nextPrimary = (plan as any).pinnedMilestoneIds?.[0];
+        if (typeof nextPrimary === "string" && nextPrimary) {
+          (plan as any).primaryMilestoneId = nextPrimary;
+        }
+      }
+
       // v9 migration: Normalize template weekday scheduling
       if (Array.isArray((plan as any).templates)) {
         (plan as any).templates.forEach((t: any) => {
@@ -833,7 +840,7 @@ export function createGrandPlanWithExamples(
     createdAt: now,
   };
 
-  // Create example milestones for Career (bottom-to-top: first steps -> goal)
+  // Create example milestones for Career (bottom-to-top: first milestones -> goal)
   const workMs1: MilestoneNode = {
     id: makeId("ms"),
     categoryId: catWork.id,
@@ -867,7 +874,7 @@ export function createGrandPlanWithExamples(
     createdAt: now,
   };
 
-  // Create example milestones for Health (bottom-to-top: first steps -> goal)
+  // Create example milestones for Health (bottom-to-top: first milestones -> goal)
   const healthMs1: MilestoneNode = {
     id: makeId("ms"),
     categoryId: catHealth.id,
@@ -984,7 +991,7 @@ export function deleteGrandPlan(state: AppStateV0): AppStateV0 {
       const { linkedMilestoneId, ...rest } = t;
       return rest as TaskNode;
     });
-    cleanedMonths[ym] = { ...plan, tasks: cleanedTasks, pinnedMilestoneIds: [] };
+    cleanedMonths[ym] = { ...plan, tasks: cleanedTasks, pinnedMilestoneIds: [], primaryMilestoneId: undefined };
   }
 
   const cleanedDays: Record<string, DayEntry> = {};
@@ -1065,7 +1072,16 @@ export function deleteCategory(state: AppStateV0, categoryId: string): AppStateV
       return t;
     });
     const nextPinned = (plan.pinnedMilestoneIds ?? []).filter((id) => !milestoneIds.has(id));
-    cleanedMonths[ym] = { ...plan, tasks: cleanedTasks, templates: cleanedTemplates, pinnedMilestoneIds: nextPinned };
+    const nextPrimary = plan.primaryMilestoneId && nextPinned.includes(plan.primaryMilestoneId)
+      ? plan.primaryMilestoneId
+      : nextPinned[0];
+    cleanedMonths[ym] = {
+      ...plan,
+      tasks: cleanedTasks,
+      templates: cleanedTemplates,
+      pinnedMilestoneIds: nextPinned,
+      primaryMilestoneId: nextPrimary,
+    };
   }
 
   const cleanedDays: Record<string, DayEntry> = {};
@@ -1225,7 +1241,16 @@ export function deleteMilestone(state: AppStateV0, milestoneId: string, cascadeC
       return t;
     });
     const nextPinned = (plan.pinnedMilestoneIds ?? []).filter((id) => !toDelete.has(id));
-    cleanedMonths[ym] = { ...plan, tasks: cleanedTasks, templates: cleanedTemplates, pinnedMilestoneIds: nextPinned };
+    const nextPrimary = plan.primaryMilestoneId && nextPinned.includes(plan.primaryMilestoneId)
+      ? plan.primaryMilestoneId
+      : nextPinned[0];
+    cleanedMonths[ym] = {
+      ...plan,
+      tasks: cleanedTasks,
+      templates: cleanedTemplates,
+      pinnedMilestoneIds: nextPinned,
+      primaryMilestoneId: nextPrimary,
+    };
   }
 
   const cleanedDays: Record<string, DayEntry> = {};

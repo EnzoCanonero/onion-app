@@ -9,7 +9,7 @@ export type CategoryMeta = {
 export const UNCATEGORIZED_CATEGORY: CategoryMeta = {
   id: "uncategorized",
   title: "Uncategorized",
-  color: "#cbd5e1",
+  color: "#94a3b8",
 };
 
 export const UNKNOWN_CATEGORY: CategoryMeta = {

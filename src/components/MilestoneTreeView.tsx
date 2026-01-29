@@ -173,7 +173,7 @@ function SingleTree({
                     </div>
                   )}
 
-                  {/* Add step above button (adds a child which appears above in inverted view) */}
+                  {/* Add milestone above button (adds a child which appears above in inverted view) */}
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
@@ -191,7 +191,7 @@ function SingleTree({
                       opacity: 0.8,
                     }}
                   >
-                    + Add Step
+                    + Add Milestone
                   </button>
                 </div>
 
