@@ -18,11 +18,10 @@ export default function PastUnactivatedDayPanel({ date }: PastUnactivatedDayPane
   return (
     <div
       style={{
-        padding: 48,
+        padding: 40,
         textAlign: "center",
-        border: "2px dashed #ddd",
-        borderRadius: 12,
-        backgroundColor: "#fafafa",
+        backgroundColor: "white",
+        borderRadius: 16,
       }}
     >
       <div style={{ fontSize: 48, marginBottom: 16 }}>📭</div>
@@ -31,7 +30,7 @@ export default function PastUnactivatedDayPanel({ date }: PastUnactivatedDayPane
         {formattedDate}
       </p>
       <p style={{ color: "#888", fontSize: 13 }}>
-        This day was not activated as a working day.
+        This day was not activated as a working day. ✨
       </p>
     </div>
   );

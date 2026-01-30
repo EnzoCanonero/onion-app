@@ -5,6 +5,8 @@ interface MilestoneTreeViewProps {
   categoryColor: string;
   onAddMilestone: (parentId: string | null) => void;
   onSelectMilestone: (milestone: MilestoneNode) => void;
+  selectableMilestoneIds?: Set<string>;
+  disableAddForMilestoneIds?: Set<string>;
 }
 
 function getStatusIcon(status: MilestoneStatus): string {
@@ -37,6 +39,8 @@ interface SingleTreeProps {
   categoryColor: string;
   onAddMilestone: (parentId: string | null) => void;
   onSelectMilestone: (milestone: MilestoneNode) => void;
+  selectableMilestoneIds?: Set<string>;
+  disableAddForMilestoneIds?: Set<string>;
 }
 
 // Renders a single tree with root at bottom, children branching upward
@@ -46,6 +50,8 @@ function SingleTree({
   categoryColor,
   onAddMilestone,
   onSelectMilestone,
+  selectableMilestoneIds,
+  disableAddForMilestoneIds,
 }: SingleTreeProps) {
   // Get all milestones in this tree
   const treeMilestones = allMilestones.filter((m) => {
@@ -86,42 +92,64 @@ function SingleTree({
         <div key={levelIndex}>
           {/* Nodes at this level */}
           <div style={{ display: "flex", gap: 16, justifyContent: "center" }}>
-            {levelNodes.map((milestone) => (
-              <div key={milestone.id} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-                {/* Connection line from parent above */}
-                {levelIndex > 0 && (
-                  <div
-                    style={{
-                      width: 2,
-                      height: 20,
-                      backgroundColor: categoryColor,
-                    }}
-                  />
-                )}
+            {levelNodes.map((milestone) => {
+              const isSelectable = selectableMilestoneIds?.has(milestone.id) ?? false;
+              const isLocked = selectableMilestoneIds
+                ? milestone.status !== "COMPLETED" && !isSelectable
+                : false;
+              const isAddDisabled = disableAddForMilestoneIds?.has(milestone.id) ?? false;
+              const cardBorderColor = isLocked ? "#cbd5e1" : categoryColor;
+              const cardBackground = isLocked ? "#f8fafc" : "white";
+              const cardShadow = isSelectable
+                ? `0 0 0 3px ${categoryColor}22`
+                : isLocked
+                ? "0 1px 4px rgba(0,0,0,0.08)"
+                : "0 2px 8px rgba(0,0,0,0.1)";
+              const titleColor = isLocked ? "#64748b" : "#111";
+              const descriptionColor = isLocked ? "#94a3b8" : "#666";
 
-                {/* Milestone Card */}
-                <div
-                  onClick={() => onSelectMilestone(milestone)}
+              return (
+                <div key={milestone.id} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+                  {/* Connection line from parent above */}
+                  {levelIndex > 0 && (
+                    <div
+                      style={{
+                        width: 2,
+                        height: 20,
+                        backgroundColor: categoryColor,
+                      }}
+                    />
+                  )}
+
+                  {/* Milestone Card */}
+                  <div
+                    onClick={() => onSelectMilestone(milestone)}
                   style={{
                     padding: "12px 16px",
                     minWidth: 160,
                     maxWidth: 220,
-                    backgroundColor: "white",
-                    border: `2px solid ${categoryColor}`,
+                    backgroundColor: cardBackground,
+                    border: `2px solid ${cardBorderColor}`,
                     borderRadius: 8,
                     cursor: "pointer",
                     textAlign: "center",
-                    boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+                    boxShadow: cardShadow,
                     transition: "transform 0.2s, box-shadow 0.2s",
                     position: "relative",
                   }}
                   onMouseEnter={(e) => {
+                    if (isLocked) return;
                     e.currentTarget.style.transform = "scale(1.02)";
-                    e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.15)";
+                    e.currentTarget.style.boxShadow = isSelectable
+                      ? `0 0 0 3px ${categoryColor}22`
+                      : "0 4px 12px rgba(0,0,0,0.15)";
                   }}
                   onMouseLeave={(e) => {
+                    if (isLocked) return;
                     e.currentTarget.style.transform = "scale(1)";
-                    e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.1)";
+                    e.currentTarget.style.boxShadow = isSelectable
+                      ? `0 0 0 3px ${categoryColor}22`
+                      : "0 2px 8px rgba(0,0,0,0.1)";
                   }}
                 >
                   {/* Status badge */}
@@ -164,10 +192,31 @@ function SingleTree({
                     </div>
                   )}
 
-                  <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>{milestone.title}</div>
+                  {isSelectable && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        bottom: -10,
+                        right: -10,
+                        padding: "2px 6px",
+                        backgroundColor: categoryColor,
+                        color: "white",
+                        fontSize: 9,
+                        fontWeight: 800,
+                        borderRadius: 4,
+                        letterSpacing: 0.3,
+                      }}
+                    >
+                      NEXT
+                    </div>
+                  )}
+
+                  <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4, color: titleColor }}>
+                    {milestone.title}
+                  </div>
 
                   {milestone.description && (
-                    <div style={{ fontSize: 11, color: "#666", marginTop: 4 }}>
+                    <div style={{ fontSize: 11, color: descriptionColor, marginTop: 4 }}>
                       {milestone.description.slice(0, 40)}
                       {milestone.description.length > 40 ? "..." : ""}
                     </div>
@@ -177,19 +226,22 @@ function SingleTree({
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
+                      if (isAddDisabled) return;
                       onAddMilestone(milestone.id);
                     }}
-                    style={{
-                      marginTop: 8,
-                      padding: "3px 6px",
-                      fontSize: 10,
-                      backgroundColor: categoryColor,
-                      color: "white",
-                      border: "none",
-                      borderRadius: 4,
-                      cursor: "pointer",
-                      opacity: 0.8,
-                    }}
+                    disabled={isAddDisabled}
+                  style={{
+                    marginTop: 8,
+                    padding: "3px 6px",
+                    fontSize: 10,
+                    backgroundColor: isAddDisabled ? "#e2e8f0" : categoryColor,
+                    color: isAddDisabled ? "#64748b" : "white",
+                    border: "none",
+                    borderRadius: 4,
+                    cursor: isAddDisabled ? "not-allowed" : "pointer",
+                    opacity: isAddDisabled ? 1 : 0.8,
+                  }}
+                    title={isAddDisabled ? "Locked while this milestone is pinned in a month" : "Add a sub-milestone"}
                   >
                     + Add Milestone
                   </button>
@@ -205,8 +257,9 @@ function SingleTree({
                     }}
                   />
                 )}
-              </div>
-            ))}
+                </div>
+              );
+            })}
           </div>
 
           {/* Horizontal connector between siblings at this level if multiple */}
@@ -232,6 +285,8 @@ export default function MilestoneTreeView({
   categoryColor,
   onAddMilestone,
   onSelectMilestone,
+  selectableMilestoneIds,
+  disableAddForMilestoneIds,
 }: MilestoneTreeViewProps) {
   // Find root milestones (no parent) - these are the final goals at the bottom of each tree
   const rootMilestones = milestones.filter((m) => m.parentId === null).sort((a, b) => a.order - b.order);
@@ -279,6 +334,8 @@ export default function MilestoneTreeView({
             categoryColor={categoryColor}
             onAddMilestone={onAddMilestone}
             onSelectMilestone={onSelectMilestone}
+            selectableMilestoneIds={selectableMilestoneIds}
+            disableAddForMilestoneIds={disableAddForMilestoneIds}
           />
         ))}
       </div>
