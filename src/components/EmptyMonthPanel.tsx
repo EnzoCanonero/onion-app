@@ -20,22 +20,24 @@ export default function EmptyMonthPanel({ date }: EmptyMonthPanelProps) {
 
   return (
     <div style={{
-      padding: 48,
+      padding: 40,
       textAlign: "center",
+      backgroundColor: "white",
+      borderRadius: 16,
     }}>
       <div style={{ fontSize: 48, marginBottom: 16 }}>📅</div>
       <p style={{ fontSize: 18, marginBottom: 12 }}>
         No Month Plan for <strong>{monthName}</strong>
       </p>
       <p style={{ color: "#666", marginBottom: 24, fontSize: 14 }}>
-        Set up your month to start planning your days.
+        Set up your month to start planning your days. ✨
       </p>
       <Link to={`/month/${date}/setup`}>
         <button style={{
           padding: "12px 24px",
           fontSize: 16,
           fontWeight: 600,
-          background: "#2196f3",
+          background: "#673ab7",
           color: "white",
           border: "none",
           borderRadius: 8,

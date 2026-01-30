@@ -32,6 +32,8 @@ import {
   getTodayDate,
   getCurrentYM,
 } from "../app/storage";
+import { getShortUserName, getUserName } from "../app/userProfile";
+import { getSelectableMilestoneIds } from "../app/milestones";
 import MilestoneTreeView from "../components/MilestoneTreeView";
 import MilestoneDetailModal from "../components/MilestoneDetailModal";
 import TitleDescriptionModal from "../components/TitleDescriptionModal";
@@ -108,6 +110,18 @@ export default function GrandPlanPage() {
   const [tick, setTick] = useState(0);
   const state = useMemo(() => loadState(), [tick]);
   const grandPlan = state.grandPlan;
+  const shortName = getShortUserName(getUserName());
+  const pinnedMilestoneIds = useMemo(() => {
+    const ids = new Set<string>();
+    Object.values(state.months).forEach((plan) => {
+      (plan.pinnedMilestoneIds ?? []).forEach((id) => ids.add(id));
+    });
+    return ids;
+  }, [state.months]);
+  const selectableMilestoneIds = useMemo(
+    () => (grandPlan ? getSelectableMilestoneIds(grandPlan.milestones) : new Set<string>()),
+    [grandPlan]
+  );
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -413,7 +427,7 @@ export default function GrandPlanPage() {
     return (
       <div>
         <div style={{ marginBottom: 24, paddingBottom: 12, borderBottom: "1px solid #eee" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "end", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", gap: 12 }}>
             <div />
             <div style={{ textAlign: "center" }}>
               <h2 style={{ margin: 0, fontSize: 28, fontWeight: 900, color: "#111", letterSpacing: 0.2 }}>
@@ -425,13 +439,10 @@ export default function GrandPlanPage() {
                   width: 56,
                   height: 4,
                   borderRadius: 999,
-                  backgroundColor: APP_MAIN_COLOR,
-                  opacity: 0.9,
-                }}
-              />
-              <p style={{ margin: "8px 0 0", color: "#666", fontSize: 13 }}>
-                Create a long-term plan to track your goals across multiple months.
-              </p>
+                backgroundColor: APP_MAIN_COLOR,
+                opacity: 0.9,
+              }}
+            />
             </div>
             <div />
           </div>
@@ -439,17 +450,18 @@ export default function GrandPlanPage() {
 
         <div
           style={{
-            padding: 48,
-            border: "2px dashed #ddd",
-            borderRadius: 12,
+            padding: 40,
             textAlign: "center",
-            backgroundColor: "#fafafa",
+            backgroundColor: "white",
+            borderRadius: 16,
           }}
         >
           <div style={{ fontSize: 48, marginBottom: 16 }}>🎯</div>
           <p style={{ fontSize: 18, marginBottom: 12 }}>No Grand Plan yet</p>
           <p style={{ color: "#666", marginBottom: 24, fontSize: 14 }}>
             A Grand Plan helps you organize long-term goals into categories and milestones.
+            {shortName ? ` Let's map yours out, ${shortName}.` : ""}
+            {" "}✨
           </p>
           <button
             onClick={() => setShowCreateModal(true)}
@@ -457,7 +469,7 @@ export default function GrandPlanPage() {
               padding: "12px 24px",
               fontSize: 16,
               fontWeight: 600,
-              backgroundColor: "#4caf50",
+              backgroundColor: APP_MAIN_COLOR,
               color: "white",
               border: "none",
               borderRadius: 8,
@@ -818,7 +830,7 @@ export default function GrandPlanPage() {
     <div>
       {/* Header */}
       <div style={{ marginBottom: 24, paddingBottom: 12, borderBottom: "1px solid #eee" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "end", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", gap: 12 }}>
           <div />
           <div style={{ textAlign: "center" }}>
             <h2
@@ -849,13 +861,10 @@ export default function GrandPlanPage() {
                 width: 56,
                 height: 4,
                 borderRadius: 999,
-                backgroundColor: APP_MAIN_COLOR,
-                opacity: 0.9,
-              }}
-            />
-            <p style={{ margin: "8px 0 0", color: "#666", fontSize: 13 }}>
-              {grandPlan.startMonth} - {grandPlan.endMonth ?? "Ongoing"}
-            </p>
+              backgroundColor: APP_MAIN_COLOR,
+              opacity: 0.9,
+            }}
+          />
           </div>
           <div />
         </div>
@@ -909,7 +918,7 @@ export default function GrandPlanPage() {
             fontWeight: 600,
             backgroundColor: "white",
             color: "#666",
-            border: "2px dashed #ccc",
+            border: "1px solid #e2e8f0",
             borderRadius: 20,
             cursor: "pointer",
             flex: "0 0 auto",
@@ -1002,19 +1011,21 @@ export default function GrandPlanPage() {
             categoryColor={activeCategory.color}
             onAddMilestone={handleAddMilestone}
             onSelectMilestone={setSelectedMilestone}
+            selectableMilestoneIds={selectableMilestoneIds}
+            disableAddForMilestoneIds={pinnedMilestoneIds}
           />
         </div>
       ) : (
         <div
           style={{
-            padding: 48,
+            padding: 40,
             textAlign: "center",
-            border: "2px dashed #ddd",
-            borderRadius: 12,
+            backgroundColor: "white",
+            borderRadius: 16,
             color: "#666",
           }}
         >
-          <p>Add a category to start building your milestone tree</p>
+          <p>Add a category to start building your milestone tree. ✨</p>
         </div>
       )}
 

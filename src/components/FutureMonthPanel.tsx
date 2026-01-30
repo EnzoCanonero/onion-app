@@ -17,11 +17,10 @@ export default function FutureMonthPanel({ ym }: FutureMonthPanelProps) {
   return (
     <div
       style={{
-        padding: 48,
+        padding: 40,
         textAlign: "center",
-        border: "2px dashed #ddd",
-        borderRadius: 12,
-        backgroundColor: "#fafafa",
+        backgroundColor: "white",
+        borderRadius: 16,
       }}
     >
       <div style={{ fontSize: 48, marginBottom: 16 }}>🔮</div>
@@ -30,7 +29,7 @@ export default function FutureMonthPanel({ ym }: FutureMonthPanelProps) {
         {formattedMonth}
       </p>
       <p style={{ color: "#888", fontSize: 13 }}>
-        This month is in the future. Come back when it's time!
+        This month is in the future. Come back when it's time! ✨
       </p>
     </div>
   );

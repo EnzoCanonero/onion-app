@@ -50,6 +50,7 @@ import PastUnactivatedDayPanel from "../components/PastUnactivatedDayPanel";
 import PastUnactivatedMonthPanel from "../components/PastUnactivatedMonthPanel";
 import FutureDatePanel from "../components/FutureDatePanel";
 import { ReportCard } from "../components/ReportCharts";
+import { getShortUserName, getUserName } from "../app/userProfile";
 
 export default function DailyAgendaPage() {
   const { selectedDate } = useDateNavigation(); // From context
@@ -67,7 +68,7 @@ export default function DailyAgendaPage() {
   // Header component for blocked states
   const BlockedHeader = () => (
     <div style={{ marginBottom: 24, paddingBottom: 12, borderBottom: "1px solid #eee" }}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "end", gap: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", gap: 12 }}>
         <div />
         <div style={{ textAlign: "center" }}>
           <h2 style={{ margin: 0, fontSize: 28, fontWeight: 900, color: "#111", letterSpacing: 0.2 }}>
@@ -79,11 +80,10 @@ export default function DailyAgendaPage() {
               width: 56,
               height: 4,
               borderRadius: 999,
-              backgroundColor: APP_MAIN_COLOR,
-              opacity: 0.9,
-            }}
+            backgroundColor: APP_MAIN_COLOR,
+            opacity: 0.9,
+          }}
           />
-          <p style={{ margin: "8px 0 0", color: "#666", fontSize: 13 }}>{dateSafe}</p>
         </div>
         <div />
       </div>
@@ -118,18 +118,7 @@ export default function DailyAgendaPage() {
     return (
       <div>
         <BlockedHeader />
-        <div
-          style={{
-            padding: 24,
-            border: "2px dashed #ddd",
-            borderRadius: 12,
-            backgroundColor: paperBgColor,
-            backgroundImage: paperBgPattern,
-            backgroundSize: "24px 24px",
-          }}
-        >
-          <EmptyMonthPanel date={dateSafe} />
-        </div>
+        <EmptyMonthPanel date={dateSafe} />
       </div>
     );
   }
@@ -139,6 +128,7 @@ export default function DailyAgendaPage() {
 
 function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM }) {
   const weekday = dayOfWeekFromDateISO(dateSafe);
+  const shortName = getShortUserName(getUserName());
 
   const [tick, setTick] = useState(0);
   const [showTaskModal, setShowTaskModal] = useState(false);
@@ -1055,7 +1045,7 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
   return (
     <div>
       <div style={{ marginBottom: 24, paddingBottom: 12, borderBottom: "1px solid #eee" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "end", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", gap: 12 }}>
           <div />
           <div style={{ textAlign: "center" }}>
             <h2 style={{ margin: 0, fontSize: 28, fontWeight: 900, color: "#111", letterSpacing: 0.2 }}>
@@ -1071,9 +1061,6 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
                 opacity: 0.9,
               }}
             />
-            <p style={{ margin: "8px 0 0", color: "#666", fontSize: 13 }}>
-              {dateSafe} · Plan your day, track focus sessions, and reflect on progress
-            </p>
           </div>
           <div />
         </div>
@@ -1103,7 +1090,7 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
           }}
         >
           <h3 style={{ marginTop: 0, marginBottom: 12, color: "#333" }}>
-            💌 Message from your yesterday self
+            💌 {shortName ? `Message from yesterday's ${shortName}` : "Message from your yesterday self"}
           </h3>
           {lastWorkingDay?.shutdownNote ? (
             <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.6, marginBottom: 12 }}>
@@ -1131,18 +1118,17 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
             <div
               style={{
                 textAlign: "center",
-                padding: 48,
-                border: "2px dashed #ddd",
-                borderRadius: 12,
-                backgroundColor: "#fafafa",
+                padding: 40,
+                backgroundColor: "white",
+                borderRadius: 16,
               }}
             >
               <div style={{ fontSize: 48, marginBottom: 16 }}>☀️</div>
               <p style={{ fontSize: 18, marginBottom: 12 }}>
-                Ready to start your working day?
+                Ready to start your working day? ☀️
               </p>
               <p style={{ color: "#666", marginBottom: 24, fontSize: 14 }}>
-                Activate today to start tracking your focus sessions and tasks.
+                Activate today to start tracking your focus sessions and tasks. ✨
               </p>
               <button
                 onClick={handleActivateDay}
@@ -1150,7 +1136,7 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
                   padding: "12px 24px",
                   fontSize: 16,
                   fontWeight: 600,
-                  backgroundColor: "#ff9800",
+                  backgroundColor: APP_MAIN_COLOR,
                   color: "white",
                   border: "none",
                   borderRadius: 8,
@@ -1374,7 +1360,7 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
                     fontWeight: 600,
                     backgroundColor: "white",
                     color: "#666",
-                    border: "2px dashed #ccc",
+                    border: "1px solid #e2e8f0",
                     borderRadius: 8,
                     cursor: "pointer",
                     marginTop: 4,
@@ -1429,8 +1415,8 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
 
           {/* Selected Tasks Display */}
           {!day.primaryTaskId ? (
-            <div style={{ textAlign: "center", padding: 32, border: "2px dashed #ddd", borderRadius: 8 }}>
-              <p style={{ opacity: 0.6, marginBottom: 16 }}>No tasks selected for today</p>
+            <div style={{ textAlign: "center", padding: 32, backgroundColor: "white", borderRadius: 16 }}>
+              <p style={{ opacity: 0.6, marginBottom: 16 }}>No tasks selected for today. ✨</p>
               <button
                 onClick={() => setShowTaskModal(true)}
                 style={{
@@ -1586,19 +1572,18 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
           {/* v4: Meetings Section */}
           <h3 style={{ marginTop: 32 }}>📅 Meetings</h3>
           <div style={{ marginBottom: 24 }}>
-		            {dayMeetings.length === 0 ? (
-		              <div
-		                style={{
-		                  textAlign: "center",
-	                  padding: 24,
-	                  border: "2px dashed #ddd",
-	                  borderRadius: 8,
-	                  backgroundColor: "rgba(255,255,255,0.92)",
-	                }}
-	              >
-		                <p style={{ opacity: 0.6, marginBottom: 12 }}>No meetings scheduled</p>
-		                <button
-		                  onClick={() => setShowMeetingForm(true)}
+            {dayMeetings.length === 0 ? (
+              <div
+                style={{
+                  textAlign: "center",
+                  padding: 28,
+                  backgroundColor: "white",
+                  borderRadius: 16,
+                }}
+              >
+                <p style={{ opacity: 0.6, marginBottom: 12 }}>No meetings scheduled. ✨</p>
+                <button
+                  onClick={() => setShowMeetingForm(true)}
 		                  style={{
 		                    padding: "10px 14px",
 		                    fontSize: 13,
