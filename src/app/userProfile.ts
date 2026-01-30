@@ -1,9 +1,11 @@
+import { getStorageBackend } from "./storageBackend";
+
 export const USER_NAME_STORAGE_KEY = "focustree.userName";
 
 export const getUserName = () => {
   if (typeof window === "undefined") return "";
   try {
-    return window.localStorage.getItem(USER_NAME_STORAGE_KEY)?.trim() ?? "";
+    return getStorageBackend().getItem(USER_NAME_STORAGE_KEY)?.trim() ?? "";
   } catch {
     return "";
   }
