@@ -17,6 +17,7 @@ import type {
 } from "./types";
 import { normalizeWeekdays } from "./weekdays";
 import { getVirtualTodayDate, getVirtualCurrentYM, getVirtualTimestamp } from "../contexts/VirtualClockContext";
+import { getStorageBackend } from "./storageBackend";
 
 const KEY = "focustree.state";
 
@@ -36,7 +37,7 @@ const emptyState: AppStateV0 = {
 
 export function loadState(): AppStateV0 {
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = getStorageBackend().getItem(KEY);
     if (!raw) return emptyState;
     const parsed = JSON.parse(raw) as AppStateV0;
     if (parsed?.version !== 0) return emptyState;
@@ -144,7 +145,7 @@ export function loadState(): AppStateV0 {
 }
 
 export function saveState(state: AppStateV0) {
-  localStorage.setItem(KEY, JSON.stringify(state));
+  getStorageBackend().setItem(KEY, JSON.stringify(state));
 }
 
 export function getMonth(state: AppStateV0, ym: YM): MonthPlan | undefined {

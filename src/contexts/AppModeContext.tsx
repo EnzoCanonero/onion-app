@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, type ReactNode } from "react";
+import { getStorageBackend } from "../app/storageBackend";
 
 const STORAGE_KEY = "focustree.developerMode";
 
@@ -19,15 +20,15 @@ declare global {
 
 export function AppModeProvider({ children }: { children: ReactNode }) {
   const [isDeveloper, setIsDeveloper] = useState(() => {
-    return localStorage.getItem(STORAGE_KEY) === "true";
+    return getStorageBackend().getItem(STORAGE_KEY) === "true";
   });
 
   const toggleDeveloperMode = () => {
     const newValue = !isDeveloper;
     if (newValue) {
-      localStorage.setItem(STORAGE_KEY, "true");
+      getStorageBackend().setItem(STORAGE_KEY, "true");
     } else {
-      localStorage.removeItem(STORAGE_KEY);
+      getStorageBackend().removeItem(STORAGE_KEY);
     }
     setIsDeveloper(newValue);
   };
@@ -35,13 +36,13 @@ export function AppModeProvider({ children }: { children: ReactNode }) {
   // Expose global functions for console access
   useEffect(() => {
     window.__enableDevMode = () => {
-      localStorage.setItem(STORAGE_KEY, "true");
+      getStorageBackend().setItem(STORAGE_KEY, "true");
       setIsDeveloper(true);
       console.log("Developer mode enabled. Refresh the page to apply all changes.");
     };
 
     window.__disableDevMode = () => {
-      localStorage.removeItem(STORAGE_KEY);
+      getStorageBackend().removeItem(STORAGE_KEY);
       setIsDeveloper(false);
       console.log("Developer mode disabled. Refresh the page to apply all changes.");
     };
