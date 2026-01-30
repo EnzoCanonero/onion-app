@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { APP_MAIN_COLOR } from "../app/theme";
 import { USER_NAME_STORAGE_KEY } from "../app/userProfile";
+import { getStorageBackend } from "../app/storageBackend";
 
 const cards = [
   {
@@ -75,7 +76,7 @@ export default function GetStartedPage() {
   const handleNameSubmit = () => {
     const trimmed = userName.trim();
     if (!trimmed) return;
-    localStorage.setItem(USER_NAME_STORAGE_KEY, trimmed);
+    getStorageBackend().setItem(USER_NAME_STORAGE_KEY, trimmed);
     setStep(2);
   };
 

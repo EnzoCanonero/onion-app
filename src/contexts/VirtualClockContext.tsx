@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
 import type { DateISO, YM } from "../app/types";
+import { getStorageBackend } from "../app/storageBackend";
 
 const STORAGE_KEY = "focustree.virtualClock";
 const DEV_MODE_KEY = "focustree.developerMode";
@@ -34,7 +35,7 @@ const VirtualClockContext = createContext<VirtualClockContextValue | null>(null)
 
 function loadVirtualClockState(): VirtualClockState | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = getStorageBackend().getItem(STORAGE_KEY);
     if (!raw) return null;
     return JSON.parse(raw) as VirtualClockState;
   } catch {
@@ -44,14 +45,14 @@ function loadVirtualClockState(): VirtualClockState | null {
 
 function saveVirtualClockState(state: VirtualClockState): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    getStorageBackend().setItem(STORAGE_KEY, JSON.stringify(state));
   } catch {
     // Ignore storage errors
   }
 }
 
 function isDeveloperMode(): boolean {
-  return localStorage.getItem(DEV_MODE_KEY) === "true";
+  return getStorageBackend().getItem(DEV_MODE_KEY) === "true";
 }
 
 function calculateVirtualNow(state: VirtualClockState): Date {
