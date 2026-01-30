@@ -28,6 +28,8 @@ import {
 } from "../app/weekdays";
 import { useDateNavigation } from "../contexts/DateNavigationContext";
 import { getVirtualTimestamp } from "../contexts/VirtualClockContext";
+import { getShortUserName, getUserName } from "../app/userProfile";
+import { getSelectableMilestoneIds } from "../app/milestones";
 import FireworksOverlay from "../components/FireworksOverlay";
 import NoGrandPlanPanel from "../components/NoGrandPlanPanel";
 import PastUnactivatedMonthPanel from "../components/PastUnactivatedMonthPanel";
@@ -2188,6 +2190,10 @@ export default function MonthSetupPage() {
   const [tick, setTick] = useState(0);
   const state = useMemo(() => loadState(), [tick]);
   const plan = getMonth(state, ymSafe);
+  const shortName = getShortUserName(getUserName());
+  const selectableMilestoneIds = state.grandPlan
+    ? getSelectableMilestoneIds(state.grandPlan.milestones)
+    : new Set<string>();
 
   const [fireworks, setFireworks] = useState<{ key: number; colors: string[] } | null>(null);
 
@@ -2200,7 +2206,7 @@ export default function MonthSetupPage() {
   // Header component for blocked/empty states
   const BlockedHeader = () => (
     <div style={{ marginBottom: 24, paddingBottom: 12, borderBottom: "1px solid #eee" }}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "end", gap: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", gap: 12 }}>
         <div />
         <div style={{ textAlign: "center" }}>
           <h2 style={{ margin: 0, fontSize: 28, fontWeight: 900, color: "#111", letterSpacing: 0.2 }}>
@@ -2212,13 +2218,10 @@ export default function MonthSetupPage() {
               width: 56,
               height: 4,
               borderRadius: 999,
-              backgroundColor: APP_MAIN_COLOR,
-              opacity: 0.9,
-            }}
+            backgroundColor: APP_MAIN_COLOR,
+            opacity: 0.9,
+          }}
           />
-          <p style={{ margin: "8px 0 0", color: "#666", fontSize: 13 }}>
-            {ymSafe} · Configure your monthly tasks and focus templates
-          </p>
         </div>
         <div />
       </div>
@@ -2363,7 +2366,7 @@ export default function MonthSetupPage() {
       .sort((a, b) => a.order - b.order)
       .map((category) => {
         const milestones = state.grandPlan!.milestones
-          .filter((m) => m.categoryId === category.id && m.status !== "COMPLETED")
+          .filter((m) => m.categoryId === category.id && selectableMilestoneIds.has(m.id))
           .slice()
           .sort((a, b) => a.order - b.order);
         if (milestones.length === 0) return null;
@@ -2394,8 +2397,11 @@ export default function MonthSetupPage() {
     if (!plan || !showMonthWizard) return;
     // Only pre-select if already saved, otherwise let user choose
     const primaryId = plan.primaryMilestoneId ?? null;
-    setMonthWizardPrimaryId(primaryId);
-    setMonthWizardSecondaryIds((plan.pinnedMilestoneIds ?? []).filter((id) => id !== primaryId));
+    const nextPrimary = primaryId && selectableMilestoneIds.has(primaryId) ? primaryId : null;
+    setMonthWizardPrimaryId(nextPrimary);
+    setMonthWizardSecondaryIds(
+      (plan.pinnedMilestoneIds ?? []).filter((id) => id !== primaryId && selectableMilestoneIds.has(id))
+    );
   }, [showMonthWizard, plan?.primaryMilestoneId, pinnedIdsKey]);
 
   useEffect(() => {
@@ -2512,21 +2518,40 @@ export default function MonthSetupPage() {
   // v8: Pin milestone to this month board (no automatic task creation)
   const handlePinMilestone = (milestone: MilestoneNode) => {
     if (!plan) return;
-    const nextPinned = plan.pinnedMilestoneIds.includes(milestone.id)
-      ? plan.pinnedMilestoneIds
-      : [...plan.pinnedMilestoneIds, milestone.id];
-    const nextPrimary = plan.primaryMilestoneId ?? milestone.id;
-    handlePlanUpdate({ ...plan, pinnedMilestoneIds: nextPinned, primaryMilestoneId: nextPrimary });
+    if (!selectableMilestoneIds.has(milestone.id)) return;
+    mutate((s0) => {
+      const plan0 = getMonth(s0, ymSafe);
+      if (!plan0) return s0;
+      const nextPinned = plan0.pinnedMilestoneIds.includes(milestone.id)
+        ? plan0.pinnedMilestoneIds
+        : [...plan0.pinnedMilestoneIds, milestone.id];
+      const nextPrimary = plan0.primaryMilestoneId ?? milestone.id;
+      let nextState = upsertMonth(s0, { ...plan0, pinnedMilestoneIds: nextPinned, primaryMilestoneId: nextPrimary });
+      const m0 = nextState.grandPlan?.milestones.find((m) => m.id === milestone.id);
+      if (m0 && m0.status === "NOT_STARTED") {
+        nextState = updateMilestone(nextState, milestone.id, { status: "IN_PROGRESS" });
+      }
+      return nextState;
+    });
     setSelectedMilestoneId(milestone.id);
     setShowMilestonePicker(false);
   };
 
   const handleSetObjectiveMilestone = (milestoneId: string) => {
     if (!plan) return;
-    const nextPinned = plan.pinnedMilestoneIds.includes(milestoneId)
-      ? plan.pinnedMilestoneIds
-      : [...plan.pinnedMilestoneIds, milestoneId];
-    handlePlanUpdate({ ...plan, pinnedMilestoneIds: nextPinned, primaryMilestoneId: milestoneId });
+    mutate((s0) => {
+      const plan0 = getMonth(s0, ymSafe);
+      if (!plan0) return s0;
+      const nextPinned = plan0.pinnedMilestoneIds.includes(milestoneId)
+        ? plan0.pinnedMilestoneIds
+        : [...plan0.pinnedMilestoneIds, milestoneId];
+      let nextState = upsertMonth(s0, { ...plan0, pinnedMilestoneIds: nextPinned, primaryMilestoneId: milestoneId });
+      const m0 = nextState.grandPlan?.milestones.find((m) => m.id === milestoneId);
+      if (m0 && m0.status === "NOT_STARTED") {
+        nextState = updateMilestone(nextState, milestoneId, { status: "IN_PROGRESS" });
+      }
+      return nextState;
+    });
     setSelectedMilestoneId(milestoneId);
   };
 
@@ -2537,15 +2562,30 @@ export default function MonthSetupPage() {
 
   const applyMonthWizardMilestones = () => {
     if (!plan) return;
-    const fallbackPrimary = monthWizardPrimaryId ?? monthWizardSecondaryIds[0] ?? undefined;
-    const secondaryIds = monthWizardSecondaryIds.filter((id) => id && id !== fallbackPrimary);
+    const filteredSecondary = monthWizardSecondaryIds.filter(
+      (id) => id && selectableMilestoneIds.has(id)
+    );
+    const fallbackPrimary = monthWizardPrimaryId && selectableMilestoneIds.has(monthWizardPrimaryId)
+      ? monthWizardPrimaryId
+      : filteredSecondary[0] ?? undefined;
+    const secondaryIds = filteredSecondary.filter((id) => id && id !== fallbackPrimary);
     const nextPinned = Array.from(new Set([...(fallbackPrimary ? [fallbackPrimary] : []), ...secondaryIds]));
-    const nextPlan: MonthPlan = {
-      ...plan,
-      pinnedMilestoneIds: nextPinned,
-      primaryMilestoneId: fallbackPrimary,
-    };
-    handlePlanUpdate(nextPlan);
+    mutate((s0) => {
+      const plan0 = getMonth(s0, ymSafe);
+      if (!plan0) return s0;
+      let nextState = upsertMonth(s0, {
+        ...plan0,
+        pinnedMilestoneIds: nextPinned,
+        primaryMilestoneId: fallbackPrimary,
+      });
+      nextPinned.forEach((milestoneId) => {
+        const m0 = nextState.grandPlan?.milestones.find((m) => m.id === milestoneId);
+        if (m0 && m0.status === "NOT_STARTED") {
+          nextState = updateMilestone(nextState, milestoneId, { status: "IN_PROGRESS" });
+        }
+      });
+      return nextState;
+    });
     setSelectedMilestoneId(fallbackPrimary ?? nextPinned[0] ?? null);
   };
 
@@ -2964,12 +3004,12 @@ export default function MonthSetupPage() {
 	return (
 	  <div>
 	    {/* Header */}
-	    <div style={{ marginBottom: 24, paddingBottom: 12, borderBottom: "1px solid #eee" }}>
-	      <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "end", gap: 12 }}>
-	        <div />
-	        <div style={{ textAlign: "center" }}>
-	          <h2 style={{ margin: 0, fontSize: 28, fontWeight: 900, color: "#111", letterSpacing: 0.2 }}>
-	            Month Plan
+    <div style={{ marginBottom: 24, paddingBottom: 12, borderBottom: "1px solid #eee" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", gap: 12 }}>
+        <div />
+        <div style={{ textAlign: "center" }}>
+          <h2 style={{ margin: 0, fontSize: 28, fontWeight: 900, color: "#111", letterSpacing: 0.2 }}>
+            Month Plan
 	          </h2>
 	          <div
 	            style={{
@@ -2977,35 +3017,22 @@ export default function MonthSetupPage() {
 	              width: 56,
 	              height: 4,
 	              borderRadius: 999,
-	              backgroundColor: APP_MAIN_COLOR,
-	              opacity: 0.9,
-	            }}
-	          />
-	          <p style={{ margin: "8px 0 0", color: "#666", fontSize: 13 }}>
-	            {ymSafe}
-	            {plan ? (
-	              <>
-	                {" "}
-	                · Tasks: <strong>{plan.tasks.length}</strong> · Completed:{" "}
-	                <strong>{plan.tasks.filter((t) => t.status === "GREEN").length}</strong>
-	              </>
-	            ) : (
-	              <> · Configure your monthly tasks and focus templates</>
-	            )}
-	          </p>
-	        </div>
-	        <div />
-	      </div>
-	    </div>
+              backgroundColor: APP_MAIN_COLOR,
+              opacity: 0.9,
+            }}
+          />
+        </div>
+        <div />
+      </div>
+    </div>
 
 	      {!plan ? (
-	        <div
-	          style={{
-            padding: 48,
-            border: "2px dashed #ddd",
-            borderRadius: 12,
+        <div
+          style={{
+            padding: 40,
             textAlign: "center",
-            backgroundColor: "#fafafa",
+            backgroundColor: "white",
+            borderRadius: 16,
           }}
         >
           {!isInPeriod ? (
@@ -3025,7 +3052,8 @@ export default function MonthSetupPage() {
               <div style={{ fontSize: 48, marginBottom: 16 }}>📅</div>
               <p style={{ fontSize: 18, marginBottom: 12 }}>No plan for {ymSafe} yet</p>
               <p style={{ color: "#666", marginBottom: 24, fontSize: 14 }}>
-                Create a monthly plan to start tracking tasks and focus sessions.
+                Create a monthly plan to start tracking tasks and focus sessions
+                {shortName ? `, ${shortName}` : ""}. ✨
               </p>
               <button
                 onClick={create}
@@ -3033,7 +3061,7 @@ export default function MonthSetupPage() {
                   padding: "12px 24px",
                   fontSize: 16,
                   fontWeight: 600,
-                  backgroundColor: "#2196f3",
+                  backgroundColor: APP_MAIN_COLOR,
                   color: "white",
                   border: "none",
                   borderRadius: 8,
@@ -3659,15 +3687,13 @@ export default function MonthSetupPage() {
                   .sort((a, b) => a.order - b.order)
                   .map((category) => {
                     const milestones = state.grandPlan!.milestones.filter(
-                      (m) => m.categoryId === category.id
+                      (m) => m.categoryId === category.id && selectableMilestoneIds.has(m.id)
                     );
                     if (milestones.length === 0) return null;
 
-                    // Filter out already pinned milestones and completed milestones
+                    // Filter out already pinned milestones
                     const pinnedIds = new Set(plan.pinnedMilestoneIds);
-                    const available = milestones.filter(
-                      (m) => !pinnedIds.has(m.id) && m.status !== "COMPLETED"
-                    );
+                    const available = milestones.filter((m) => !pinnedIds.has(m.id));
 
                     if (available.length === 0) return null;
 
@@ -4127,7 +4153,13 @@ export default function MonthSetupPage() {
                     if (!plan0) return s0;
 
                     if (milestoneId) {
-                      return addTaskWithMilestone(s0, ymSafe, title.trim(), milestoneId, null, nextDescription).state;
+                      const result = addTaskWithMilestone(s0, ymSafe, title.trim(), milestoneId, null, nextDescription);
+                      let nextState = result.state;
+                      const m0 = nextState.grandPlan?.milestones.find((m) => m.id === milestoneId);
+                      if (m0 && m0.status === "NOT_STARTED") {
+                        nextState = updateMilestone(nextState, milestoneId, { status: "IN_PROGRESS" });
+                      }
+                      return nextState;
                     }
 
                     const task: TaskNode = {

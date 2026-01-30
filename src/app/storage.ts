@@ -824,85 +824,108 @@ export function createGrandPlanWithExamples(
   const now = getVirtualTimestamp();
 
   // Create example categories
-  const catWork: Category = {
+  const catPapers: Category = {
     id: makeId("cat"),
-    title: "Career",
+    title: "Papers",
     color: "#2196f3",
     order: 1,
     createdAt: now,
   };
 
-  const catHealth: Category = {
+  const catFuture: Category = {
     id: makeId("cat"),
-    title: "Health & Fitness",
+    title: "Future",
     color: "#4caf50",
     order: 2,
     createdAt: now,
   };
 
-  // Create example milestones for Career (bottom-to-top: first milestones -> goal)
-  const workMs1: MilestoneNode = {
+  // Papers tree A (3 milestones total, goal at bottom)
+  const papersAGoal: MilestoneNode = {
     id: makeId("ms"),
-    categoryId: catWork.id,
+    categoryId: catPapers.id,
     parentId: null,
-    title: "Get promoted to Senior",
-    description: "Achieve senior position within the year",
+    title: "Submit paper to arXiv",
+    description: "Finalize and upload the analysis paper",
     status: "NOT_STARTED",
     order: 1,
     createdAt: now,
   };
 
-  const workMs2: MilestoneNode = {
+  const papersA2: MilestoneNode = {
     id: makeId("ms"),
-    categoryId: catWork.id,
-    parentId: workMs1.id,
-    title: "Lead a major project",
-    description: "Take ownership of a key initiative",
+    categoryId: catPapers.id,
+    parentId: papersAGoal.id,
+    title: "Internal review & feedback",
+    description: "Share draft with the group and iterate",
     status: "NOT_STARTED",
     order: 1,
     createdAt: now,
   };
 
-  const workMs3: MilestoneNode = {
+  const papersA1: MilestoneNode = {
     id: makeId("ms"),
-    categoryId: catWork.id,
-    parentId: workMs2.id,
-    title: "Complete advanced training",
-    description: "Finish relevant certifications",
+    categoryId: catPapers.id,
+    parentId: papersA2.id,
+    title: "Draft analysis note",
+    description: "Summarize dataset, selection, and key plots",
     status: "NOT_STARTED",
     order: 1,
     createdAt: now,
   };
 
-  // Create example milestones for Health (bottom-to-top: first milestones -> goal)
-  const healthMs1: MilestoneNode = {
+  // Papers tree B (2 milestones total, goal at bottom)
+  const papersBGoal: MilestoneNode = {
     id: makeId("ms"),
-    categoryId: catHealth.id,
+    categoryId: catPapers.id,
     parentId: null,
-    title: "Run a half marathon",
-    description: "Complete 21km race",
+    title: "Complete methods appendix",
+    description: "Finalize detector + systematics write‑up",
+    status: "NOT_STARTED",
+    order: 2,
+    createdAt: now,
+  };
+
+  const papersB1: MilestoneNode = {
+    id: makeId("ms"),
+    categoryId: catPapers.id,
+    parentId: papersBGoal.id,
+    title: "Literature review: detector performance",
+    description: "Collect references and key plots",
     status: "NOT_STARTED",
     order: 1,
     createdAt: now,
   };
 
-  const healthMs2: MilestoneNode = {
+  // Future category (job search, goal at bottom)
+  const futureGoal: MilestoneNode = {
     id: makeId("ms"),
-    categoryId: catHealth.id,
-    parentId: healthMs1.id,
-    title: "Run 10K comfortably",
-    description: "Build endurance for longer distances",
+    categoryId: catFuture.id,
+    parentId: null,
+    title: "Secure a particle physics role",
+    description: "Accept an offer for a research position",
     status: "NOT_STARTED",
     order: 1,
     createdAt: now,
   };
 
-  const healthMs3: MilestoneNode = {
+  const futureMs2: MilestoneNode = {
     id: makeId("ms"),
-    categoryId: catHealth.id,
-    parentId: healthMs2.id,
-    title: "Establish running routine",
-    description: "Run 3x per week consistently",
+    categoryId: catFuture.id,
+    parentId: futureGoal.id,
+    title: "Prepare application kit",
+    description: "CV, research statement, and references",
+    status: "NOT_STARTED",
+    order: 1,
+    createdAt: now,
+  };
+
+  const futureMs1: MilestoneNode = {
+    id: makeId("ms"),
+    categoryId: catFuture.id,
+    parentId: futureMs2.id,
+    title: "Define target roles",
+    description: "Identify labs, collaborations, and openings",
     status: "NOT_STARTED",
     order: 1,
     createdAt: now,
@@ -914,8 +937,8 @@ export function createGrandPlanWithExamples(
     startMonth,
     endMonth,
     isClosed: false,
-    categories: [catWork, catHealth],
-    milestones: [workMs1, workMs2, workMs3, healthMs1, healthMs2, healthMs3],
+    categories: [catPapers, catFuture],
+    milestones: [papersA1, papersA2, papersAGoal, papersB1, papersBGoal, futureMs1, futureMs2, futureGoal],
     createdAt: now,
     updatedAt: now,
   };

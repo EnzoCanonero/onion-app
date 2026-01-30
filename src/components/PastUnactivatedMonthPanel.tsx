@@ -17,11 +17,10 @@ export default function PastUnactivatedMonthPanel({ ym }: PastUnactivatedMonthPa
   return (
     <div
       style={{
-        padding: 48,
+        padding: 40,
         textAlign: "center",
-        border: "2px dashed #ddd",
-        borderRadius: 12,
-        backgroundColor: "#fafafa",
+        backgroundColor: "white",
+        borderRadius: 16,
       }}
     >
       <div style={{ fontSize: 48, marginBottom: 16 }}>📭</div>
@@ -30,7 +29,7 @@ export default function PastUnactivatedMonthPanel({ ym }: PastUnactivatedMonthPa
         {formattedMonth}
       </p>
       <p style={{ color: "#888", fontSize: 13 }}>
-        This month was never set up.
+        This month was never set up. ✨
       </p>
     </div>
   );

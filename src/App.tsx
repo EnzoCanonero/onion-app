@@ -2,11 +2,12 @@ import { useState } from "react";
 import { NavLink, Navigate, Route, Routes, useParams } from "react-router-dom";
 import { DateNavigationProvider, useDateNavigation } from "./contexts/DateNavigationContext";
 import { useAppMode } from "./contexts/AppModeContext";
-import { getTodayDate } from "./app/storage";
+import { getTodayDate, loadState } from "./app/storage";
 import { APP_MAIN_COLOR } from "./app/theme";
 import GrandPlanPage from "./pages/GrandPlanPage";
 import MonthSetupPage from "./pages/MonthSetupPage";
 import DailyAgendaPage from "./pages/DailyAgendaPage";
+import GetStartedPage from "./pages/GetStartedPage";
 import DatePickerButton from "./components/DatePickerButton";
 import DatePickerModal from "./components/DatePickerModal";
 import VirtualClockToolbox from "./components/VirtualClockToolbox";
@@ -100,30 +101,47 @@ function Header() {
   );
 }
 
+function RootRedirect() {
+  const state = loadState();
+  const hasData =
+    state.grandPlan ||
+    Object.keys(state.months).length > 0 ||
+    Object.keys(state.days).length > 0;
+  return <Navigate to={hasData ? `/month/${getTodayDate()}/setup` : "/get-started"} replace />;
+}
+
 export default function App() {
   return (
     <DateNavigationProvider>
-      <div
-        style={{
-          fontFamily: "system-ui, sans-serif",
-          width: "100%",
-          maxWidth: 1280,
-          margin: "0 auto",
-          padding: "16px 32px",
-          boxSizing: "border-box",
-        }}
-      >
-        <Header />
-        <div style={{ height: 12 }} />
+      <Routes>
+        <Route path="/get-started" element={<GetStartedPage />} />
+        <Route
+          path="*"
+          element={
+            <div
+              style={{
+                fontFamily: "system-ui, sans-serif",
+                width: "100%",
+                maxWidth: 1280,
+                margin: "0 auto",
+                padding: "16px 32px",
+                boxSizing: "border-box",
+              }}
+            >
+              <Header />
+              <div style={{ height: 12 }} />
 
-        <Routes>
-          <Route path="/" element={<Navigate to={`/month/${getTodayDate()}/setup`} replace />} />
-          <Route path="/grand-plan" element={<GrandPlanPage />} />
-          <Route path="/month/:date/setup" element={<MonthSetupRoute />} />
-          <Route path="/day/:date" element={<DailyAgendaRoute />} />
-          <Route path="*" element={<div>Not found.</div>} />
-        </Routes>
-      </div>
+              <Routes>
+                <Route path="/" element={<RootRedirect />} />
+                <Route path="/grand-plan" element={<GrandPlanPage />} />
+                <Route path="/month/:date/setup" element={<MonthSetupRoute />} />
+                <Route path="/day/:date" element={<DailyAgendaRoute />} />
+                <Route path="*" element={<div>Not found.</div>} />
+              </Routes>
+            </div>
+          }
+        />
+      </Routes>
     </DateNavigationProvider>
   );
 }
