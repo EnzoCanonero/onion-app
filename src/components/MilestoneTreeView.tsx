@@ -224,6 +224,7 @@ function SingleTree({
 
                   {/* Add milestone above button (adds a child which appears above in inverted view) */}
                   <button
+                    data-tutorial-target="add-milestone"
                     onClick={(e) => {
                       e.stopPropagation();
                       if (isAddDisabled) return;
@@ -296,6 +297,7 @@ export default function MilestoneTreeView({
       <div style={{ textAlign: "center", padding: 32 }}>
         <p style={{ color: "#666", marginBottom: 16 }}>No milestones yet. Add your first goal to start building your roadmap.</p>
         <button
+          data-tutorial-target="add-goal"
           onClick={() => onAddMilestone(null)}
           style={{
             padding: "10px 20px",
