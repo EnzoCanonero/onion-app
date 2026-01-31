@@ -98,6 +98,7 @@ const PERSISTENT_KEYS = [
   "focustree.userName",
   "focustree.developerMode",
   "focustree.virtualClock",
+  "focustree.onboarding",
 ];
 
 export async function initStorageBackend(): Promise<StorageBackend> {

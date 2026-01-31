@@ -11,6 +11,7 @@ import GetStartedPage from "./pages/GetStartedPage";
 import DatePickerButton from "./components/DatePickerButton";
 import DatePickerModal from "./components/DatePickerModal";
 import VirtualClockToolbox from "./components/VirtualClockToolbox";
+import GrandPlanTutorialWrapper from "./components/GrandPlanTutorialWrapper";
 
 function MonthSetupRoute() {
   const { date } = useParams();
@@ -60,6 +61,9 @@ function Header() {
     <>
       {/* Virtual Clock Toolbox (only in developer mode) */}
       {isDeveloper && <VirtualClockToolbox />}
+
+      {/* Spacer for macOS window controls */}
+      <div style={{ height: 36 }} />
 
       <header
         style={{
@@ -115,6 +119,7 @@ export default function App() {
     <DateNavigationProvider>
       <Routes>
         <Route path="/get-started" element={<GetStartedPage />} />
+        <Route path="/grand-plan/tutorial" element={<GrandPlanTutorialWrapper />} />
         <Route
           path="*"
           element={
