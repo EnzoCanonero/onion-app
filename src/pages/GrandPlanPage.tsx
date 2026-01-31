@@ -106,7 +106,13 @@ function listWeekStartsInRange(start: DateISO, end: DateISO): DateISO[] {
   return out;
 }
 
-export default function GrandPlanPage() {
+type GrandPlanPageProps = {
+  tutorialMode?: boolean;
+  onTutorialTick?: () => void;
+};
+
+export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
+  const { tutorialMode, onTutorialTick } = props;
   const [tick, setTick] = useState(0);
   const state = useMemo(() => loadState(), [tick]);
   const grandPlan = state.grandPlan;
@@ -180,6 +186,7 @@ export default function GrandPlanPage() {
     const next = fn(current);
     saveState(next);
     setTick((x) => x + 1);
+    onTutorialTick?.();
   };
 
   const handleCreateGrandPlan = () => {
@@ -385,6 +392,7 @@ export default function GrandPlanPage() {
           >
             Cancel
           </button>
+          {!tutorialMode && (
           <button
             onClick={handleCreateWithExamples}
             disabled={!newTitle.trim() || !newStartMonth}
@@ -401,6 +409,7 @@ export default function GrandPlanPage() {
           >
             Create with Examples
           </button>
+          )}
           <button
             onClick={handleCreateGrandPlan}
             disabled={!newTitle.trim() || !newStartMonth}
@@ -464,6 +473,7 @@ export default function GrandPlanPage() {
             {" "}✨
           </p>
           <button
+            data-tutorial-target="create-plan"
             onClick={() => setShowCreateModal(true)}
             style={{
               padding: "12px 24px",
@@ -836,15 +846,15 @@ export default function GrandPlanPage() {
             <h2
               style={{ margin: 0, fontSize: 28, fontWeight: 900, color: "#111", letterSpacing: 0.2, cursor: "pointer" }}
               title="Click to edit Grand Plan"
-              role="button"
-              tabIndex={0}
-              onClick={() => {
+              role={tutorialMode ? undefined : "button"}
+              tabIndex={tutorialMode ? undefined : 0}
+              onClick={tutorialMode ? undefined : () => {
                 setNewTitle(grandPlan.title);
                 setNewStartMonth(grandPlan.startMonth);
                 setNewEndMonth(grandPlan.endMonth ?? "");
                 setShowEditModal(true);
               }}
-              onKeyDown={(e) => {
+              onKeyDown={tutorialMode ? undefined : (e) => {
                 if (e.key !== "Enter" && e.key !== " ") return;
                 e.preventDefault();
                 setNewTitle(grandPlan.title);
@@ -911,6 +921,7 @@ export default function GrandPlanPage() {
           </div>
         </div>
         <button
+          data-tutorial-target="add-category"
           onClick={() => setShowAddCategory(true)}
           style={{
             padding: "8px 16px",
@@ -952,7 +963,9 @@ export default function GrandPlanPage() {
 	              flexWrap: "wrap",
 	            }}
 	          >
+		            {grandPlan.milestones.some((m) => m.categoryId === activeCategory.id) && (
 		            <button
+		              data-tutorial-target="add-goal"
 		              onClick={() => handleAddMilestone(null)}
 		              style={{
 		                padding: "8px 16px",
@@ -967,6 +980,7 @@ export default function GrandPlanPage() {
 		            >
 		              + Add another goal
 		            </button>
+		            )}
 	            <div
 	              style={{
 	                display: "flex",
@@ -989,6 +1003,7 @@ export default function GrandPlanPage() {
 	                <span style={{ color: "#4caf50", fontWeight: 700 }}>✓</span> Completed
 	              </span>
 	            </div>
+		            {!tutorialMode && (
 		            <button
 		              onClick={() => handleDeleteCategory(activeCategory.id)}
 		              style={{
@@ -1004,6 +1019,7 @@ export default function GrandPlanPage() {
 		            >
 		              Delete Category
 		            </button>
+		            )}
           </div>
 
           <MilestoneTreeView
@@ -1030,6 +1046,7 @@ export default function GrandPlanPage() {
       )}
 
       {/* v11: Close Grand Plan Button */}
+      {!tutorialMode && (
       <div style={{ textAlign: "center", marginTop: 48, paddingTop: 24, borderTop: "2px solid #ddd" }}>
         <button
           onClick={() => setShowCloseConfirm(true)}
@@ -1049,6 +1066,7 @@ export default function GrandPlanPage() {
         </button>
         <p style={{ marginTop: 8, fontSize: 14, color: "#666" }}>Mark this Grand Plan as complete and view the report</p>
       </div>
+      )}
 
       {/* Close Grand Plan Confirmation Modal */}
       {showCloseConfirm && (

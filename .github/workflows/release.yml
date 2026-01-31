@@ -28,11 +28,8 @@ jobs:
 
       - run: npm ci
 
-      - name: Build Electron main process
-        run: npx tsc -p tsconfig.electron.json
-
-      - name: Build renderer (Vite)
-        run: npx vite build
+      - name: Build (electron-vite)
+        run: npx electron-vite build
 
       - name: Package for ${{ matrix.platform }}
         run: npx electron-builder --${{ matrix.platform }} --publish always
