@@ -14,6 +14,7 @@ import VirtualClockToolbox from "./components/VirtualClockToolbox";
 import GrandPlanTutorialWrapper from "./components/GrandPlanTutorialWrapper";
 import MonthSetupTutorialWrapper from "./components/MonthSetupTutorialWrapper";
 import DailyAgendaTutorialWrapper from "./components/DailyAgendaTutorialWrapper";
+import onionGraphic from "./assets/onion.svg";
 
 function MonthSetupRoute() {
   const { date } = useParams();
@@ -83,6 +84,20 @@ function Header() {
           currentDate={selectedDate}
           onClick={() => setShowDatePicker(true)}
         />
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "0 6px",
+          }}
+        >
+          <img
+            src={onionGraphic}
+            alt="OnionOps"
+            style={{ width: 28, height: 28, objectFit: "contain" }}
+          />
+        </div>
         <nav style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <NavLink to="/grand-plan" style={({ isActive }) => navLinkStyle(isActive)}>
             Grand Plan

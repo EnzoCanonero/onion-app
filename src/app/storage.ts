@@ -476,6 +476,13 @@ export function activateWorkingDay(state: AppStateV0, date: DateISO): AppStateV0
 }
 
 // v4: Close/Reopen day functionality
+function endOfDayTimestamp(date: DateISO): string {
+  const [y, m, d] = date.split("-").map((part) => Number(part));
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return getVirtualTimestamp();
+  const end = new Date(y, m - 1, d, 23, 59, 59, 0);
+  return end.toISOString();
+}
+
 export function closeDay(state: AppStateV0, date: DateISO): AppStateV0 {
   const ym = ymFromDate(date);
   const { state: withDay, day } = getOrCreateDay(state, date, ym);
@@ -495,7 +502,38 @@ export function closeDay(state: AppStateV0, date: DateISO): AppStateV0 {
     }
   }
 
-  const updated = updateDay(next, { ...day, isClosed: true, activeSessionId: undefined, endedAt });
+  const updated = updateDay(next, { ...day, isClosed: true, activeSessionId: undefined, endedAt, autoClosed: false });
+  const hasEndedEvent = Array.isArray(day.events)
+    ? day.events.some((e) => e.kind === "SYSTEM" && e.text === "Day ended")
+    : false;
+  if (hasEndedEvent) return updated;
+  return appendDayEvent(updated, date, {
+    id: makeId("evt"),
+    at: endedAt,
+    kind: "SYSTEM",
+    text: "Day ended",
+  });
+}
+
+export function autoCloseDay(state: AppStateV0, date: DateISO): AppStateV0 {
+  const ym = ymFromDate(date);
+  const { state: withDay, day } = getOrCreateDay(state, date, ym);
+
+  if (day.isClosed) return withDay;
+
+  const endedAt = endOfDayTimestamp(date);
+
+  let next = withDay;
+  if (day.activeSessionId) {
+    const session = next.sessions.find((s) => s.id === day.activeSessionId);
+    if (session?.startedAt) {
+      const ms = Date.parse(endedAt) - Date.parse(session.startedAt);
+      const minutes = Math.max(0, Math.round(ms / 60000));
+      next = updateSession(next, day.activeSessionId, { endedAt, actualMinutes: minutes });
+    }
+  }
+
+  const updated = updateDay(next, { ...day, isClosed: true, activeSessionId: undefined, endedAt, autoClosed: true });
   const hasEndedEvent = Array.isArray(day.events)
     ? day.events.some((e) => e.kind === "SYSTEM" && e.text === "Day ended")
     : false;
@@ -515,7 +553,7 @@ export function reopenDay(state: AppStateV0, date: DateISO): AppStateV0 {
   const cleanedEvents = Array.isArray(day.events)
     ? day.events.filter((e) => !(e.kind === "SYSTEM" && e.text === "Day ended"))
     : day.events;
-  return updateDay(withDay, { ...day, isClosed: false, endedAt: undefined, events: cleanedEvents });
+  return updateDay(withDay, { ...day, isClosed: false, endedAt: undefined, autoClosed: false, events: cleanedEvents });
 }
 
 // v5: Close/Reopen month functionality
@@ -536,6 +574,13 @@ export function closeMonth(state: AppStateV0, ym: YM): AppStateV0 {
 
   const closedPlan: MonthPlan = { ...plan, isClosed: true };
   return upsertMonth(next, closedPlan);
+}
+
+export function autoCloseMonth(state: AppStateV0, ym: YM): AppStateV0 {
+  const plan = getMonth(state, ym);
+  if (!plan || plan.isClosed) return state;
+  const closedPlan: MonthPlan = { ...plan, isClosed: true };
+  return upsertMonth(state, closedPlan);
 }
 
 export function reopenMonth(state: AppStateV0, ym: YM): AppStateV0 {

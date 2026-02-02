@@ -112,6 +112,7 @@ export type DayEntry = {
   startedAt?: string; // v9: ISO timestamp when day was started
   isClosed?: boolean; // v4: true if user closed the day (read-only mode)
   endedAt?: string; // v9: ISO timestamp when day was closed
+  autoClosed?: boolean; // v9: true if day was closed automatically
   events?: DayLogEvent[]; // v9: timeline events for the day
   emailChecked?: boolean; // v4: true if email was checked
   bureaucraticsCompleted?: boolean; // v4: true if bureaucratic tasks completed

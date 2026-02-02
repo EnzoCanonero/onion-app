@@ -1,11 +1,17 @@
 import { app, BrowserWindow, ipcMain } from "electron";
+import fs from "node:fs";
 import path from "node:path";
 import { StorageHandler } from "./storage.js";
 
 let mainWindow: BrowserWindow | null = null;
 let storage: StorageHandler;
 
+function getDevIconPath(fileName: "icon.png") {
+  return path.join(process.cwd(), "build", fileName);
+}
+
 function createWindow() {
+  const windowIcon = app.isPackaged ? undefined : getDevIconPath("icon.png");
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 860,
@@ -17,6 +23,7 @@ function createWindow() {
       nodeIntegration: false,
     },
     titleBarStyle: "hiddenInset",
+    icon: windowIcon,
   });
 
   // In dev, load from Vite dev server; in prod, load built HTML
@@ -28,6 +35,16 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  if (!app.isPackaged && process.platform === "darwin") {
+    const devIcon = getDevIconPath("icon.png");
+    if (fs.existsSync(devIcon)) {
+      try {
+        app.dock.setIcon(devIcon);
+      } catch {
+        // ignore dev-only dock icon errors
+      }
+    }
+  }
   storage = new StorageHandler(app.getPath("userData"));
 
   ipcMain.handle("storage:load", (_event, key: string) => {
