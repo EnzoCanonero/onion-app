@@ -1218,10 +1218,10 @@ export function addMilestone(
 ): AppStateV0 {
   if (!state.grandPlan) return state;
 
-  // Calculate order among siblings
   const siblings = state.grandPlan.milestones.filter(
     (m) => m.categoryId === categoryId && m.parentId === parentId
   );
+  const hasExistingChildren = parentId !== null && siblings.length > 0;
   const maxOrder = Math.max(0, ...siblings.map((m) => m.order));
 
   const milestone: MilestoneNode = {
@@ -1239,7 +1239,15 @@ export function addMilestone(
     ...state,
     grandPlan: {
       ...state.grandPlan,
-      milestones: [...state.grandPlan.milestones, milestone],
+      milestones: hasExistingChildren
+        ? [
+            ...state.grandPlan.milestones.map((m) => {
+              if (m.categoryId !== categoryId || m.parentId !== parentId) return m;
+              return { ...m, parentId: milestone.id };
+            }),
+            milestone,
+          ]
+        : [...state.grandPlan.milestones, milestone],
       updatedAt: getVirtualTimestamp(),
     },
   };
@@ -1278,6 +1286,9 @@ export function updateMilestone(
 export function deleteMilestone(state: AppStateV0, milestoneId: string, cascadeChildren: boolean = true): AppStateV0 {
   if (!state.grandPlan) return state;
 
+  const deleted = state.grandPlan.milestones.find((m) => m.id === milestoneId);
+  if (!deleted) return state;
+
   let toDelete = new Set([milestoneId]);
 
   if (cascadeChildren) {
@@ -1291,6 +1302,13 @@ export function deleteMilestone(state: AppStateV0, milestoneId: string, cascadeC
     };
     findChildren(milestoneId);
   }
+
+  const children = cascadeChildren
+    ? []
+    : state.grandPlan.milestones
+        .filter((m) => m.parentId === milestoneId)
+        .sort((a, b) => a.order - b.order);
+  const promotedId = children.length > 0 ? children[0].id : null;
 
   // v6.1: Clean up linkedMilestoneId from tasks linked to deleted milestones
   // v6.3: Also unlink templates (set to null = standalone)
@@ -1342,7 +1360,17 @@ export function deleteMilestone(state: AppStateV0, milestoneId: string, cascadeC
     days: cleanedDays,
     grandPlan: {
       ...state.grandPlan,
-      milestones: state.grandPlan.milestones.filter((m) => !toDelete.has(m.id)),
+      milestones: state.grandPlan.milestones
+        .filter((m) => !toDelete.has(m.id))
+        .map((m) => {
+          if (cascadeChildren) return m;
+          if (m.parentId !== milestoneId) return m;
+          if (!promotedId) return m;
+          if (m.id === promotedId) {
+            return { ...m, parentId: deleted.parentId, order: deleted.order };
+          }
+          return { ...m, parentId: promotedId };
+        }),
       updatedAt: getVirtualTimestamp(),
     },
   };

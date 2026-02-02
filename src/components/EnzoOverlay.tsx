@@ -22,7 +22,7 @@ const STEP_CONFIG: Record<number, { title: string; message: string; target: stri
   },
   3: {
     title: "Add a Milestone",
-    message: "Milestones are concrete steps toward your goal. Click \"+ Add Milestone\" on the goal you just created.",
+    message: "Milestones are concrete steps toward your goal. Keep them high level, not overly detailed tasks. You will be able to add detailed tasks later in the monthly setup. Click \"+ Add Milestone\" on the goal you just created.",
     target: "add-milestone",
   },
 };

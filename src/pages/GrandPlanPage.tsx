@@ -264,7 +264,7 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
   };
 
   const handleDeleteMilestone = (milestoneId: string) => {
-    mutate((s) => deleteMilestone(s, milestoneId, true));
+    mutate((s) => deleteMilestone(s, milestoneId, false));
     setSelectedMilestone(null);
   };
 
