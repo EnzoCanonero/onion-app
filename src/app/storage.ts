@@ -19,7 +19,8 @@ import { normalizeWeekdays } from "./weekdays";
 import { getVirtualTodayDate, getVirtualCurrentYM, getVirtualTimestamp } from "../contexts/VirtualClockContext";
 import { getStorageBackend } from "./storageBackend";
 
-const KEY = "focustree.state";
+export const STATE_KEY = "focustree.state";
+const KEY = STATE_KEY;
 
 const DEFAULT_DAILY_REMINDER_TEMPLATES: DailyReminderTemplate[] = [
   { id: "rem_email", text: "Check your email 📧" },

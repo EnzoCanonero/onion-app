@@ -276,7 +276,24 @@ export default function GetStartedPage() {
       setJourneyCardsVisible(false);
       return;
     }
-    const t = setTimeout(() => setJourneyCardsVisible(true), 1200);
+    let alreadyShown = false;
+    try {
+      alreadyShown = window.localStorage.getItem("focustree:get-started:panels-shown") === "true";
+    } catch {
+      alreadyShown = false;
+    }
+    if (alreadyShown) {
+      setJourneyCardsVisible(true);
+      return;
+    }
+    const t = setTimeout(() => {
+      setJourneyCardsVisible(true);
+      try {
+        window.localStorage.setItem("focustree:get-started:panels-shown", "true");
+      } catch {
+        // ignore
+      }
+    }, 1200);
     return () => clearTimeout(t);
   }, [step]);
 
