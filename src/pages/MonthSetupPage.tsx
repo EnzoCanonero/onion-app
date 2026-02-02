@@ -1197,6 +1197,7 @@ function TaskGroup({
 	                >
 	                  {!hideAddButton && (
 	                    <button
+	                      data-tutorial-target="add-task-whiteboard"
 	                      onClick={() => onAddTask(milestoneId)}
 	                      style={{
 	                        padding: "8px 14px",
@@ -1729,6 +1730,7 @@ function FocusTemplatesPanel({
   showTitle = true,
   emptyStateText = "No focus templates yet",
   addButtonPlacement = "header",
+  addButtonTutorialTarget,
 }: {
   templates: FocusTemplate[];
   onAddTemplate: () => void;
@@ -1742,6 +1744,7 @@ function FocusTemplatesPanel({
   showTitle?: boolean;
   emptyStateText?: string | null;
   addButtonPlacement?: "header" | "footer-left";
+  addButtonTutorialTarget?: string;
 }) {
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
   const [editTemplateTitle, setEditTemplateTitle] = useState("");
@@ -1816,6 +1819,7 @@ function FocusTemplatesPanel({
 
   const addButton = (
     <button
+      {...(addButtonTutorialTarget ? { "data-tutorial-target": addButtonTutorialTarget } : {})}
       onClick={onAddTemplate}
       style={{
         padding: "10px 14px",
@@ -2183,7 +2187,14 @@ function FocusTemplatesPanel({
   );
 }
 
-export default function MonthSetupPage() {
+type MonthSetupPageProps = {
+  tutorialMode?: boolean;
+  onTutorialTick?: () => void;
+  onWizardStateChange?: (info: { open: boolean; primarySelected: boolean; wizardStep: number }) => void;
+};
+
+export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
+  const { tutorialMode, onTutorialTick, onWizardStateChange } = props;
   const { selectedMonth } = useDateNavigation();
   const ymSafe = selectedMonth;
 
@@ -2300,6 +2311,7 @@ export default function MonthSetupPage() {
     const next = fn(current);
     saveState(next);
     setTick((x) => x + 1);
+    onTutorialTick?.();
   };
 
   const create = () => {
@@ -2307,14 +2319,17 @@ export default function MonthSetupPage() {
     const next = upsertMonth(current, seedPlan(ymSafe));
     saveState(next);
     setTick((x) => x + 1);
+    onTutorialTick?.();
     setShowMonthWizard(true);
     setMonthWizardStep(0);
+    onWizardStateChange?.({ open: true, primarySelected: false, wizardStep: 0 });
   };
 
   const handlePlanUpdate = (updatedPlan: MonthPlan) => {
     const current = loadState();
     saveState(upsertMonth(current, updatedPlan));
     setTick((x) => x + 1);
+    onTutorialTick?.();
   };
 
   // v5: Close/reopen month handlers
@@ -2558,6 +2573,7 @@ export default function MonthSetupPage() {
   const closeMonthWizard = () => {
     setShowMonthWizard(false);
     setMonthWizardStep(0);
+    onWizardStateChange?.({ open: false, primarySelected: false, wizardStep: 0 });
   };
 
   const applyMonthWizardMilestones = () => {
@@ -2600,6 +2616,7 @@ export default function MonthSetupPage() {
     if (milestoneId) {
       setMonthWizardSecondaryIds((prev) => prev.filter((id) => id !== milestoneId));
     }
+    onWizardStateChange?.({ open: true, primarySelected: !!milestoneId, wizardStep: monthWizardStep });
   };
 
   const toggleWizardSecondary = (milestoneId: string) => {
@@ -3056,6 +3073,7 @@ export default function MonthSetupPage() {
                 {shortName ? `, ${shortName}` : ""}. ✨
               </p>
               <button
+                data-tutorial-target="create-month-plan"
                 onClick={create}
                 style={{
                   padding: "12px 24px",
@@ -3204,7 +3222,7 @@ export default function MonthSetupPage() {
 	          />
 
 	          {/* v5: Close Month Button */}
-          <div style={{ textAlign: "center", marginTop: 48, paddingTop: 24, borderTop: "2px solid #ddd" }}>
+          {!tutorialMode && <div style={{ textAlign: "center", marginTop: 48, paddingTop: 24, borderTop: "2px solid #ddd" }}>
             <button
               onClick={() => setShowCloseModal(true)}
               style={{
@@ -3224,7 +3242,7 @@ export default function MonthSetupPage() {
             <p style={{ marginTop: 8, fontSize: 14, color: "#666" }}>
               Mark this month as complete and view the final report
             </p>
-          </div>
+          </div>}
 
           {showMonthWizard && (
             <div
@@ -3238,7 +3256,7 @@ export default function MonthSetupPage() {
                 zIndex: 1100,
                 padding: 20,
               }}
-              onClick={closeMonthWizard}
+              onClick={tutorialMode ? undefined : closeMonthWizard}
             >
               <div
                 style={{
@@ -3282,22 +3300,24 @@ export default function MonthSetupPage() {
                     >
                       {monthWizardStep + 1} / {monthWizardSteps.length}
                     </div>
-                    <button
-                      onClick={closeMonthWizard}
-                      style={{
-                        padding: "6px 10px",
-                        fontSize: 14,
-                        fontWeight: 900,
-                        backgroundColor: "white",
-                        border: "1px solid #ddd",
-                        borderRadius: 10,
-                        cursor: "pointer",
-                        color: "#666",
-                      }}
-                      title="Close"
-                    >
-                      ✕
-                    </button>
+                    {!tutorialMode && (
+                      <button
+                        onClick={closeMonthWizard}
+                        style={{
+                          padding: "6px 10px",
+                          fontSize: 14,
+                          fontWeight: 900,
+                          backgroundColor: "white",
+                          border: "1px solid #ddd",
+                          borderRadius: 10,
+                          cursor: "pointer",
+                          color: "#666",
+                        }}
+                        title="Close"
+                      >
+                        ✕
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -3319,6 +3339,7 @@ export default function MonthSetupPage() {
                               Objective milestone
                             </label>
                             <button
+                              data-tutorial-target="wizard-primary-select"
                               type="button"
                               disabled={wizardMilestoneGroups.length === 0}
                               onClick={() => {
@@ -3577,6 +3598,7 @@ export default function MonthSetupPage() {
                         showTitle={false}
                         emptyStateText={null}
                         addButtonPlacement="footer-left"
+                        addButtonTutorialTarget="wizard-focus-add"
                       />
                     </div>
                   )}
@@ -3594,7 +3616,11 @@ export default function MonthSetupPage() {
                   }}
                 >
                   <button
-                    onClick={() => setMonthWizardStep((prev) => Math.max(0, prev - 1))}
+                    onClick={() => {
+                      const prevStep = Math.max(0, monthWizardStep - 1);
+                      setMonthWizardStep(prevStep);
+                      onWizardStateChange?.({ open: true, primarySelected: !!monthWizardPrimaryId, wizardStep: prevStep });
+                    }}
                     disabled={monthWizardStep === 0}
                     style={{
                       padding: "8px 14px",
@@ -3612,6 +3638,7 @@ export default function MonthSetupPage() {
                   </button>
                   <div style={{ display: "flex", gap: 10 }}>
                     <button
+                      data-tutorial-target="wizard-finish"
                       onClick={handleFinishMonthWizard}
                       style={{
                         padding: "8px 16px",
@@ -3628,7 +3655,12 @@ export default function MonthSetupPage() {
                       ✓ Start Month
                     </button>
                     <button
-                      onClick={() => setMonthWizardStep((prev) => Math.min(monthWizardSteps.length - 1, prev + 1))}
+                      data-tutorial-target="wizard-next"
+                      onClick={() => {
+                        const nextStep = Math.min(monthWizardSteps.length - 1, monthWizardStep + 1);
+                        setMonthWizardStep(nextStep);
+                        onWizardStateChange?.({ open: true, primarySelected: !!monthWizardPrimaryId, wizardStep: nextStep });
+                      }}
                       disabled={monthWizardStep >= monthWizardSteps.length - 1}
                       style={{
                         padding: "8px 14px",

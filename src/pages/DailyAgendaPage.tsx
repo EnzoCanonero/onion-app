@@ -52,7 +52,20 @@ import FutureDatePanel from "../components/FutureDatePanel";
 import { ReportCard } from "../components/ReportCharts";
 import { getShortUserName, getUserName } from "../app/userProfile";
 
-export default function DailyAgendaPage() {
+type DailyAgendaPageProps = {
+  tutorialMode?: boolean;
+  onTutorialTick?: () => void;
+  onWizardStateChange?: (info: {
+    open: boolean;
+    wizardStep: number;
+    primarySelected: boolean;
+    meetingCount: number;
+    focusSessionCount: number;
+  }) => void;
+};
+
+export default function DailyAgendaPage(props: DailyAgendaPageProps = {}) {
+  const { tutorialMode, onTutorialTick, onWizardStateChange } = props;
   const { selectedDate } = useDateNavigation(); // From context
   const dateSafe = selectedDate;
   const ym = ymFromDate(dateSafe);
@@ -123,10 +136,36 @@ export default function DailyAgendaPage() {
     );
   }
 
-  return <DailyAgendaPageContent dateSafe={dateSafe} ym={ym} />;
+  return (
+    <DailyAgendaPageContent
+      dateSafe={dateSafe}
+      ym={ym}
+      tutorialMode={tutorialMode}
+      onTutorialTick={onTutorialTick}
+      onWizardStateChange={onWizardStateChange}
+    />
+  );
 }
 
-function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM }) {
+function DailyAgendaPageContent({
+  dateSafe,
+  ym,
+  tutorialMode,
+  onTutorialTick,
+  onWizardStateChange,
+}: {
+  dateSafe: DateISO;
+  ym: YM;
+  tutorialMode?: boolean;
+  onTutorialTick?: () => void;
+  onWizardStateChange?: (info: {
+    open: boolean;
+    wizardStep: number;
+    primarySelected: boolean;
+    meetingCount: number;
+    focusSessionCount: number;
+  }) => void;
+}) {
   const weekday = dayOfWeekFromDateISO(dateSafe);
   const shortName = getShortUserName(getUserName());
 
@@ -190,6 +229,7 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
     const next = fn(current);
     saveState(next);
     setTick((x) => x + 1);
+    onTutorialTick?.();
   };
 
   const startSession = (templateId: string) => {
@@ -385,6 +425,12 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
 
   const wizardSteps = ["Tasks", "Meetings", "Focus Sessions"] as const;
   const wizardStepTitle = wizardSteps[wizardStep] ?? wizardSteps[0];
+  const lastWizardStep = wizardSteps.length - 1;
+  const hasSelectableTasks = selectableTasks.length > 0;
+  const canAdvanceWizard =
+    !tutorialMode || wizardStep !== 0 || !hasSelectableTasks || !!wizardTaskDraft.primaryId;
+  const canStartWizardDay = !tutorialMode || wizardStep >= lastWizardStep;
+  const nextDisabled = wizardStep >= lastWizardStep || !canAdvanceWizard;
 
   const handleTaskSelectionConfirm = (primaryId: string | undefined, secondaryIds: string[]) => {
     mutate((s0) => {
@@ -430,6 +476,7 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
   };
 
   const handleWizardStartDay = () => {
+    if (tutorialMode && wizardStep < lastWizardStep) return;
     applyWizardTaskDraft();
     closeStartWizard();
   };
@@ -482,6 +529,24 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
     [state.meetings, dateSafe]
   );
   const timelineMeetings = useMemo(() => dayMeetings.filter((m) => !m.skipped), [dayMeetings]);
+
+  useEffect(() => {
+    if (!onWizardStateChange) return;
+    onWizardStateChange({
+      open: showStartWizard,
+      wizardStep,
+      primarySelected: !!wizardTaskDraft.primaryId,
+      meetingCount: dayMeetings.length,
+      focusSessionCount: focusTemplatesForToday.length,
+    });
+  }, [
+    showStartWizard,
+    wizardStep,
+    wizardTaskDraft.primaryId,
+    dayMeetings.length,
+    focusTemplatesForToday.length,
+    onWizardStateChange,
+  ]);
 
   const handleSaveMeeting = (meetingData: Omit<MeetingEntry, "id" | "createdAt">) => {
     mutate((s0) => {
@@ -1131,6 +1196,7 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
                 Activate today to start tracking your focus sessions and tasks. ✨
               </p>
               <button
+                data-tutorial-target="start-day"
                 onClick={handleActivateDay}
                 style={{
                   padding: "12px 24px",
@@ -1729,93 +1795,97 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
 	              }}
 	            />
 
-          {/* v4: Close Day Button */}
-          <div style={{ marginTop: 28, textAlign: "center" }}>
-            <button
-              onClick={() => setShowCloseModal(true)}
-              style={{
-                padding: "16px 32px",
-                fontSize: 16,
-                fontWeight: 600,
-                backgroundColor: APP_MAIN_COLOR,
-                color: "white",
-                border: "none",
-                borderRadius: 8,
-                cursor: "pointer",
-                boxShadow: "0 4px 6px rgba(0,0,0,0.1)",
-              }}
-            >
-              🔒 Close Day
-            </button>
-            <p style={{ fontSize: 13, color: "#666", marginTop: 8 }}>
-              Mark the day as complete and lock it for viewing
-            </p>
-          </div>
-
-          {/* Close Day Confirmation Modal */}
-          {showCloseModal && (
-            <div
-              style={{
-                position: "fixed",
-                top: 0,
-                left: 0,
-                right: 0,
-                bottom: 0,
-                backgroundColor: "rgba(0,0,0,0.5)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                zIndex: 1000,
-              }}
-              onClick={() => setShowCloseModal(false)}
-            >
-              <div
-                style={{
-                  backgroundColor: "white",
-                  borderRadius: 12,
-                  padding: 24,
-                  maxWidth: 400,
-                  boxShadow: "0 8px 16px rgba(0,0,0,0.2)",
-                }}
-                onClick={(e) => e.stopPropagation()}
-              >
-                <h3 style={{ marginTop: 0, marginBottom: 16 }}>🔒 Close Working Day</h3>
-                <p style={{ marginBottom: 24, lineHeight: 1.6 }}>
-                  This will close <strong>{dateSafe}</strong> and convert the page into a read-only journal view.
-                  Any active sessions will be ended. You can reopen the day later if you need to make changes.
+          {!tutorialMode && (
+            <>
+              {/* v4: Close Day Button */}
+              <div style={{ marginTop: 28, textAlign: "center" }}>
+                <button
+                  onClick={() => setShowCloseModal(true)}
+                  style={{
+                    padding: "16px 32px",
+                    fontSize: 16,
+                    fontWeight: 600,
+                    backgroundColor: APP_MAIN_COLOR,
+                    color: "white",
+                    border: "none",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                    boxShadow: "0 4px 6px rgba(0,0,0,0.1)",
+                  }}
+                >
+                  🔒 Close Day
+                </button>
+                <p style={{ fontSize: 13, color: "#666", marginTop: 8 }}>
+                  Mark the day as complete and lock it for viewing
                 </p>
-                <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
-                  <button
-                    onClick={() => setShowCloseModal(false)}
-                    style={{
-                      padding: "8px 16px",
-                      fontSize: 14,
-                      backgroundColor: "white",
-                      border: "1px solid #ddd",
-                      borderRadius: 6,
-                      cursor: "pointer",
-                    }}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handleCloseDay}
-                    style={{
-                      padding: "8px 16px",
-                      fontSize: 14,
-                      fontWeight: 600,
-                      backgroundColor: APP_MAIN_COLOR,
-                      color: "white",
-                      border: "none",
-                      borderRadius: 6,
-                      cursor: "pointer",
-                    }}
-                  >
-                    ✓ Close Day
-                  </button>
-                </div>
               </div>
-            </div>
+
+              {/* Close Day Confirmation Modal */}
+              {showCloseModal && (
+                <div
+                  style={{
+                    position: "fixed",
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    backgroundColor: "rgba(0,0,0,0.5)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    zIndex: 1000,
+                  }}
+                  onClick={() => setShowCloseModal(false)}
+                >
+                  <div
+                    style={{
+                      backgroundColor: "white",
+                      borderRadius: 12,
+                      padding: 24,
+                      maxWidth: 400,
+                      boxShadow: "0 8px 16px rgba(0,0,0,0.2)",
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <h3 style={{ marginTop: 0, marginBottom: 16 }}>🔒 Close Working Day</h3>
+                    <p style={{ marginBottom: 24, lineHeight: 1.6 }}>
+                      This will close <strong>{dateSafe}</strong> and convert the page into a read-only journal view.
+                      Any active sessions will be ended. You can reopen the day later if you need to make changes.
+                    </p>
+                    <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
+                      <button
+                        onClick={() => setShowCloseModal(false)}
+                        style={{
+                          padding: "8px 16px",
+                          fontSize: 14,
+                          backgroundColor: "white",
+                          border: "1px solid #ddd",
+                          borderRadius: 6,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleCloseDay}
+                        style={{
+                          padding: "8px 16px",
+                          fontSize: 14,
+                          fontWeight: 600,
+                          backgroundColor: APP_MAIN_COLOR,
+                          color: "white",
+                          border: "none",
+                          borderRadius: 6,
+                          cursor: "pointer",
+                        }}
+                      >
+                        ✓ Close Day
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
           )}
 
           {showStartWizard && (
@@ -1830,7 +1900,7 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
                 zIndex: 2200,
                 padding: 20,
               }}
-              onClick={closeStartWizard}
+              onClick={tutorialMode ? undefined : closeStartWizard}
             >
               <div
                 style={{
@@ -1874,22 +1944,24 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
                     >
                       {wizardStep + 1} / {wizardSteps.length}
                     </div>
-                    <button
-                      onClick={closeStartWizard}
-                      style={{
-                        padding: "6px 10px",
-                        fontSize: 14,
-                        fontWeight: 900,
-                        backgroundColor: "white",
-                        border: "1px solid #ddd",
-                        borderRadius: 10,
-                        cursor: "pointer",
-                        color: "#666",
-                      }}
-                      title="Close"
-                    >
-                      ✕
-                    </button>
+                    {!tutorialMode && (
+                      <button
+                        onClick={closeStartWizard}
+                        style={{
+                          padding: "6px 10px",
+                          fontSize: 14,
+                          fontWeight: 900,
+                          backgroundColor: "white",
+                          border: "1px solid #ddd",
+                          borderRadius: 10,
+                          cursor: "pointer",
+                          color: "#666",
+                        }}
+                        title="Close"
+                      >
+                        ✕
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -1914,6 +1986,7 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
                         showFooter={false}
                         surface="none"
                         onDraftChange={updateWizardTaskDraft}
+                        primaryButtonTutorialTarget="wizard-primary-task"
                       />
                     </div>
                   ) : wizardStep === 1 ? (
@@ -1930,6 +2003,7 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
                             No meetings scheduled yet.
                           </div>
                           <button
+                            data-tutorial-target="wizard-meeting-add"
                             onClick={() => setShowMeetingForm(true)}
                             style={{
                               padding: "10px 16px",
@@ -1952,6 +2026,7 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
                             {dayMeetings.map((meeting) => renderMeetingCard(meeting, false))}
                           </div>
                           <button
+                            data-tutorial-target="wizard-meeting-add"
                             onClick={() => setShowMeetingForm(true)}
                             style={{
                               marginTop: 14,
@@ -2024,7 +2099,9 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
                   </button>
                   <div style={{ display: "flex", gap: 10 }}>
                     <button
+                      data-tutorial-target="wizard-start-day"
                       onClick={handleWizardStartDay}
+                      disabled={!canStartWizardDay}
                       style={{
                         padding: "8px 16px",
                         fontSize: 13,
@@ -2033,15 +2110,17 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
                         color: "white",
                         border: "none",
                         borderRadius: 10,
-                        cursor: "pointer",
+                        cursor: canStartWizardDay ? "pointer" : "not-allowed",
                         boxShadow: "0 10px 22px rgba(0,0,0,0.12)",
+                        opacity: canStartWizardDay ? 1 : 0.5,
                       }}
                     >
                       ✓ Start Day
                     </button>
                     <button
+                      data-tutorial-target="wizard-next"
                       onClick={() => setWizardStep((prev) => Math.min(wizardSteps.length - 1, prev + 1))}
-                      disabled={wizardStep >= wizardSteps.length - 1}
+                      disabled={nextDisabled}
                       style={{
                         padding: "8px 14px",
                         fontSize: 13,
@@ -2049,9 +2128,9 @@ function DailyAgendaPageContent({ dateSafe, ym }: { dateSafe: DateISO; ym: YM })
                         backgroundColor: "white",
                         border: "1px solid #ddd",
                         borderRadius: 10,
-                        cursor: wizardStep >= wizardSteps.length - 1 ? "not-allowed" : "pointer",
+                        cursor: nextDisabled ? "not-allowed" : "pointer",
                         color: "#555",
-                        opacity: wizardStep >= wizardSteps.length - 1 ? 0.5 : 1,
+                        opacity: nextDisabled ? 0.5 : 1,
                       }}
                     >
                       Next →
