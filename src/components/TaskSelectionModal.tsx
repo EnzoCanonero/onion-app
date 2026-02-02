@@ -16,6 +16,7 @@ type TaskSelectionModalProps = {
   showFooter?: boolean;
   surface?: "card" | "none";
   onDraftChange?: (primaryId: string | undefined, secondaryIds: string[]) => void;
+  primaryButtonTutorialTarget?: string;
 };
 
 export default function TaskSelectionModal({
@@ -32,6 +33,7 @@ export default function TaskSelectionModal({
   showFooter = true,
   surface = "card",
   onDraftChange,
+  primaryButtonTutorialTarget,
 }: TaskSelectionModalProps) {
   const lastDraftRef = useRef<{ primaryId?: string; secondaryIds: string[] }>({
     primaryId: currentPrimaryId ?? undefined,
@@ -350,6 +352,7 @@ export default function TaskSelectionModal({
                   Primary task
                 </label>
                 <button
+                  {...(primaryButtonTutorialTarget ? { "data-tutorial-target": primaryButtonTutorialTarget } : {})}
                   type="button"
                   disabled={!canOpenPrimaryMenu}
                   onClick={() => {

@@ -12,6 +12,8 @@ import DatePickerButton from "./components/DatePickerButton";
 import DatePickerModal from "./components/DatePickerModal";
 import VirtualClockToolbox from "./components/VirtualClockToolbox";
 import GrandPlanTutorialWrapper from "./components/GrandPlanTutorialWrapper";
+import MonthSetupTutorialWrapper from "./components/MonthSetupTutorialWrapper";
+import DailyAgendaTutorialWrapper from "./components/DailyAgendaTutorialWrapper";
 
 function MonthSetupRoute() {
   const { date } = useParams();
@@ -120,6 +122,8 @@ export default function App() {
       <Routes>
         <Route path="/get-started" element={<GetStartedPage />} />
         <Route path="/grand-plan/tutorial" element={<GrandPlanTutorialWrapper />} />
+        <Route path="/month-setup/tutorial" element={<MonthSetupTutorialWrapper />} />
+        <Route path="/daily-agenda/tutorial" element={<DailyAgendaTutorialWrapper />} />
         <Route
           path="*"
           element={
