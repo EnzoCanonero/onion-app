@@ -1,73 +1,76 @@
-# React + TypeScript + Vite
+# OnionOps
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+OnionOps is a layered planning and focus app built around the idea that progress comes from organizing work in clear, nested layers (Grand Plan → Month → Daily). It provides guided onboarding, visual planning boards, and daily focus sessions to help users execute consistently.
 
-Currently, two official plugins are available:
+## Project Structure
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- **Electron (main process):** desktop app shell, storage, native window integration.
+- **React + Vite (renderer):** UI, onboarding flows, planning boards, daily agenda.
+- **Local storage:** JSON-backed state stored under the user data directory.
 
-## React Compiler
+Tech stack:
+- Electron
+- React
+- TypeScript
+- Vite
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Quick Start (from a cloned repo)
 
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+### macOS
+```bash
+bash scripts/install-mac.sh
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+### Windows (PowerShell)
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-win.ps1
+npm run dev
 ```
+
+### Linux
+```bash
+bash scripts/install-linux.sh
+npm run dev
+```
+
+## Manual Install
+
+Requirements:
+- Git
+- Node.js (LTS) + npm
+
+Steps:
+```bash
+npm install
+npm run dev
+```
+
+## Packaging (optional)
+
+```bash
+npm run package:mac
+npm run package:win
+npm run package:linux
+```
+
+The packaged app is output to the `release/` folder.
+
+## Notes
+
+- The scripts assume you are running them from the repo root (where `package.json` lives).
+- The app name is **OnionOps**.
+
+## NPM Commands
+
+- `npm run dev` — start Electron + Vite in dev mode
+- `npm run dev:web` — start only the Vite web dev server
+- `npm run build` — build Electron main + preload + renderer
+- `npm run build:web` — build only the renderer
+- `npm run lint` — run ESLint
+- `npm run preview` — preview the Vite build
+- `npm run package` — build and package for current platform
+- `npm run package:mac` — package macOS app
+- `npm run package:win` — package Windows app
+- `npm run package:linux` — package Linux app
+- `npm run clean` — remove local app data (reset to initial state)
