@@ -78,6 +78,7 @@ function Header() {
           paddingBottom: 12,
           marginBottom: 12,
           borderBottom: "1px solid #eee",
+          position: "relative",
         }}
       >
         <DatePickerButton
@@ -86,16 +87,20 @@ function Header() {
         />
         <div
           style={{
+            position: "absolute",
+            left: "50%",
+            top: "50%",
+            transform: "translate(-50%, -50%)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            padding: "0 6px",
+            pointerEvents: "none",
           }}
         >
           <img
             src={onionGraphic}
             alt="OnionOps"
-            style={{ width: 28, height: 28, objectFit: "contain" }}
+            style={{ width: 42, height: 42, objectFit: "contain" }}
           />
         </div>
         <nav style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>

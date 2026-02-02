@@ -2323,17 +2323,6 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
 
   useEffect(() => {
     try {
-      const raw = window.localStorage.getItem(selectedPinStorageKey);
-      if (!raw || raw === "standalone") setSelectedMilestoneId(null);
-      else if (raw.startsWith("milestone:")) setSelectedMilestoneId(raw.slice("milestone:".length) || null);
-      else setSelectedMilestoneId(null);
-    } catch {
-      setSelectedMilestoneId(null);
-    }
-  }, [selectedPinStorageKey]);
-
-  useEffect(() => {
-    try {
       window.localStorage.setItem(
         selectedPinStorageKey,
         selectedMilestoneId ? `milestone:${selectedMilestoneId}` : "standalone"
@@ -2424,6 +2413,29 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
   const orderedPinnedMilestones = primaryMilestone
     ? [primaryMilestone, ...secondaryMilestones]
     : secondaryMilestones;
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(selectedPinStorageKey);
+      const pinned = plan?.pinnedMilestoneIds ?? [];
+      const fallback = plan?.primaryMilestoneId ?? pinned[0] ?? null;
+      if (!raw) {
+        setSelectedMilestoneId(null);
+        return;
+      }
+      if (raw === "standalone") {
+        setSelectedMilestoneId(pinned.length > 0 ? fallback : null);
+        return;
+      }
+      if (raw.startsWith("milestone:")) {
+        setSelectedMilestoneId(raw.slice("milestone:".length) || null);
+        return;
+      }
+      setSelectedMilestoneId(null);
+    } catch {
+      setSelectedMilestoneId(null);
+    }
+  }, [selectedPinStorageKey, plan?.primaryMilestoneId, pinnedIdsKey]);
 
   const wizardMilestoneGroups = useMemo(() => {
     if (!state.grandPlan) return [] as Array<{ category: Category; milestones: MilestoneNode[] }>;

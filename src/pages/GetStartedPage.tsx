@@ -49,8 +49,8 @@ function hoverOut(e: React.MouseEvent<HTMLButtonElement>) {
   e.currentTarget.style.boxShadow = "0 8px 24px rgba(103, 58, 183, 0.35)";
 }
 
-const QUOTE = "\u201CYour future is built in the unglamorous minutes.\u201D";
-const QUOTE_AUTHOR = "— Enzo";
+const QUOTE = "\u201CLife is like an onion. You peel it off one layer at a time, and sometimes you weep.\u201D";
+const QUOTE_AUTHOR = "— Carl Sandburg";
 const TYPE_SPEED = 45; // ms per character
 
 type JourneyCard = {
@@ -254,9 +254,7 @@ export default function GetStartedPage() {
   const [typedCount, setTypedCount] = useState(0);
   const [authorVisible, setAuthorVisible] = useState(false);
   const [buttonVisible, setButtonVisible] = useState(false);
-  const [poemVisibleCounts, setPoemVisibleCounts] = useState<number[]>([0, 0]);
-  const [poemContinueVisible, setPoemContinueVisible] = useState(false);
-  const poemTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const [journeyCardsVisible, setJourneyCardsVisible] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigate = useNavigate();
 
@@ -274,54 +272,13 @@ export default function GetStartedPage() {
   }, [step, typedCount, authorVisible, buttonVisible]);
 
   useEffect(() => {
-    if (step !== 2 && step !== 3) return;
-    poemTimersRef.current.forEach((t) => clearTimeout(t));
-    poemTimersRef.current = [];
-    setPoemVisibleCounts([0, 0]);
-    setPoemContinueVisible(false);
-
-    const lines = [
-      `Step into focus, ${userName.trim()}, and clear the way,`,
-      "Let's align the chaos that clouds your day.",
-    ];
-
-    if (step === 3) {
-      setPoemVisibleCounts(lines.map((line) => line.length));
-      setPoemContinueVisible(true);
+    if (step < 2) {
+      setJourneyCardsVisible(false);
       return;
     }
-
-    const TYPE_DELAY = 45;
-    const LINE_PAUSE = 500;
-
-    const typeLine = (lineIndex: number, charIndex: number) => {
-      if (lineIndex >= lines.length) return;
-      const text = lines[lineIndex];
-      if (charIndex <= text.length) {
-        setPoemVisibleCounts((prev) => {
-          const next = [...prev];
-          next[lineIndex] = charIndex;
-          return next;
-        });
-        const t = setTimeout(() => typeLine(lineIndex, charIndex + 1), TYPE_DELAY);
-        poemTimersRef.current.push(t);
-      } else {
-        if (lineIndex === lines.length - 1) {
-          const t = setTimeout(() => setPoemContinueVisible(true), 1000);
-          poemTimersRef.current.push(t);
-          return;
-        }
-        const t = setTimeout(() => typeLine(lineIndex + 1, 0), LINE_PAUSE);
-        poemTimersRef.current.push(t);
-      }
-    };
-
-    typeLine(0, 0);
-    return () => {
-      poemTimersRef.current.forEach((t) => clearTimeout(t));
-      poemTimersRef.current = [];
-    };
-  }, [step, userName]);
+    const t = setTimeout(() => setJourneyCardsVisible(true), 1200);
+    return () => clearTimeout(t);
+  }, [step]);
 
   const handleNameSubmit = () => {
     const trimmed = userName.trim();
@@ -339,7 +296,7 @@ export default function GetStartedPage() {
     }
   }, [step, userName]);
 
-  const showJourneyCards = step === 3 || poemContinueVisible;
+  const showJourneyCards = journeyCardsVisible;
   const onboarding = loadOnboarding();
   const journeyCards: JourneyCard[] = [
     { ...cards[0], unlocked: true, done: onboarding.grandPlanTutorialComplete },
@@ -352,11 +309,6 @@ export default function GetStartedPage() {
     <>
     <style>{`
       @keyframes blink { 50% { opacity: 0; } }
-      @keyframes petal-fall {
-        0% { transform: translate3d(var(--x, 0), -10vh, 0) rotate(0deg); opacity: 0; }
-        10% { opacity: 0.8; }
-        100% { transform: translate3d(calc(var(--x, 0) + var(--drift, 120px)), 110vh, 0) rotate(360deg); opacity: 0; }
-      }
     `}</style>
     <div
       style={{
@@ -534,55 +486,19 @@ export default function GetStartedPage() {
         <div style={{ textAlign: "center", maxWidth: 980, width: "100%" }}>
           <div style={{ maxWidth: 560, margin: "0 auto", position: "relative", transform: "translateY(-45px)" }}>
             <div
-              aria-hidden
-              style={{
-                position: "absolute",
-                inset: -40,
-                overflow: "hidden",
-                pointerEvents: "none",
-                zIndex: 0,
-              }}
-            >
-              {Array.from({ length: 16 }).map((_, index) => {
-                const delay = (index * 0.6) % 6;
-                const duration = 10 + (index % 6);
-                const left = (index * 7) % 100;
-                const drift = 60 + (index % 5) * 20;
-                return (
-                  <span
-                    key={index}
-                    style={{
-                      position: "absolute",
-                      top: 0,
-                      left: `${left}%`,
-                      width: 14,
-                      height: 10,
-                      background:
-                        "radial-gradient(circle at 20% 20%, rgba(255,255,255,0.9), rgba(255,255,255,0))," +
-                        "linear-gradient(135deg, #ffd1dc 0%, #f8b7c2 100%)",
-                      borderRadius: "50% 50% 50% 50%",
-                      opacity: 0,
-                      filter: "drop-shadow(0 4px 8px rgba(236, 72, 153, 0.15))",
-                      animation: `petal-fall ${duration}s linear ${delay}s infinite`,
-                      transformOrigin: "center",
-                      ["--x" as any]: "0px",
-                      ["--drift" as any]: `${drift}px`,
-                    }}
-                  />
-                );
-              })}
-            </div>
-            <div
               style={{
                 fontSize: 36,
-                fontWeight: 900,
-                color: APP_MAIN_COLOR,
+                fontWeight: 500,
+                color: "#111",
                 marginBottom: 24,
                 position: "relative",
                 zIndex: 1,
               }}
             >
-              {userName.trim()}
+              Hi,{" "}
+              <span style={{ color: APP_MAIN_COLOR, fontWeight: 900 }}>
+                {userName.trim()}
+              </span>
             </div>
             <div
               aria-hidden
@@ -625,47 +541,16 @@ export default function GetStartedPage() {
             </div>
             <div
               style={{
-                fontSize: 17,
+                fontSize: 16,
                 color: "#333",
-                lineHeight: 1.45,
+                lineHeight: 1.6,
                 fontWeight: 500,
-                fontStyle: "italic",
                 position: "relative",
                 zIndex: 1,
-                display: "grid",
-                gap: 2,
               }}
             >
-              {[
-                {
-                  parts: [
-                    { text: "Step into focus, " },
-                    { text: userName.trim(), strong: true },
-                    { text: ", and clear the way," },
-                  ],
-                },
-                { parts: [{ text: "Let's align the chaos that clouds your day." }] },
-              ].map((line, index) => {
-                const visible = poemVisibleCounts[index] ?? 0;
-                let consumed = 0;
-                return (
-                  <div key={index} style={{ minHeight: 22 }}>
-                    {line.parts.map((part, partIndex) => {
-                      const remaining = Math.max(0, visible - consumed);
-                      const slice = part.text.slice(0, remaining);
-                      consumed += part.text.length;
-                      if (!slice) return null;
-                      return part.strong ? (
-                        <strong key={partIndex} style={{ color: APP_MAIN_COLOR }}>
-                          {slice}
-                        </strong>
-                      ) : (
-                        <span key={partIndex}>{slice}</span>
-                      );
-                    })}
-                  </div>
-                );
-              })}
+              OnionOps works in layers: Grand Plan → Month Setup → Daily Agenda. Start with the big
+              picture, pin your objective for the month, then choose today’s tasks and focus sessions.
             </div>
           </div>
 
