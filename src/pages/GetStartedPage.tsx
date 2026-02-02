@@ -4,6 +4,7 @@ import { APP_MAIN_COLOR } from "../app/theme";
 import { USER_NAME_STORAGE_KEY } from "../app/userProfile";
 import { getStorageBackend } from "../app/storageBackend";
 import { loadOnboarding } from "../app/onboarding";
+import onionGraphic from "../assets/onion.svg";
 
 const cards = [
   {
@@ -237,7 +238,7 @@ function TutorialJourneySection({
             aria-hidden={!allDone}
             tabIndex={allDone ? 0 : -1}
           >
-            Enter EnzAPP
+            Enter OnionOps
           </button>
         </div>
       </div>
@@ -382,12 +383,30 @@ export default function GetStartedPage() {
             }}
           >
             Welcome to{" "}
-            <span style={{ color: APP_MAIN_COLOR }}>EnzAPP</span>
+            <span style={{ color: APP_MAIN_COLOR }}>OnionOps</span>
           </div>
 
           <div
             style={{
-              marginTop: 28,
+              marginTop: 22,
+              display: "flex",
+              justifyContent: "center",
+            }}
+          >
+            <img
+              src={onionGraphic}
+              alt="Onion illustration"
+              style={{
+                width: 120,
+                height: 120,
+                objectFit: "contain",
+              }}
+            />
+          </div>
+
+          <div
+            style={{
+              marginTop: 44,
               fontSize: 16,
               fontWeight: 500,
               color: "#64748b",
@@ -420,7 +439,7 @@ export default function GetStartedPage() {
 
           <div
             style={{
-              marginTop: 40,
+              marginTop: 12,
               opacity: buttonVisible ? 1 : 0,
               transform: buttonVisible ? "translateY(0)" : "translateY(8px)",
               transition: "opacity 400ms ease, transform 400ms ease",

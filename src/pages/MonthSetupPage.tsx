@@ -8,6 +8,7 @@ import {
   upsertMonth,
   makeId,
   closeMonth,
+  autoCloseMonth,
   reopenMonth,
   isMonthInGrandPlanPeriod,
   addTaskWithMilestone,
@@ -15,6 +16,7 @@ import {
   deleteTaskFromMonth,
   updateTaskInMonth,
   updateMilestone,
+  getCurrentYM,
 } from "../app/storage";
 import { checkMonthAccess } from "../app/dateAccess";
 import {
@@ -69,6 +71,18 @@ function withHexAlpha(color: string, alphaHex: string): string {
   if (/^#[0-9a-fA-F]{6}$/.test(color)) return `${color}${normalizedAlpha}`;
   if (/^#[0-9a-fA-F]{8}$/.test(color)) return `${color.slice(0, 7)}${normalizedAlpha}`;
   return color;
+}
+
+function getPreviousYM(ym: YM): YM | null {
+  const [yearStr, monthStr] = ym.split("-");
+  const year = Number(yearStr);
+  const month = Number(monthStr);
+  if (!Number.isFinite(year) || !Number.isFinite(month)) return null;
+  const date = new Date(year, month - 1, 1);
+  date.setMonth(date.getMonth() - 1);
+  const prevYear = date.getFullYear();
+  const prevMonth = String(date.getMonth() + 1).padStart(2, "0");
+  return `${prevYear}-${prevMonth}` as YM;
 }
 
 function seedPlan(ym: YM): MonthPlan {
@@ -2199,7 +2213,19 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
   const ymSafe = selectedMonth;
 
   const [tick, setTick] = useState(0);
-  const state = useMemo(() => loadState(), [tick]);
+  const rawState = useMemo(() => loadState(), [tick]);
+  const currentYM = getCurrentYM();
+  const { state, didAutoClose } = useMemo(() => {
+    let next = rawState;
+    let changed = false;
+    Object.values(rawState.months).forEach((plan0) => {
+      if (plan0.ym < currentYM && !plan0.isClosed) {
+        next = autoCloseMonth(next, plan0.ym);
+        changed = true;
+      }
+    });
+    return { state: next, didAutoClose: changed };
+  }, [rawState, currentYM]);
   const plan = getMonth(state, ymSafe);
   const shortName = getShortUserName(getUserName());
   const selectableMilestoneIds = state.grandPlan
@@ -2213,6 +2239,25 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
     () => checkMonthAccess(state, ymSafe),
     [state, ymSafe]
   );
+
+  useEffect(() => {
+    if (!didAutoClose) return;
+    saveState(state);
+    setTick((t) => t + 1);
+  }, [didAutoClose, state]);
+
+  const previousYM = useMemo(() => getPreviousYM(ymSafe), [ymSafe]);
+  const previousPlan = previousYM ? getMonth(state, previousYM) : undefined;
+  const carryoverMilestoneIds = useMemo(() => {
+    if (!previousPlan || !state.grandPlan) return new Set<string>();
+    const milestonesById = new Map(state.grandPlan.milestones.map((m) => [m.id, m] as const));
+    return new Set(
+      (previousPlan.pinnedMilestoneIds ?? []).filter((id) => {
+        const milestone = milestonesById.get(id);
+        return milestone ? milestone.status !== "COMPLETED" : false;
+      })
+    );
+  }, [previousPlan, state.grandPlan]);
 
   // Header component for blocked/empty states
   const BlockedHeader = () => (
@@ -2316,7 +2361,13 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
 
   const create = () => {
     const current = loadState();
-    const next = upsertMonth(current, seedPlan(ymSafe));
+    const prevYM = getPreviousYM(ymSafe);
+    const prevPlan = prevYM ? getMonth(current, prevYM) : undefined;
+    const basePlan = seedPlan(ymSafe);
+    const nextPlan = prevPlan
+      ? { ...basePlan, templates: prevPlan.templates.map((t) => ({ ...t })) }
+      : basePlan;
+    const next = upsertMonth(current, nextPlan);
     saveState(next);
     setTick((x) => x + 1);
     onTutorialTick?.();
@@ -2576,6 +2627,30 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
     onWizardStateChange?.({ open: false, primarySelected: false, wizardStep: 0 });
   };
 
+  const importMilestoneBoardFromPrevious = (plan0: MonthPlan, milestoneId: string) => {
+    if (!previousPlan) return plan0;
+    if (plan0.tasks.some((t) => t.linkedMilestoneId === milestoneId)) return plan0;
+
+    const prevTasks = previousPlan.tasks.filter((t) => t.linkedMilestoneId === milestoneId);
+    if (prevTasks.length === 0) return plan0;
+
+    const scopeKey = `milestone:${milestoneId}`;
+    const nextTasks = [...plan0.tasks, ...prevTasks.map((t) => ({ ...t }))];
+    const nextBoardByScope = { ...(plan0.boardByScope ?? {}) };
+    const prevBoard = previousPlan.boardByScope?.[scopeKey];
+    if (prevBoard) nextBoardByScope[scopeKey] = { ...prevBoard };
+    const nextLinksByScope = { ...(plan0.taskLinksByScope ?? {}) };
+    const prevLinks = previousPlan.taskLinksByScope?.[scopeKey];
+    if (prevLinks) nextLinksByScope[scopeKey] = prevLinks.map((l) => ({ ...l }));
+
+    return {
+      ...plan0,
+      tasks: nextTasks,
+      boardByScope: nextBoardByScope,
+      taskLinksByScope: nextLinksByScope,
+    };
+  };
+
   const applyMonthWizardMilestones = () => {
     if (!plan) return;
     const filteredSecondary = monthWizardSecondaryIds.filter(
@@ -2589,11 +2664,18 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
     mutate((s0) => {
       const plan0 = getMonth(s0, ymSafe);
       if (!plan0) return s0;
-      let nextState = upsertMonth(s0, {
+      let nextPlan: MonthPlan = {
         ...plan0,
         pinnedMilestoneIds: nextPinned,
         primaryMilestoneId: fallbackPrimary,
+      };
+
+      const carryoverToImport = nextPinned.filter((id) => carryoverMilestoneIds.has(id));
+      carryoverToImport.forEach((milestoneId) => {
+        nextPlan = importMilestoneBoardFromPrevious(nextPlan, milestoneId);
       });
+
+      let nextState = upsertMonth(s0, nextPlan);
       nextPinned.forEach((milestoneId) => {
         const m0 = nextState.grandPlan?.milestones.find((m) => m.id === milestoneId);
         if (m0 && m0.status === "NOT_STARTED") {
@@ -3395,6 +3477,17 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
                                       </div>
                                       {group.milestones.map((milestone) => {
                                         const isSelected = monthWizardPrimaryId === milestone.id;
+                                        const isCarryover = carryoverMilestoneIds.has(milestone.id);
+                                        const backgroundColor = isSelected
+                                          ? "rgba(245, 201, 105, 0.18)"
+                                          : isCarryover
+                                          ? "#fff7d6"
+                                          : "transparent";
+                                        const borderColor = isSelected
+                                          ? "#f5c469"
+                                          : isCarryover
+                                          ? "#fde68a"
+                                          : "transparent";
                                         return (
                                           <label
                                             key={milestone.id}
@@ -3405,8 +3498,8 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
                                               padding: "8px 10px",
                                               borderRadius: 10,
                                               cursor: "pointer",
-                                              backgroundColor: isSelected ? "rgba(245, 201, 105, 0.18)" : "transparent",
-                                              border: isSelected ? "1px solid #f5c469" : "1px solid transparent",
+                                              backgroundColor,
+                                              border: `1px solid ${borderColor}`,
                                             }}
                                           >
                                             <input
@@ -3495,7 +3588,14 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
                                       {group.milestones.map((milestone) => {
                                         const isPrimary = monthWizardPrimaryId === milestone.id;
                                         const checked = monthWizardSecondaryIds.includes(milestone.id);
+                                        const isCarryover = carryoverMilestoneIds.has(milestone.id);
                                         const highlight = checked ? withHexAlpha(group.category.color, "1a") : "transparent";
+                                        const backgroundColor = checked ? highlight : isCarryover ? "#fff7d6" : "transparent";
+                                        const borderColor = checked
+                                          ? withHexAlpha(group.category.color, "66")
+                                          : isCarryover
+                                          ? "#fde68a"
+                                          : "transparent";
                                         return (
                                           <label
                                             key={milestone.id}
@@ -3506,8 +3606,8 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
                                               padding: "8px 10px",
                                               borderRadius: 10,
                                               cursor: isPrimary ? "not-allowed" : "pointer",
-                                              backgroundColor: highlight,
-                                              border: checked ? `1px solid ${withHexAlpha(group.category.color, "66")}` : "1px solid transparent",
+                                              backgroundColor,
+                                              border: `1px solid ${borderColor}`,
                                               opacity: isPrimary ? 0.6 : 1,
                                             }}
                                           >

@@ -17,6 +17,7 @@ import {
   findLastWorkingDay,
   activateWorkingDay,
   closeDay,
+  autoCloseDay,
   reopenDay,
   addMeetingWithRecurrence,
   updateMeeting,
@@ -181,9 +182,7 @@ function DailyAgendaPageContent({
   const wizardTaskDraftRef = useRef(wizardTaskDraft);
   const [isEditingReminders, setIsEditingReminders] = useState(false);
   const [reminderDraft, setReminderDraft] = useState<DailyReminderTemplate[]>([]);
-  const state = useMemo(() => loadState(), [tick]);
-
-  const plan = getMonth(state, ym)!;
+  const rawState = useMemo(() => loadState(), [tick]);
   const paperBgColor = "#fbfaf7";
   const paperBgPattern =
     "radial-gradient(circle at 1px 1px, rgba(0,0,0,0.06) 1px, transparent 0)";
@@ -192,7 +191,14 @@ function DailyAgendaPageContent({
   const today = getTodayDate();
   const isPastDate = dateSafe < today;
 
-  const { state: withDay, day } = getOrCreateDay(state, dateSafe, ym);
+  const { state: withDay, day: initialDay } = getOrCreateDay(rawState, dateSafe, ym);
+  const shouldAutoClose =
+    isPastDate &&
+    !initialDay.isClosed &&
+    (initialDay.isWorkingDay === true || !!initialDay.activeSessionId);
+  const state = shouldAutoClose ? autoCloseDay(withDay, dateSafe) : withDay;
+  const { day } = getOrCreateDay(state, dateSafe, ym);
+  const plan = getMonth(state, ym)!;
 
   const leftColumnRef = useRef<HTMLDivElement | null>(null);
   const [leftColumnHeightPx, setLeftColumnHeightPx] = useState<number | undefined>(undefined);
@@ -220,9 +226,17 @@ function DailyAgendaPageContent({
   }, [day.isWorkingDay, day.isClosed, dateSafe]);
 
   // Persist newly created day entry (only once)
-  if (withDay !== state) {
+  if (withDay !== rawState && !shouldAutoClose) {
     saveState(withDay);
   }
+
+  useEffect(() => {
+    if (!shouldAutoClose) return;
+    const current = loadState();
+    const next = autoCloseDay(current, dateSafe);
+    saveState(next);
+    setTick((x) => x + 1);
+  }, [shouldAutoClose, dateSafe]);
 
   const mutate = (fn: (s: typeof withDay) => typeof withDay) => {
     const current = loadState();
@@ -775,8 +789,8 @@ function DailyAgendaPageContent({
   // v4: If day is closed, show journal-style read-only view
   if (day.isClosed && day.isWorkingDay) {
     const startedAtTime = day.startedAt ? formatTime(day.startedAt) : "—";
-    const endedAtTime = day.endedAt ? formatTime(day.endedAt) : "—";
-    const endedAtDate = day.endedAt ? day.endedAt.slice(0, 10) : undefined;
+    const endedAtTime = day.autoClosed ? "Automatically closed" : day.endedAt ? formatTime(day.endedAt) : "—";
+    const endedAtDate = !day.autoClosed && day.endedAt ? day.endedAt.slice(0, 10) : undefined;
 
     const completedTasks = [
       day.primaryTaskId ? { id: day.primaryTaskId, isPrimary: true } : null,
