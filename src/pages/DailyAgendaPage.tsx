@@ -180,6 +180,7 @@ function DailyAgendaPageContent({
     secondaryIds: string[];
   }>({ primaryId: undefined, secondaryIds: [] });
   const wizardTaskDraftRef = useRef(wizardTaskDraft);
+  const prevShowStartWizardRef = useRef(false);
   const [isEditingReminders, setIsEditingReminders] = useState(false);
   const [reminderDraft, setReminderDraft] = useState<DailyReminderTemplate[]>([]);
   const rawState = useMemo(() => loadState(), [tick]);
@@ -354,7 +355,9 @@ function DailyAgendaPageContent({
   };
 
   useEffect(() => {
-    if (!showStartWizard) return;
+    const justOpened = showStartWizard && !prevShowStartWizardRef.current;
+    prevShowStartWizardRef.current = showStartWizard;
+    if (!justOpened) return;
     const nextDraft = {
       primaryId: day.primaryTaskId,
       secondaryIds: [...day.secondaryTaskIds],
@@ -1461,7 +1464,7 @@ function DailyAgendaPageContent({
               marginBottom: 12,
             }}
           >
-            <h3 style={{ margin: 0 }}>Daily Tasks</h3>
+            <h3 style={{ margin: 0 }} data-tutorial-target="daily-plan-review">Daily Tasks</h3>
             {day.primaryTaskId ? (
               <button
                 onClick={() => setShowTaskModal(true)}

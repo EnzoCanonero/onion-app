@@ -34,10 +34,12 @@ const STEP_CONFIG: Record<number, { title: string; message: string; target: stri
     message: "Review today's focus sessions, then click \"Start Day\" to finalize.",
     target: "wizard-start-day",
   },
+  6: {
+    title: "Review Your Day",
+    message: "Review your daily plan and adjust anything that feels off.",
+    target: "daily-plan-review",
+  },
 };
-
-const COMPLETION_MESSAGE =
-  "Your day is ready! Keep editing, or head back to continue your setup journey.";
 
 type DailyAgendaEnzoOverlayProps = {
   tick: number;
@@ -83,9 +85,7 @@ export default function DailyAgendaEnzoOverlay(props: DailyAgendaEnzoOverlayProp
 
   const currentMessage = step === 5
     ? focusMessage
-    : step < 6
-    ? STEP_CONFIG[step].message
-    : COMPLETION_MESSAGE;
+    : STEP_CONFIG[step].message;
 
   useEffect(() => {
     if (dismissed) return;
@@ -152,7 +152,7 @@ export default function DailyAgendaEnzoOverlay(props: DailyAgendaEnzoOverlayProp
 
   const displayedText = currentMessage.slice(0, typedCount);
   const isComplete = step === 6;
-  const totalSteps = 6;
+  const totalSteps = 7;
 
   return (
     <>
@@ -200,7 +200,7 @@ export default function DailyAgendaEnzoOverlay(props: DailyAgendaEnzoOverlayProp
           </div>
           <div>
             <div style={{ color: "white", fontWeight: 800, fontSize: 15 }}>
-              {isComplete ? "Well done!" : STEP_CONFIG[step].title}
+              {STEP_CONFIG[step].title}
             </div>
             {!isComplete && (
               <div style={{ color: "rgba(255,255,255,0.7)", fontSize: 11, marginTop: 2 }}>

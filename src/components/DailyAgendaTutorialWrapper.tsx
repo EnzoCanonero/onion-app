@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import DailyAgendaPage from "../pages/DailyAgendaPage";
 import DailyAgendaEnzoOverlay from "./DailyAgendaEnzoOverlay";
 import { loadOnboarding, saveOnboarding } from "../app/onboarding";
-import { loadState } from "../app/storage";
+import { loadState, STATE_KEY } from "../app/storage";
+import { flushStorageKey } from "../app/storageBackend";
 import { useDateNavigation } from "../contexts/DateNavigationContext";
 import { APP_MAIN_COLOR } from "../app/theme";
 
@@ -38,28 +39,13 @@ export default function DailyAgendaTutorialWrapper() {
     setWizardState(info);
   }, []);
 
-  const handleComplete = useCallback(() => {
+  const handleComplete = useCallback(async () => {
+    await flushStorageKey(STATE_KEY);
     const progress = loadOnboarding();
     progress.dailyAgendaTutorialComplete = true;
     saveOnboarding(progress);
     navigate("/get-started", { state: { step: 3 } });
   }, [navigate]);
-
-  const prevWizardOpenRef = useRef(false);
-  const completionTriggeredRef = useRef(false);
-
-  useEffect(() => {
-    if (dismissed) {
-      prevWizardOpenRef.current = wizardState.open;
-      return;
-    }
-    if (completionTriggeredRef.current) return;
-    if (prevWizardOpenRef.current && !wizardState.open) {
-      completionTriggeredRef.current = true;
-      handleComplete();
-    }
-    prevWizardOpenRef.current = wizardState.open;
-  }, [wizardState.open, dismissed, handleComplete]);
 
   return (
     <div

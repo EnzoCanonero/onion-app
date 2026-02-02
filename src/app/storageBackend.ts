@@ -93,6 +93,21 @@ export function getStorageBackend(): StorageBackend {
   return backend;
 }
 
+export async function flushStorageKey(key: string): Promise<void> {
+  try {
+    if (window.electronAPI) {
+      const current = getStorageBackend().getItem(key);
+      if (current === null) {
+        await window.electronAPI.deleteStorage(key);
+      } else {
+        await window.electronAPI.saveStorage(key, current);
+      }
+    }
+  } catch {
+    // ignore flush errors
+  }
+}
+
 const PERSISTENT_KEYS = [
   "focustree.state",
   "focustree.userName",
