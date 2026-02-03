@@ -14,63 +14,76 @@ Tech stack:
 - TypeScript
 - Vite
 
-## Quick Start (from a cloned repo)
+## Getting Started
 
-### macOS
+### Prerequisites
+
+**Install Node.js** (includes npm)
+- Download from https://nodejs.org
+- Recommended: LTS version (v20 or v22)
+
+### Installation
+
 ```bash
-bash scripts/install-mac.sh
-npm run dev
-```
+# Clone the repository
+git clone <repo-url>
+cd focustree
 
-### Windows (PowerShell)
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\install-win.ps1
-npm run dev
-```
-
-### Linux
-```bash
-bash scripts/install-linux.sh
-npm run dev
-```
-
-## Manual Install
-
-Requirements:
-- Git
-- Node.js (LTS) + npm
-
-Steps:
-```bash
+# Install dependencies
 npm install
-npm run dev
 ```
 
-## Packaging (optional)
+### Running in Development
 
+```bash
+# Run as desktop app (Electron)
+npm run dev
+
+# Run as web app only (browser)
+npm run dev:web
+```
+
+### Building for Distribution
+
+#### macOS
 ```bash
 npm run package:mac
+```
+Output: `release/OnionOps-<version>-universal.dmg`
+
+To install:
+1. Open the `.dmg` file in `release/`
+2. Drag the OnionOps app to your Applications folder
+3. Launch from Applications (first launch may require right-click → Open due to Gatekeeper)
+
+#### Windows
+```bash
 npm run package:win
+```
+Output: `release/OnionOps Setup <version>.exe`
+
+To install:
+1. Run the `.exe` installer in `release/`
+2. Follow the installation wizard
+3. Launch from Start Menu or Desktop shortcut
+
+#### Linux
+```bash
 npm run package:linux
 ```
 
-The packaged app is output to the `release/` folder.
+## NPM Commands Reference
 
-## Notes
-
-- The scripts assume you are running them from the repo root (where `package.json` lives).
-- The app name is **OnionOps**.
-
-## NPM Commands
-
-- `npm run dev` — start Electron + Vite in dev mode
-- `npm run dev:web` — start only the Vite web dev server
-- `npm run build` — build Electron main + preload + renderer
-- `npm run build:web` — build only the renderer
-- `npm run lint` — run ESLint
-- `npm run preview` — preview the Vite build
-- `npm run package` — build and package for current platform
-- `npm run package:mac` — package macOS app
-- `npm run package:win` — package Windows app
-- `npm run package:linux` — package Linux app
-- `npm run clean` — remove local app data (reset to initial state)
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Start Electron + Vite in dev mode |
+| `npm run dev:web` | Start only the Vite web dev server |
+| `npm run build` | Build Electron main + preload + renderer |
+| `npm run build:web` | Build only the renderer |
+| `npm run lint` | Run ESLint |
+| `npm run preview` | Preview the Vite build |
+| `npm run package` | Build and package for current platform |
+| `npm run package:mac` | Package macOS app |
+| `npm run package:win` | Package Windows app |
+| `npm run package:linux` | Package Linux app |
+| `npm run clean` | Remove local app data (reset to initial state)
