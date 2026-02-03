@@ -49,8 +49,8 @@ function hoverOut(e: React.MouseEvent<HTMLButtonElement>) {
   e.currentTarget.style.boxShadow = "0 8px 24px rgba(103, 58, 183, 0.35)";
 }
 
-const QUOTE = "\u201CLife is like an onion. You peel it off one layer at a time, and sometimes you weep.\u201D";
-const QUOTE_AUTHOR = "— Carl Sandburg";
+const QUOTE = "\u201CNo onions, no flavor. No plan, no progress. Cry if you must, but keep chopping.\u201D";
+const QUOTE_AUTHOR = "— Enzo";
 const TYPE_SPEED = 45; // ms per character
 
 type JourneyCard = {
