@@ -54,13 +54,11 @@ export default function DailyAgendaTutorialWrapper() {
         width: "100%",
         maxWidth: 1280,
         margin: "0 auto",
-        padding: "16px 32px",
+        padding: "52px 32px 16px 32px",
         boxSizing: "border-box",
         position: "relative",
       }}
     >
-      <div style={{ height: 36 }} />
-
       {dismissed && (
         <header
           style={{

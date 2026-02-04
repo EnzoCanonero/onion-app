@@ -319,12 +319,21 @@ function DailyAgendaPageContent({
   const selectableTasks = useMemo(() => {
     return plan.tasks.filter(
       (t) =>
-        t.status !== "GREEN" &&
+        (t.status !== "GREEN" || day.outcomeByTaskId[t.id] === "COMPLETED") &&
         (!t.linkedMilestoneId || !completedMilestoneIds.has(t.linkedMilestoneId))
     );
-  }, [plan.tasks, completedMilestoneIds]);
+  }, [plan.tasks, completedMilestoneIds, day.outcomeByTaskId]);
 
   const selectableTaskIds = useMemo(() => new Set(selectableTasks.map((t) => t.id)), [selectableTasks]);
+
+  // Tasks completed on this specific day (for green styling in selection modal)
+  const completedTodayIds = useMemo(() => {
+    return new Set(
+      Object.entries(day.outcomeByTaskId)
+        .filter(([, outcome]) => outcome === "COMPLETED")
+        .map(([taskId]) => taskId)
+    );
+  }, [day.outcomeByTaskId]);
 
   // v2: Smart defaults - suggest YELLOW tasks as secondaries (shown in modal)
   const suggestedSecondaryIds = useMemo(() => {
@@ -715,19 +724,27 @@ function DailyAgendaPageContent({
 
         {meeting.link && (
           <div style={{ marginBottom: 8 }}>
-            <a
-              href={meeting.link}
-              target="_blank"
-              rel="noopener noreferrer"
+            <button
+              onClick={() => {
+                const url = meeting.link!;
+                console.log("Join Meeting clicked, URL:", url);
+                console.log("electronAPI available:", !!window.electronAPI);
+                console.log("openExternal available:", !!window.electronAPI?.openExternal);
+                window.electronAPI!.openExternal(url);
+              }}
               style={{
                 color: "#1976d2",
                 fontSize: 13,
                 textDecoration: "none",
                 fontWeight: 500,
+                background: "none",
+                border: "none",
+                padding: 0,
+                cursor: "pointer",
               }}
             >
               🔗 Join Meeting
-            </a>
+            </button>
           </div>
         )}
 
@@ -800,7 +817,7 @@ function DailyAgendaPageContent({
       ...day.secondaryTaskIds.map((id) => ({ id, isPrimary: false })),
     ]
       .filter((t): t is { id: string; isPrimary: boolean } => t !== null)
-      .filter((t) => day.outcomeByTaskId[t.id] === "COMPLETED" || day.outcomeByTaskId[t.id] === "NOT_COMPLETED");
+      .filter((t) => day.outcomeByTaskId[t.id] === "COMPLETED");
 
     const completedSessions = state.sessions.filter((s) => s.date === dateSafe && s.endedAt);
 
@@ -914,8 +931,6 @@ function DailyAgendaPageContent({
               ) : (
                 <div style={{ display: "grid", gap: 10 }}>
                   {completedTasks.map((t) => {
-                    const outcome = day.outcomeByTaskId[t.id];
-                    const isCompleted = outcome === "COMPLETED";
                     const task = tasksById.get(t.id);
                     const title = task?.title ?? "Unknown task";
                     const categoryColor = getCategoryMeta(state.grandPlan, task?.linkedMilestoneId).color;
@@ -929,7 +944,7 @@ function DailyAgendaPageContent({
                           borderLeft: `4px solid ${categoryColor}`,
                           borderRadius: 12,
                           display: "flex",
-                          alignItems: "center",
+                          alignItems: "flex-start",
                           justifyContent: "space-between",
                           gap: 10,
                         }}
@@ -939,17 +954,16 @@ function DailyAgendaPageContent({
                             fontSize: 13,
                             fontWeight: 800,
                             color: REPORT_THEME.textPrimary,
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            whiteSpace: "nowrap",
+                            flex: 1,
+                            minWidth: 0,
+                            wordBreak: "break-word",
                           }}
-                          title={title}
                         >
                           {title}
                         </div>
                         <div style={{ display: "flex", alignItems: "center", gap: 8, flex: "0 0 auto" }}>
-                          <span style={{ fontSize: 12, fontWeight: 900, color: isCompleted ? "#16a34a" : "#b45309" }}>
-                            {isCompleted ? "Completed" : "Work in progress"}
+                          <span style={{ fontSize: 12, fontWeight: 900, color: "#16a34a" }}>
+                            Completed
                           </span>
                         </div>
                       </div>
@@ -1493,6 +1507,7 @@ function DailyAgendaPageContent({
               onConfirm={handleTaskSelectionConfirm}
               onCancel={() => setShowTaskModal(false)}
               suggestedSecondaryIds={suggestedSecondaryIds}
+              completedTodayIds={completedTodayIds}
             />
           )}
 
@@ -1927,7 +1942,7 @@ function DailyAgendaPageContent({
                   borderRadius: 18,
                   border: "1px solid #eee",
                   boxShadow: "0 24px 70px rgba(0,0,0,0.35)",
-                  overflow: "hidden",
+                  overflow: wizardStep === 0 ? "visible" : "hidden",
                 }}
                 onClick={(e) => e.stopPropagation()}
               >
@@ -1998,6 +2013,7 @@ function DailyAgendaPageContent({
                         onConfirm={handleTaskSelectionConfirm}
                         onCancel={() => undefined}
                         suggestedSecondaryIds={suggestedSecondaryIds}
+                        completedTodayIds={completedTodayIds}
                         variant="inline"
                         showHeader={false}
                         showFooter={false}

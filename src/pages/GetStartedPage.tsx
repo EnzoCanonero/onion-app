@@ -335,7 +335,7 @@ export default function GetStartedPage() {
         justifyContent: "center",
         fontFamily: "system-ui, sans-serif",
         backgroundColor: "#fafbfc",
-        padding: 32,
+        padding: "68px 32px 32px 32px",
         boxSizing: "border-box",
       }}
     >

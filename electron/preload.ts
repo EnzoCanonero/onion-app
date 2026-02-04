@@ -7,4 +7,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("storage:save", key, data),
   deleteStorage: (key: string): Promise<void> =>
     ipcRenderer.invoke("storage:delete", key),
+  openExternal: (url: string): Promise<void> =>
+    ipcRenderer.invoke("shell:openExternal", url),
 });

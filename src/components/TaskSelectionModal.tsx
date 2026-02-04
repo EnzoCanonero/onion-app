@@ -9,6 +9,7 @@ type TaskSelectionModalProps = {
   onConfirm: (primaryId: string | undefined, secondaryIds: string[]) => void;
   onCancel: () => void;
   suggestedSecondaryIds?: string[];
+  completedTodayIds?: Set<string>;
   variant?: "modal" | "inline";
   showHeader?: boolean;
   showCancel?: boolean;
@@ -26,6 +27,7 @@ export default function TaskSelectionModal({
   onConfirm,
   onCancel,
   suggestedSecondaryIds = [],
+  completedTodayIds = new Set(),
   variant = "modal",
   showHeader = true,
   showCancel = true,
@@ -179,17 +181,21 @@ export default function TaskSelectionModal({
   }, [tasks]);
 
   const sortedTasks = useMemo(() => {
-    const weight = (status: TaskNode["status"]) => (status === "YELLOW" ? 0 : 1);
+    const weight = (task: TaskNode) => {
+      if (task.status === "YELLOW") return 0; // In progress first
+      if (completedTodayIds.has(task.id)) return 1; // Completed today second
+      return 2; // Others last
+    };
     return orderedTasks
       .map((item, index) => ({ ...item, index }))
       .sort((a, b) => {
-        const wA = weight(a.task.status);
-        const wB = weight(b.task.status);
+        const wA = weight(a.task);
+        const wB = weight(b.task);
         if (wA !== wB) return wA - wB;
         return a.index - b.index;
       })
       .map(({ index, ...rest }) => rest);
-  }, [orderedTasks]);
+  }, [orderedTasks, completedTodayIds]);
 
   const secondaryOptions = useMemo(() => {
     return sortedTasks
@@ -398,16 +404,26 @@ export default function TaskSelectionModal({
                       zIndex: 10,
                     }}
                   >
-                    <div style={{ maxHeight: 300, overflowY: "auto", padding: 6 }}>
+                    <div style={{ maxHeight: 300, overflowY: "auto", overscrollBehavior: "contain", padding: 6 }}>
                       {sortedTasks.map(({ task, depth }) => {
                         const isSelected = selectedPrimaryId === task.id;
                         const isWip = task.status === "YELLOW";
-                        const backgroundColor = isWip
+                        const isCompletedToday = completedTodayIds.has(task.id);
+                        const backgroundColor = isCompletedToday
                           ? isSelected
-                            ? "#fff1c2"
-                            : "#fff7d6"
-                          : isSelected
-                          ? "rgba(103,58,183,0.10)"
+                            ? "#d1fae5"
+                            : "#dcfce7"
+                          : isWip
+                            ? isSelected
+                              ? "#fff1c2"
+                              : "#fff7d6"
+                            : isSelected
+                            ? "rgba(103,58,183,0.10)"
+                            : "transparent";
+                        const borderColor = isCompletedToday
+                          ? "#86efac"
+                          : isWip
+                          ? "#fde68a"
                           : "transparent";
 
                         return (
@@ -421,7 +437,7 @@ export default function TaskSelectionModal({
                               borderRadius: 10,
                               cursor: "pointer",
                               backgroundColor,
-                              border: isWip ? "1px solid #fde68a" : "1px solid transparent",
+                              border: `1px solid ${borderColor}`,
                               marginLeft: depth * 14,
                             }}
                           >
@@ -502,17 +518,27 @@ export default function TaskSelectionModal({
                       zIndex: 10,
                     }}
                   >
-                    <div style={{ maxHeight: 300, overflowY: "auto", padding: 6 }}>
+                    <div style={{ maxHeight: 300, overflowY: "auto", overscrollBehavior: "contain", padding: 6 }}>
                       {secondaryOptions.map((opt) => {
                         const checked = selectedSecondaryIds.includes(opt.id);
                         const isWip = opt.status === "YELLOW";
+                        const isCompletedToday = completedTodayIds.has(opt.id);
                         const showSuggested = opt.isSuggested && !checked;
-                        const backgroundColor = isWip
+                        const backgroundColor = isCompletedToday
                           ? checked
-                            ? "#fff1c2"
-                            : "#fff7d6"
-                          : checked
-                          ? "rgba(103,58,183,0.10)"
+                            ? "#d1fae5"
+                            : "#dcfce7"
+                          : isWip
+                            ? checked
+                              ? "#fff1c2"
+                              : "#fff7d6"
+                            : checked
+                            ? "rgba(103,58,183,0.10)"
+                            : "transparent";
+                        const borderColor = isCompletedToday
+                          ? "#86efac"
+                          : isWip
+                          ? "#fde68a"
                           : "transparent";
 
                         return (
@@ -526,7 +552,7 @@ export default function TaskSelectionModal({
                               borderRadius: 10,
                               cursor: "pointer",
                               backgroundColor,
-                              border: isWip ? "1px solid #fde68a" : "1px solid transparent",
+                              border: `1px solid ${borderColor}`,
                               marginLeft: opt.depth * 14,
                             }}
                           >
