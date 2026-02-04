@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, shell } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { StorageHandler } from "./storage.js";
@@ -57,6 +57,10 @@ app.whenReady().then(() => {
 
   ipcMain.handle("storage:delete", (_event, key: string) => {
     storage.delete(key);
+  });
+
+  ipcMain.handle("shell:openExternal", (_event, url: string) => {
+    return shell.openExternal(url);
   });
 
   createWindow();

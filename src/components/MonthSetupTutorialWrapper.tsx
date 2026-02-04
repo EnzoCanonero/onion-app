@@ -44,14 +44,11 @@ export default function MonthSetupTutorialWrapper() {
         width: "100%",
         maxWidth: 1280,
         margin: "0 auto",
-        padding: "16px 32px",
+        padding: "52px 32px 16px 32px",
         boxSizing: "border-box",
         position: "relative",
       }}
     >
-      {/* Spacer for macOS window controls */}
-      <div style={{ height: 36 }} />
-
       {/* Tutorial header — Back button in Calendar's DOM slot */}
       {dismissed && (
         <header

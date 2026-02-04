@@ -20,6 +20,7 @@ interface ElectronAPI {
   loadStorage(key: string): Promise<string | null>;
   saveStorage(key: string, data: string): Promise<void>;
   deleteStorage(key: string): Promise<void>;
+  openExternal(url: string): Promise<void>;
 }
 
 declare global {

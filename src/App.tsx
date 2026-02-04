@@ -65,9 +65,6 @@ function Header() {
       {/* Virtual Clock Toolbox (only in developer mode) */}
       {isDeveloper && <VirtualClockToolbox />}
 
-      {/* Spacer for macOS window controls */}
-      <div style={{ height: 36 }} />
-
       <header
         style={{
           display: "flex",
@@ -139,6 +136,21 @@ function RootRedirect() {
 export default function App() {
   return (
     <DateNavigationProvider>
+      {/* Fixed title bar for macOS window controls */}
+      <div
+        style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 36,
+          backgroundColor: "white",
+          borderBottom: "1px solid #eee",
+          zIndex: 1000,
+          WebkitAppRegion: "drag",
+        } as React.CSSProperties}
+      />
+
       <Routes>
         <Route path="/get-started" element={<GetStartedPage />} />
         <Route path="/grand-plan/tutorial" element={<GrandPlanTutorialWrapper />} />
@@ -153,7 +165,7 @@ export default function App() {
                 width: "100%",
                 maxWidth: 1280,
                 margin: "0 auto",
-                padding: "16px 32px",
+                padding: "52px 32px 16px 32px",
                 boxSizing: "border-box",
               }}
             >
