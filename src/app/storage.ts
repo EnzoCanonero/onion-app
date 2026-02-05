@@ -110,6 +110,15 @@ export function loadState(): AppStateV0 {
       (plan as any).pinnedMilestoneIds =
         validMilestoneIds.size > 0 ? pinsToUse.filter((id: string) => validMilestoneIds.has(id)) : pinsToUse;
 
+      // v8.1: Clean up linkedMilestoneId on tasks pointing to non-existent milestones
+      if (validMilestoneIds.size > 0 && Array.isArray((plan as any).tasks)) {
+        (plan as any).tasks.forEach((t: any) => {
+          if (t?.linkedMilestoneId && !validMilestoneIds.has(t.linkedMilestoneId)) {
+            delete t.linkedMilestoneId;
+          }
+        });
+      }
+
       if (typeof (plan as any).primaryMilestoneId !== "string") {
         const nextPrimary = (plan as any).pinnedMilestoneIds?.[0];
         if (typeof nextPrimary === "string" && nextPrimary) {

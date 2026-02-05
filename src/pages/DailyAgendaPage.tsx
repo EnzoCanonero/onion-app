@@ -726,11 +726,7 @@ function DailyAgendaPageContent({
           <div style={{ marginBottom: 8 }}>
             <button
               onClick={() => {
-                const url = meeting.link!;
-                console.log("Join Meeting clicked, URL:", url);
-                console.log("electronAPI available:", !!window.electronAPI);
-                console.log("openExternal available:", !!window.electronAPI?.openExternal);
-                window.electronAPI!.openExternal(url);
+                window.electronAPI!.openExternal(meeting.link!);
               }}
               style={{
                 color: "#1976d2",

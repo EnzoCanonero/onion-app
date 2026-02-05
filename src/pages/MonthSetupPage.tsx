@@ -243,18 +243,18 @@ function TaskGroup({
     const cols = Math.max(1, Math.floor((Math.max(320, boardSize.width) - START_X * 2) / (DEFAULT_W + GAP)));
     const map = new Map<string, TaskRect>();
 
-    tasks.forEach((task, idx) => {
+    let unpositionedIdx = 0;
+    tasks.forEach((task) => {
       let w = typeof task.boardW === "number" && Number.isFinite(task.boardW) ? task.boardW : DEFAULT_W;
       let h = typeof task.boardH === "number" && Number.isFinite(task.boardH) ? task.boardH : DEFAULT_H;
 
-      let x =
-        typeof task.boardX === "number" && Number.isFinite(task.boardX)
-          ? task.boardX
-          : START_X + (idx % cols) * (DEFAULT_W + GAP);
-      let y =
-        typeof task.boardY === "number" && Number.isFinite(task.boardY)
-          ? task.boardY
-          : START_Y + Math.floor(idx / cols) * (DEFAULT_H + GAP);
+      const hasX = typeof task.boardX === "number" && Number.isFinite(task.boardX);
+      const hasY = typeof task.boardY === "number" && Number.isFinite(task.boardY);
+
+      let x = hasX ? task.boardX : START_X + (unpositionedIdx % cols) * (DEFAULT_W + GAP);
+      let y = hasY ? task.boardY : START_Y + Math.floor(unpositionedIdx / cols) * (DEFAULT_H + GAP);
+
+      if (!hasX || !hasY) unpositionedIdx++;
 
       if (dragPreview?.taskId === task.id) {
         x = dragPreview.x;
@@ -2544,10 +2544,11 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
 
   useEffect(() => {
     if (!plan) return;
-    if (selectedMilestoneId && !plan.pinnedMilestoneIds.includes(selectedMilestoneId)) {
-      setSelectedMilestoneId(plan.pinnedMilestoneIds[0] ?? null);
+    const visibleIds = new Set(pinnedMilestones.map((m) => m.id));
+    if (selectedMilestoneId && !visibleIds.has(selectedMilestoneId)) {
+      setSelectedMilestoneId(pinnedMilestones[0]?.id ?? null);
     }
-  }, [pinnedIdsKey, selectedMilestoneId]);
+  }, [pinnedMilestones, selectedMilestoneId]);
 
   // Removed auto-selection of primary milestone - user must explicitly choose via wizard
 
@@ -2581,8 +2582,16 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
     );
   }
 
-  // v6.1: Get standalone tasks (no linkedMilestoneId)
-  const standaloneTasks = plan?.tasks.filter((t) => !t.linkedMilestoneId) ?? [];
+  // v6.1: Get standalone tasks (no linkedMilestoneId, or linked to a non-existent milestone)
+  const standaloneTasks = useMemo(() => {
+    if (!plan) return [];
+    const validMilestoneIds = new Set(
+      state.grandPlan?.milestones.map((m) => m.id) ?? []
+    );
+    return plan.tasks.filter(
+      (t) => !t.linkedMilestoneId || !validMilestoneIds.has(t.linkedMilestoneId)
+    );
+  }, [plan, state.grandPlan]);
 
   const monthWizardSteps = ["Milestones", "Focus sessions"] as const;
   const monthWizardTitle = monthWizardSteps[monthWizardStep] ?? monthWizardSteps[0];
