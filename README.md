@@ -2,6 +2,15 @@
 
 OnionOps is a layered planning and focus app built around the idea that progress comes from organizing work in clear, nested layers (Grand Plan → Month → Daily). It provides guided onboarding, visual planning boards, and daily focus sessions to help users execute consistently.
 
+## License
+
+OnionOps is source-available under the PolyForm Noncommercial License 1.0.0. See
+`LICENSE`. Commercial use requires a separate license. See
+`COMMERCIAL_LICENSE.md`.
+
+Third-party dependencies are licensed under their own terms. See
+`THIRD_PARTY_NOTICES.txt`.
+
 ## Project Structure
 
 - **Electron (main process):** desktop app shell, storage, native window integration.
