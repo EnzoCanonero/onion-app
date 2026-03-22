@@ -135,6 +135,7 @@ export type DayEntry = {
 };
 
 export type MeetingRecurrence = "NONE" | "WEEKLY" | "BIWEEKLY" | "MONTHLY";
+export type MeetingEditScope = "THIS_EVENT" | "THIS_AND_FUTURE";
 
 export type MeetingEntry = {
   id: string;
@@ -148,6 +149,7 @@ export type MeetingEntry = {
   skipped?: boolean;
   createdAt: string; // ISO timestamp
   recurrence?: MeetingRecurrence;
+  seriesId?: string;
 };
 
 export type AppStateV0 = {

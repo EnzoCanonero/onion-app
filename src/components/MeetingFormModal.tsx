@@ -1,13 +1,15 @@
 import { useEffect, useState } from "react";
-import type { DateISO, MeetingEntry, MeetingRecurrence } from "../app/types";
+import type { DateISO, MeetingEntry, MeetingRecurrence, MeetingEditScope } from "../app/types";
 import { formatDateDisplay } from "../app/storage";
 import { APP_MAIN_COLOR } from "../app/theme";
 
 interface MeetingFormModalProps {
   date: DateISO;
+  mode?: "create" | "edit";
   meeting?: MeetingEntry;
-  onSave: (meeting: Omit<MeetingEntry, "id" | "createdAt">) => void;
+  onSave: (meeting: Omit<MeetingEntry, "id" | "createdAt">, scope: MeetingEditScope) => void;
   onCancel: () => void;
+  onDelete?: (scope: MeetingEditScope) => void;
 }
 
 interface FormState {
@@ -28,6 +30,12 @@ interface ValidationErrors {
 
 const TIME_VALUE_REGEX = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const RANGE_VALUE_REGEX = /^([01]\d|2[0-3]):([0-5]\d)-([01]\d|2[0-3]):([0-5]\d)$/;
+const RECURRENCE_LABELS: Record<MeetingRecurrence, string> = {
+  NONE: "One-off",
+  WEEKLY: "Weekly",
+  BIWEEKLY: "Bi-weekly",
+  MONTHLY: "Monthly",
+};
 
 function parseTimeToMinutes(time: string): number | null {
   if (!TIME_VALUE_REGEX.test(time)) return null;
@@ -99,10 +107,14 @@ function validateMeetingForm(form: FormState): ValidationErrors {
 
 export default function MeetingFormModal({
   date,
+  mode,
   meeting,
   onSave,
   onCancel,
+  onDelete,
 }: MeetingFormModalProps) {
+  const resolvedMode = mode ?? (meeting ? "edit" : "create");
+  const canEditSeries = resolvedMode === "edit" && Boolean(meeting?.seriesId);
   const initialTimeState = parseMeetingTime(meeting?.time);
   const [form, setForm] = useState<FormState>({
     title: meeting?.title ?? "",
@@ -114,6 +126,13 @@ export default function MeetingFormModal({
   });
   const [errors, setErrors] = useState<ValidationErrors>({});
   const [touched, setTouched] = useState<Record<string, boolean>>({});
+  const [editScope, setEditScope] = useState<MeetingEditScope>("THIS_EVENT");
+  const [showDeleteScopePicker, setShowDeleteScopePicker] = useState(false);
+
+  const showEditableRecurrence =
+    resolvedMode === "create" || (canEditSeries && editScope === "THIS_AND_FUTURE");
+  const showReadOnlyRecurrence =
+    resolvedMode === "edit" && Boolean(meeting?.recurrence) && !showEditableRecurrence;
 
   useEffect(() => {
     const nextTimeState = parseMeetingTime(meeting?.time);
@@ -127,6 +146,8 @@ export default function MeetingFormModal({
     });
     setErrors({});
     setTouched({});
+    setEditScope("THIS_EVENT");
+    setShowDeleteScopePicker(false);
   }, [meeting, date]);
 
   useEffect(() => {
@@ -168,6 +189,20 @@ export default function MeetingFormModal({
     setTouched((prev) => ({ ...prev, startTime: true }));
   };
 
+  const handleDeleteClick = () => {
+    if (!onDelete) return;
+    if (canEditSeries) {
+      setShowDeleteScopePicker(true);
+      return;
+    }
+    onDelete("THIS_EVENT");
+  };
+
+  const handleDeleteWithScope = (scope: MeetingEditScope) => {
+    if (!onDelete) return;
+    onDelete(scope);
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -184,7 +219,7 @@ export default function MeetingFormModal({
         link: form.link.trim() || undefined,
         description: form.description.trim() || undefined,
         recurrence: form.recurrence === "NONE" ? undefined : form.recurrence,
-      });
+      }, resolvedMode === "create" ? "THIS_EVENT" : editScope);
     }
   };
 
@@ -231,13 +266,70 @@ export default function MeetingFormModal({
           }}
         >
           <h2 style={{ marginTop: 0, marginBottom: 8, fontSize: 20 }}>
-            {meeting ? "Edit Meeting" : "Add Meeting"}
+            {resolvedMode === "edit" ? "Edit Meeting" : "Add Meeting"}
           </h2>
           <p style={{ marginTop: 0, marginBottom: 20, fontSize: 14, color: "#666" }}>
             {formatDateDisplay(date)}
           </p>
 
           <form onSubmit={handleSubmit}>
+            {canEditSeries ? (
+              <div style={{ marginBottom: 18 }}>
+                <div style={{ marginBottom: 6, fontSize: 13, fontWeight: 700, color: "#475569" }}>
+                  Apply to
+                </div>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: 6,
+                    padding: 4,
+                    borderRadius: 14,
+                    backgroundColor: "#f6f1e7",
+                    border: "1px solid #ece3d3",
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setEditScope("THIS_EVENT")}
+                    style={{
+                      padding: "10px 12px",
+                      fontSize: 12,
+                      fontWeight: 800,
+                      backgroundColor: editScope === "THIS_EVENT" ? "white" : "transparent",
+                      color: editScope === "THIS_EVENT" ? APP_MAIN_COLOR : "#6b7280",
+                      border: editScope === "THIS_EVENT" ? `1px solid ${APP_MAIN_COLOR}22` : "1px solid transparent",
+                      borderRadius: 10,
+                      cursor: "pointer",
+                      boxShadow: editScope === "THIS_EVENT" ? "0 4px 10px rgba(0,0,0,0.05)" : "none",
+                    }}
+                  >
+                    This event
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditScope("THIS_AND_FUTURE")}
+                    style={{
+                      padding: "10px 12px",
+                      fontSize: 12,
+                      fontWeight: 800,
+                      backgroundColor: editScope === "THIS_AND_FUTURE" ? "white" : "transparent",
+                      color: editScope === "THIS_AND_FUTURE" ? APP_MAIN_COLOR : "#6b7280",
+                      border:
+                        editScope === "THIS_AND_FUTURE"
+                          ? `1px solid ${APP_MAIN_COLOR}22`
+                          : "1px solid transparent",
+                      borderRadius: 10,
+                      cursor: "pointer",
+                      boxShadow: editScope === "THIS_AND_FUTURE" ? "0 4px 10px rgba(0,0,0,0.05)" : "none",
+                    }}
+                  >
+                    This and future
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
             <div style={{ marginBottom: 16 }}>
               <label
                 htmlFor="title"
@@ -352,6 +444,27 @@ export default function MeetingFormModal({
 
             </div>
 
+            {showReadOnlyRecurrence ? (
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ display: "block", marginBottom: 4, fontSize: 14, fontWeight: 600 }}>
+                  Recurrence
+                </div>
+                <div
+                  style={{
+                    padding: "10px 12px",
+                    fontSize: 14,
+                    border: "1px solid #e2e8f0",
+                    borderRadius: 10,
+                    backgroundColor: "#f8fafc",
+                    color: "#475569",
+                    fontWeight: 600,
+                  }}
+                >
+                  {RECURRENCE_LABELS[meeting?.recurrence ?? "NONE"]}
+                </div>
+              </div>
+            ) : null}
+
             <div style={{ marginBottom: 16 }}>
               <label
                 htmlFor="link"
@@ -411,65 +524,157 @@ export default function MeetingFormModal({
               </div>
             </div>
 
-            <div style={{ marginBottom: 20 }}>
-              <label
-                htmlFor="recurrence"
-                style={{ display: "block", marginBottom: 4, fontSize: 14, fontWeight: 600 }}
-              >
-                Recurrence
-              </label>
-              <select
-                id="recurrence"
-                value={form.recurrence}
-                onChange={(e) => handleChange("recurrence", e.target.value)}
-                style={{
-                  width: "100%",
-                  padding: "8px 12px",
-                  fontSize: 14,
-                  border: "1px solid #ddd",
-                  borderRadius: 6,
-                  boxSizing: "border-box",
-                  backgroundColor: "white",
-                }}
-              >
-                <option value="NONE">One-off</option>
-                <option value="WEEKLY">Weekly</option>
-                <option value="BIWEEKLY">Bi-weekly</option>
-                <option value="MONTHLY">Monthly</option>
-              </select>
-            </div>
+            {showEditableRecurrence ? (
+              <div style={{ marginBottom: 20 }}>
+                <label
+                  htmlFor="recurrence"
+                  style={{ display: "block", marginBottom: 4, fontSize: 14, fontWeight: 600 }}
+                >
+                  Recurrence
+                </label>
+                <select
+                  id="recurrence"
+                  value={form.recurrence}
+                  onChange={(e) => handleChange("recurrence", e.target.value)}
+                  style={{
+                    width: "100%",
+                    padding: "8px 12px",
+                    fontSize: 14,
+                    border: "1px solid #ddd",
+                    borderRadius: 6,
+                    boxSizing: "border-box",
+                    backgroundColor: "white",
+                  }}
+                >
+                  <option value="NONE">One-off</option>
+                  <option value="WEEKLY">Weekly</option>
+                  <option value="BIWEEKLY">Bi-weekly</option>
+                  <option value="MONTHLY">Monthly</option>
+                </select>
+              </div>
+            ) : null}
 
-            <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
-              <button
-                type="button"
-                onClick={onCancel}
+            {showDeleteScopePicker ? (
+              <div
                 style={{
-                  padding: "10px 20px",
-                  fontSize: 14,
-                  backgroundColor: "white",
-                  border: "1px solid #ddd",
-                  borderRadius: 6,
-                  cursor: "pointer",
+                  marginBottom: 16,
+                  padding: 14,
+                  borderRadius: 12,
+                  border: "1px solid #fecaca",
+                  backgroundColor: "#fff7f7",
+                  display: "grid",
+                  gap: 10,
                 }}
               >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={hasErrors}
-                style={{
-                  padding: "10px 20px",
-                  fontSize: 14,
-                  fontWeight: 600,
-                  backgroundColor: hasErrors ? "#ccc" : APP_MAIN_COLOR,
-                  color: "white",
-                  border: "none",
-                  borderRadius: 6,
-                  cursor: hasErrors ? "not-allowed" : "pointer",
-                }}
-              >
-                Save Meeting
-              </button>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#991b1b" }}>
+                  Delete only this meeting, or this and future ones?
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteWithScope("THIS_EVENT")}
+                    style={{
+                      padding: "9px 14px",
+                      fontSize: 13,
+                      fontWeight: 700,
+                      backgroundColor: "white",
+                      color: "#dc2626",
+                      border: "1px solid #fecaca",
+                      borderRadius: 10,
+                      cursor: "pointer",
+                    }}
+                  >
+                    This event
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteWithScope("THIS_AND_FUTURE")}
+                    style={{
+                      padding: "9px 14px",
+                      fontSize: 13,
+                      fontWeight: 700,
+                      backgroundColor: "#dc2626",
+                      color: "white",
+                      border: "1px solid #dc2626",
+                      borderRadius: 10,
+                      cursor: "pointer",
+                    }}
+                  >
+                    This and future
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowDeleteScopePicker(false)}
+                    style={{
+                      padding: "9px 14px",
+                      fontSize: 13,
+                      fontWeight: 700,
+                      backgroundColor: "white",
+                      color: "#475569",
+                      border: "1px solid #e2e8f0",
+                      borderRadius: 10,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            <div style={{ display: "flex", gap: 12, justifyContent: "space-between", alignItems: "center", flexWrap: "wrap" }}>
+              <div>
+                {resolvedMode === "edit" && onDelete ? (
+                  <button
+                    type="button"
+                    onClick={handleDeleteClick}
+                    style={{
+                      padding: "10px 20px",
+                      fontSize: 14,
+                      fontWeight: 700,
+                      backgroundColor: "white",
+                      color: "#dc2626",
+                      border: "1px solid #fecaca",
+                      borderRadius: 8,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Delete
+                  </button>
+                ) : null}
+              </div>
+              <div style={{ display: "flex", gap: 12, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  onClick={onCancel}
+                  style={{
+                    padding: "10px 20px",
+                    fontSize: 14,
+                    backgroundColor: "white",
+                    border: "1px solid #ddd",
+                    borderRadius: 6,
+                    cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={hasErrors}
+                  style={{
+                    padding: "10px 20px",
+                    fontSize: 14,
+                    fontWeight: 600,
+                    backgroundColor: hasErrors ? "#ccc" : APP_MAIN_COLOR,
+                    color: "white",
+                    border: "none",
+                    borderRadius: 6,
+                    cursor: hasErrors ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {resolvedMode === "edit" ? "Save changes" : "Save Meeting"}
+                </button>
+              </div>
             </div>
           </form>
         </div>
