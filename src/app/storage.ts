@@ -45,6 +45,24 @@ function getTaskScopeMilestoneId(scopeKey: string): string | undefined {
   return scopeKey.startsWith("milestone:") ? scopeKey.slice("milestone:".length) || undefined : undefined;
 }
 
+function getLegacyMeetingSeriesKey(meeting: {
+  createdAt?: string;
+  recurrence?: MeetingRecurrence;
+  title?: string;
+  time?: string;
+  link?: string;
+  description?: string;
+}) {
+  return JSON.stringify([
+    meeting.createdAt ?? "",
+    meeting.recurrence ?? "NONE",
+    meeting.title ?? "",
+    meeting.time ?? "",
+    meeting.link ?? "",
+    meeting.description ?? "",
+  ]);
+}
+
 const emptyState: AppStateV0 = {
   version: 0,
   months: {},
@@ -63,6 +81,7 @@ export function loadState(): AppStateV0 {
     if (parsed?.version !== 0) return emptyState;
     let didNormalizeTaskNotes = false;
     let didMigrateTaskArchive = false;
+    let didMigrateMeetingSeries = false;
 
     const validMilestoneIds = new Set<string>(parsed.grandPlan?.milestones?.map((m) => m.id) ?? []);
     const taskMapsByScope = new Map<string, Map<string, TaskNode>>();
@@ -172,6 +191,61 @@ export function loadState(): AppStateV0 {
     if (!parsed.meetings) {
       parsed.meetings = [];
     }
+    const legacyRecurringMeetingsByKey = new Map<string, MeetingEntry[]>();
+    parsed.meetings = parsed.meetings
+      .filter((meeting: any) => meeting && typeof meeting === "object")
+      .map((meeting: any) => {
+        const recurrence =
+          meeting.recurrence === "WEEKLY" ||
+          meeting.recurrence === "BIWEEKLY" ||
+          meeting.recurrence === "MONTHLY"
+            ? (meeting.recurrence as MeetingRecurrence)
+            : undefined;
+        const normalizedMeeting: MeetingEntry = {
+          id: typeof meeting.id === "string" && meeting.id ? meeting.id : makeId("meeting"),
+          date: meeting.date as DateISO,
+          ym:
+            typeof meeting.ym === "string" && meeting.ym
+              ? meeting.ym
+              : ymFromDate(meeting.date as DateISO),
+          title: typeof meeting.title === "string" ? meeting.title : "Meeting",
+          time: typeof meeting.time === "string" ? meeting.time : "09:00-10:00",
+          link: typeof meeting.link === "string" && meeting.link ? meeting.link : undefined,
+          description:
+            typeof meeting.description === "string" && meeting.description
+              ? meeting.description
+              : undefined,
+          attended: typeof meeting.attended === "boolean" ? meeting.attended : undefined,
+          skipped: typeof meeting.skipped === "boolean" ? meeting.skipped : undefined,
+          createdAt: typeof meeting.createdAt === "string" && meeting.createdAt ? meeting.createdAt : getVirtualTimestamp(),
+          recurrence,
+          seriesId:
+            recurrence && typeof meeting.seriesId === "string" && meeting.seriesId
+              ? meeting.seriesId
+              : undefined,
+        };
+
+        if (!recurrence && meeting.seriesId) {
+          didMigrateMeetingSeries = true;
+        }
+
+        if (recurrence && !normalizedMeeting.seriesId) {
+          const groupKey = getLegacyMeetingSeriesKey(normalizedMeeting);
+          const existing = legacyRecurringMeetingsByKey.get(groupKey) ?? [];
+          existing.push(normalizedMeeting);
+          legacyRecurringMeetingsByKey.set(groupKey, existing);
+        }
+
+        return normalizedMeeting;
+      });
+
+    legacyRecurringMeetingsByKey.forEach((meetings) => {
+      const nextSeriesId = makeId("meeting_series");
+      meetings.forEach((meeting) => {
+        meeting.seriesId = nextSeriesId;
+      });
+      didMigrateMeetingSeries = true;
+    });
 
     // v7 migration: Add editable daily reminder templates + migrate old booleans
     if (!Array.isArray(parsed.dailyReminderTemplates)) {
@@ -343,7 +417,7 @@ export function loadState(): AppStateV0 {
       });
     }
 
-    if (didNormalizeTaskNotes || didMigrateTaskArchive) {
+    if (didNormalizeTaskNotes || didMigrateTaskArchive || didMigrateMeetingSeries) {
       saveState(parsed);
     }
 
@@ -1130,6 +1204,47 @@ function listRecurringDates(startDate: DateISO, recurrence: MeetingRecurrence, h
   return dates;
 }
 
+function normalizeMeetingRecurrence(recurrence: MeetingEntry["recurrence"]): MeetingRecurrence {
+  return recurrence ?? "NONE";
+}
+
+function buildRecurringMeetings(
+  meeting: MeetingEntry,
+  horizonMonths: number,
+  existingByDate?: Map<DateISO, MeetingEntry>
+): MeetingEntry[] {
+  const recurrence = normalizeMeetingRecurrence(meeting.recurrence);
+
+  if (recurrence === "NONE") {
+    return [
+      {
+        ...meeting,
+        ym: ymFromDate(meeting.date),
+        recurrence: undefined,
+        seriesId: undefined,
+      },
+    ];
+  }
+
+  const seriesId = meeting.seriesId ?? makeId("meeting_series");
+  const dates = listRecurringDates(meeting.date, recurrence, horizonMonths);
+
+  return dates.map((date, index) => {
+    const existing = existingByDate?.get(date);
+    return {
+      ...meeting,
+      id: existing?.id ?? (index === 0 ? meeting.id : makeId("meeting")),
+      date,
+      ym: ymFromDate(date),
+      createdAt: existing?.createdAt ?? meeting.createdAt,
+      recurrence,
+      seriesId,
+      attended: existing?.attended,
+      skipped: existing?.skipped,
+    };
+  });
+}
+
 export function addMeeting(state: AppStateV0, meeting: MeetingEntry): AppStateV0 {
   return { ...state, meetings: [meeting, ...state.meetings] };
 }
@@ -1139,17 +1254,23 @@ export function addMeetingWithRecurrence(
   meeting: MeetingEntry,
   horizonMonths = 12
 ): AppStateV0 {
-  const recurrence = meeting.recurrence ?? "NONE";
-  if (recurrence === "NONE") return addMeeting(state, meeting);
-  const dates = listRecurringDates(meeting.date, recurrence, horizonMonths);
-  const createdAt = meeting.createdAt;
-  const meetings = dates.map((date, index) => ({
-    ...meeting,
-    id: index === 0 ? meeting.id : makeId("meeting"),
-    date,
-    ym: ymFromDate(date),
-    createdAt,
-  }));
+  const recurrence = normalizeMeetingRecurrence(meeting.recurrence);
+  if (recurrence === "NONE") {
+    return addMeeting(state, {
+      ...meeting,
+      ym: ymFromDate(meeting.date),
+      recurrence: undefined,
+      seriesId: undefined,
+    });
+  }
+  const meetings = buildRecurringMeetings(
+    {
+      ...meeting,
+      recurrence,
+      seriesId: meeting.seriesId ?? makeId("meeting_series"),
+    },
+    horizonMonths
+  );
   return { ...state, meetings: [...meetings, ...state.meetings] };
 }
 
@@ -1170,6 +1291,79 @@ export function deleteMeeting(state: AppStateV0, meetingId: string): AppStateV0 
   return {
     ...state,
     meetings: state.meetings.filter((m) => m.id !== meetingId),
+  };
+}
+
+export function updateMeetingThisAndFuture(
+  state: AppStateV0,
+  meetingId: string,
+  updates: Partial<Omit<MeetingEntry, "id" | "createdAt">>,
+  horizonMonths = 12
+): AppStateV0 {
+  const targetMeeting = state.meetings.find((m) => m.id === meetingId);
+  if (!targetMeeting?.seriesId) {
+    return updateMeeting(state, meetingId, updates);
+  }
+
+  const seriesId = targetMeeting.seriesId;
+  const remainingMeetings = state.meetings.filter(
+    (m) => !(m.seriesId === seriesId && m.date >= targetMeeting.date)
+  );
+  const preservedFutureByDate = new Map<DateISO, MeetingEntry>(
+    state.meetings
+      .filter((m) => m.seriesId === seriesId && m.date >= targetMeeting.date)
+      .map((m) => [m.date, m])
+  );
+
+  const mergedMeeting: MeetingEntry = {
+    ...targetMeeting,
+    ...updates,
+    ym: ymFromDate((updates.date ?? targetMeeting.date) as DateISO),
+    seriesId,
+  };
+  const recurrence = normalizeMeetingRecurrence(mergedMeeting.recurrence);
+
+  if (recurrence === "NONE") {
+    return {
+      ...state,
+      meetings: [
+        {
+          ...mergedMeeting,
+          recurrence: undefined,
+          seriesId: undefined,
+        },
+        ...remainingMeetings,
+      ],
+    };
+  }
+
+  const regeneratedMeetings = buildRecurringMeetings(
+    {
+      ...mergedMeeting,
+      recurrence,
+      seriesId,
+    },
+    horizonMonths,
+    preservedFutureByDate
+  );
+
+  return {
+    ...state,
+    meetings: [...regeneratedMeetings, ...remainingMeetings],
+  };
+}
+
+export function deleteMeetingThisAndFuture(state: AppStateV0, meetingId: string): AppStateV0 {
+  const targetMeeting = state.meetings.find((m) => m.id === meetingId);
+  if (!targetMeeting?.seriesId) {
+    return deleteMeeting(state, meetingId);
+  }
+
+  return {
+    ...state,
+    meetings: state.meetings.filter(
+      (m) => !(m.seriesId === targetMeeting.seriesId && m.date >= targetMeeting.date)
+    ),
   };
 }
 
