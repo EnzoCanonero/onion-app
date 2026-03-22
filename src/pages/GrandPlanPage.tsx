@@ -29,6 +29,7 @@ import {
   addMilestone,
   updateMilestone,
   deleteMilestone,
+  getAllTasks,
   getTodayDate,
   getCurrentYM,
 } from "../app/storage";
@@ -520,7 +521,7 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
     const monthsInPlan = listMonthsInRange(grandPlan.startMonth, actualEndMonth);
     const months = monthsInPlan.length > 0 ? monthsInPlan : ([grandPlan.startMonth] as YM[]);
 
-    const tasksInPlan = months.flatMap((ym) => state.months[ym]?.tasks ?? []);
+    const tasksInPlan = getAllTasks(state);
     const tasksTotalCount = tasksInPlan.length;
     const tasksCompletedCount = tasksInPlan.filter((t) => t.status === "GREEN").length;
     const tasksCompletionRate = tasksTotalCount > 0 ? Math.round((tasksCompletedCount / tasksTotalCount) * 100) : 0;
@@ -561,10 +562,10 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
 
     const taskMilestoneById = new Map<string, string | null | undefined>();
     const templateMilestoneById = new Map<string, string | null | undefined>();
+    tasksInPlan.forEach((t) => {
+      if (!taskMilestoneById.has(t.id)) taskMilestoneById.set(t.id, t.linkedMilestoneId);
+    });
     Object.values(state.months).forEach((mp) => {
-      mp.tasks.forEach((t) => {
-        if (!taskMilestoneById.has(t.id)) taskMilestoneById.set(t.id, t.linkedMilestoneId);
-      });
       mp.templates.forEach((t) => {
         if (!templateMilestoneById.has(t.id)) templateMilestoneById.set(t.id, t.linkedMilestoneId);
       });
@@ -1555,7 +1556,8 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
           }
           accentColor={activeCategory?.color ?? APP_MAIN_COLOR}
           titlePlaceholder={creatingMilestone.parentId ? "Milestone title..." : "Goal title..."}
-          descriptionPlaceholder="Add a description (optional)..."
+          descriptionLabel="Notes"
+          descriptionPlaceholder="Add notes (optional)..."
           confirmLabel={creatingMilestone.parentId ? "Add Milestone" : "Add Goal"}
           onCancel={() => setCreatingMilestone(null)}
           onConfirm={(title, description) => {

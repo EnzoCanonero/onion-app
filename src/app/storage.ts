@@ -14,6 +14,7 @@ import type {
   DailyReminderTemplate,
   DayLogEvent,
   MeetingRecurrence,
+  TaskArchive,
 } from "./types";
 import { normalizeWeekdays } from "./weekdays";
 import { getVirtualTodayDate, getVirtualCurrentYM, getVirtualTimestamp } from "../contexts/VirtualClockContext";
@@ -27,9 +28,27 @@ const DEFAULT_DAILY_REMINDER_TEMPLATES: DailyReminderTemplate[] = [
   { id: "rem_bureaucratic", text: "Handle those bureaucratic tasks 📋" },
 ];
 
+function createEmptyTaskArchive(): TaskArchive {
+  return {
+    standaloneTasks: [],
+    tasksByMilestoneId: {},
+    boardByScope: {},
+    taskLinksByScope: {},
+  };
+}
+
+function getTaskScopeKey(milestoneId: string | null | undefined) {
+  return milestoneId ? `milestone:${milestoneId}` : "standalone";
+}
+
+function getTaskScopeMilestoneId(scopeKey: string): string | undefined {
+  return scopeKey.startsWith("milestone:") ? scopeKey.slice("milestone:".length) || undefined : undefined;
+}
+
 const emptyState: AppStateV0 = {
   version: 0,
   months: {},
+  taskArchive: createEmptyTaskArchive(),
   days: {},
   sessions: [],
   meetings: [],
@@ -42,6 +61,112 @@ export function loadState(): AppStateV0 {
     if (!raw) return emptyState;
     const parsed = JSON.parse(raw) as AppStateV0;
     if (parsed?.version !== 0) return emptyState;
+    let didNormalizeTaskNotes = false;
+    let didMigrateTaskArchive = false;
+
+    const validMilestoneIds = new Set<string>(parsed.grandPlan?.milestones?.map((m) => m.id) ?? []);
+    const taskMapsByScope = new Map<string, Map<string, TaskNode>>();
+    const boardByScope: Record<string, { width: number; height: number }> = {};
+    const taskLinksByScope: Record<string, { from: string; to: string }[]> = {};
+
+    const mergeBoardScope = (scopeKey: string, board: any) => {
+      if (!board || typeof board !== "object") return;
+      const width = typeof board.width === "number" && Number.isFinite(board.width) ? board.width : undefined;
+      const height = typeof board.height === "number" && Number.isFinite(board.height) ? board.height : undefined;
+      if (!width || !height) return;
+      const milestoneId = getTaskScopeMilestoneId(scopeKey);
+      if (milestoneId && validMilestoneIds.size > 0 && !validMilestoneIds.has(milestoneId)) {
+        didMigrateTaskArchive = true;
+        return;
+      }
+      boardByScope[scopeKey] = { width, height };
+    };
+
+    const mergeTaskLinksScope = (scopeKey: string, links: any) => {
+      if (!Array.isArray(links)) return;
+      const milestoneId = getTaskScopeMilestoneId(scopeKey);
+      if (milestoneId && validMilestoneIds.size > 0 && !validMilestoneIds.has(milestoneId)) {
+        didMigrateTaskArchive = true;
+        return;
+      }
+      taskLinksByScope[scopeKey] = links
+        .filter((link) => link && typeof link.from === "string" && typeof link.to === "string")
+        .map((link) => ({ from: link.from, to: link.to }));
+    };
+
+    const normalizeTask = (
+      task: any,
+      fallbackMilestoneId: string | undefined,
+      fallbackCreatedAt: string | undefined
+    ): TaskNode | null => {
+      if (!task || typeof task !== "object") return null;
+      const title = typeof task.title === "string" ? task.title.trim() : "";
+      if (!title) return null;
+      const prevDescription = task.description;
+      const prevNotes = task.notes;
+      const legacyDescription = typeof task.description === "string" ? task.description.trim() : "";
+      const currentNotes = typeof task.notes === "string" ? task.notes.trim() : "";
+      const nextNotes = legacyDescription || currentNotes;
+      let linkedMilestoneId =
+        typeof task.linkedMilestoneId === "string" && task.linkedMilestoneId
+          ? task.linkedMilestoneId
+          : fallbackMilestoneId;
+      if (linkedMilestoneId && validMilestoneIds.size > 0 && !validMilestoneIds.has(linkedMilestoneId)) {
+        linkedMilestoneId = undefined;
+        didMigrateTaskArchive = true;
+      }
+      const status = task.status === "GREEN" || task.status === "YELLOW" ? task.status : "NONE";
+      const createdAt =
+        typeof task.createdAt === "string" && task.createdAt
+          ? task.createdAt
+          : fallbackCreatedAt;
+      const completedAt =
+        status === "GREEN" && typeof task.completedAt === "string" && task.completedAt
+          ? task.completedAt
+          : undefined;
+      if (prevDescription !== undefined || prevNotes !== nextNotes) {
+        didNormalizeTaskNotes = true;
+      }
+      return {
+        id: typeof task.id === "string" && task.id ? task.id : makeId("task"),
+        title,
+        notes: nextNotes || undefined,
+        boardX: typeof task.boardX === "number" && Number.isFinite(task.boardX) ? task.boardX : undefined,
+        boardY: typeof task.boardY === "number" && Number.isFinite(task.boardY) ? task.boardY : undefined,
+        boardW: typeof task.boardW === "number" && Number.isFinite(task.boardW) ? task.boardW : undefined,
+        boardH: typeof task.boardH === "number" && Number.isFinite(task.boardH) ? task.boardH : undefined,
+        parentId: typeof task.parentId === "string" && task.parentId ? task.parentId : null,
+        status,
+        linkedMilestoneId,
+        createdAt,
+        completedAt,
+      };
+    };
+
+    const mergeTaskList = (
+      tasks: any,
+      fallbackMilestoneId: string | undefined,
+      fallbackCreatedAt: string | undefined
+    ) => {
+      if (!Array.isArray(tasks)) return;
+      tasks.forEach((task) => {
+        const normalized = normalizeTask(task, fallbackMilestoneId, fallbackCreatedAt);
+        if (!normalized) return;
+        const scopeKey = getTaskScopeKey(normalized.linkedMilestoneId);
+        const byId = taskMapsByScope.get(scopeKey) ?? new Map<string, TaskNode>();
+        const existing = byId.get(normalized.id);
+        byId.set(normalized.id, {
+          ...existing,
+          ...normalized,
+          createdAt: existing?.createdAt ?? normalized.createdAt,
+          completedAt:
+            normalized.status === "GREEN"
+              ? normalized.completedAt ?? existing?.completedAt
+              : undefined,
+        });
+        taskMapsByScope.set(scopeKey, byId);
+      });
+    };
 
     // v4 migration: Add meetings array if not present
     if (!parsed.meetings) {
@@ -80,8 +205,24 @@ export function loadState(): AppStateV0 {
       }
     }
 
+    if (!parsed.taskArchive || typeof parsed.taskArchive !== "object") {
+      parsed.taskArchive = createEmptyTaskArchive();
+      didMigrateTaskArchive = true;
+    }
+
+    const existingArchive = parsed.taskArchive ?? createEmptyTaskArchive();
+    mergeTaskList(existingArchive.standaloneTasks, undefined, undefined);
+    Object.entries(existingArchive.tasksByMilestoneId ?? {}).forEach(([milestoneId, tasks]) => {
+      mergeTaskList(tasks, milestoneId, undefined);
+    });
+    Object.entries(existingArchive.boardByScope ?? {}).forEach(([scopeKey, board]) => {
+      mergeBoardScope(scopeKey, board);
+    });
+    Object.entries(existingArchive.taskLinksByScope ?? {}).forEach(([scopeKey, links]) => {
+      mergeTaskLinksScope(scopeKey, links);
+    });
+
     // v8 migration: Remove legacy snapshot fields + add explicit month pins
-    const validMilestoneIds = new Set<string>(parsed.grandPlan?.milestones?.map((m) => m.id) ?? []);
     for (const plan of Object.values(parsed.months ?? {})) {
       if (!plan || typeof plan !== "object") continue;
 
@@ -138,7 +279,61 @@ export function loadState(): AppStateV0 {
           }
         });
       }
+
+      if (Array.isArray((plan as any).tasks) && (plan as any).tasks.length > 0) {
+        mergeTaskList((plan as any).tasks, undefined, plan.createdAt);
+        didMigrateTaskArchive = true;
+      }
+
+      Object.entries((plan as any).boardByScope ?? {}).forEach(([scopeKey, board]) => {
+        mergeBoardScope(scopeKey, board);
+        didMigrateTaskArchive = true;
+      });
+
+      Object.entries((plan as any).taskLinksByScope ?? {}).forEach(([scopeKey, links]) => {
+        mergeTaskLinksScope(scopeKey, links);
+        didMigrateTaskArchive = true;
+      });
+
+      if ((plan as any).stashedByMilestone && typeof (plan as any).stashedByMilestone === "object") {
+        Object.entries((plan as any).stashedByMilestone).forEach(([milestoneId, bucket]: [string, any]) => {
+          mergeTaskList(bucket?.tasks, milestoneId, plan.createdAt);
+          mergeBoardScope(getTaskScopeKey(milestoneId), bucket?.board);
+          mergeTaskLinksScope(getTaskScopeKey(milestoneId), bucket?.links);
+          didMigrateTaskArchive = true;
+        });
+      }
+
+      if ("tasks" in (plan as any)) {
+        delete (plan as any).tasks;
+        didMigrateTaskArchive = true;
+      }
+      if ("boardByScope" in (plan as any)) {
+        delete (plan as any).boardByScope;
+        didMigrateTaskArchive = true;
+      }
+      if ("taskLinksByScope" in (plan as any)) {
+        delete (plan as any).taskLinksByScope;
+        didMigrateTaskArchive = true;
+      }
+      if ("stashedByMilestone" in (plan as any)) {
+        delete (plan as any).stashedByMilestone;
+        didMigrateTaskArchive = true;
+      }
     }
+
+    const nextTasksByMilestoneId: Record<string, TaskNode[]> = {};
+    taskMapsByScope.forEach((tasksById, scopeKey) => {
+      const tasks = Array.from(tasksById.values());
+      const milestoneId = getTaskScopeMilestoneId(scopeKey);
+      if (milestoneId) nextTasksByMilestoneId[milestoneId] = tasks;
+    });
+    parsed.taskArchive = {
+      standaloneTasks: Array.from(taskMapsByScope.get("standalone")?.values() ?? []),
+      tasksByMilestoneId: nextTasksByMilestoneId,
+      boardByScope,
+      taskLinksByScope,
+    };
 
     if (parsed.grandPlan?.milestones) {
       parsed.grandPlan.milestones.forEach((m) => {
@@ -146,6 +341,10 @@ export function loadState(): AppStateV0 {
           m.completedAt = m.createdAt;
         }
       });
+    }
+
+    if (didNormalizeTaskNotes || didMigrateTaskArchive) {
+      saveState(parsed);
     }
 
     return parsed;
@@ -210,24 +409,187 @@ export function ymFromDate(date: DateISO): YM {
   return date.slice(0, 7) as YM;
 }
 
-export function addTaskToMonth(
-  state: AppStateV0,
-  ym: YM,
-  title: string,
-  parentId: string | null
-): { state: AppStateV0; task: TaskNode } | { state: AppStateV0; task: undefined } {
-  const plan = getMonth(state, ym);
-  if (!plan) return { state, task: undefined };
+export function getTaskArchive(state: AppStateV0): TaskArchive {
+  return state.taskArchive ?? createEmptyTaskArchive();
+}
 
+function setTaskBucket(
+  archive: TaskArchive,
+  milestoneId: string | undefined,
+  tasks: TaskNode[]
+): TaskArchive {
+  const normalized = tasks.map((task) => ({
+    ...task,
+    linkedMilestoneId: milestoneId,
+  }));
+
+  if (milestoneId) {
+    const nextByMilestoneId = { ...archive.tasksByMilestoneId };
+    if (normalized.length > 0) nextByMilestoneId[milestoneId] = normalized;
+    else delete nextByMilestoneId[milestoneId];
+    return { ...archive, tasksByMilestoneId: nextByMilestoneId };
+  }
+
+  return {
+    ...archive,
+    standaloneTasks: normalized.map((task) => ({ ...task, linkedMilestoneId: undefined })),
+  };
+}
+
+function updateTaskArchive(
+  state: AppStateV0,
+  updater: (archive: TaskArchive) => TaskArchive
+): AppStateV0 {
+  return {
+    ...state,
+    taskArchive: updater(getTaskArchive(state)),
+  };
+}
+
+function findTaskBucketById(
+  archive: TaskArchive,
+  taskId: string
+): { milestoneId: string | undefined; tasks: TaskNode[]; task: TaskNode } | undefined {
+  const standaloneTask = archive.standaloneTasks.find((task) => task.id === taskId);
+  if (standaloneTask) {
+    return { milestoneId: undefined, tasks: archive.standaloneTasks, task: standaloneTask };
+  }
+
+  for (const [milestoneId, tasks] of Object.entries(archive.tasksByMilestoneId)) {
+    const task = tasks.find((candidate) => candidate.id === taskId);
+    if (task) return { milestoneId, tasks, task };
+  }
+
+  return undefined;
+}
+
+export function getAllTasks(state: AppStateV0): TaskNode[] {
+  const archive = getTaskArchive(state);
+  return [
+    ...archive.standaloneTasks,
+    ...Object.values(archive.tasksByMilestoneId).flat(),
+  ];
+}
+
+export function getTaskById(state: AppStateV0, taskId: string): TaskNode | undefined {
+  const archive = getTaskArchive(state);
+  return findTaskBucketById(archive, taskId)?.task;
+}
+
+export function getTasksForMilestone(state: AppStateV0, milestoneId: string): TaskNode[] {
+  return getTaskArchive(state).tasksByMilestoneId[milestoneId] ?? [];
+}
+
+export function getStandaloneTasks(state: AppStateV0): TaskNode[] {
+  return getTaskArchive(state).standaloneTasks;
+}
+
+export function getTasksForMonth(state: AppStateV0, ym: YM): TaskNode[] {
+  const plan = getMonth(state, ym);
+  if (!plan) return [];
+
+  const archive = getTaskArchive(state);
+  const ordered: TaskNode[] = [];
+  const seen = new Set<string>();
+  const push = (task: TaskNode) => {
+    if (seen.has(task.id)) return;
+    seen.add(task.id);
+    ordered.push(task);
+  };
+
+  archive.standaloneTasks.forEach(push);
+  (plan.pinnedMilestoneIds ?? []).forEach((milestoneId) => {
+    (archive.tasksByMilestoneId[milestoneId] ?? []).forEach(push);
+  });
+
+  return ordered;
+}
+
+export function getTaskBoardForScope(
+  state: AppStateV0,
+  scopeKey: string
+): { width: number; height: number } | undefined {
+  return getTaskArchive(state).boardByScope[scopeKey];
+}
+
+export function getTaskLinksForScope(
+  state: AppStateV0,
+  scopeKey: string
+): { from: string; to: string }[] {
+  return getTaskArchive(state).taskLinksByScope[scopeKey] ?? [];
+}
+
+export function updateTaskBoardForScope(
+  state: AppStateV0,
+  scopeKey: string,
+  board: { width: number; height: number }
+): AppStateV0 {
+  return updateTaskArchive(state, (archive) => ({
+    ...archive,
+    boardByScope: { ...archive.boardByScope, [scopeKey]: board },
+  }));
+}
+
+export function updateTaskLinksForScope(
+  state: AppStateV0,
+  scopeKey: string,
+  links: { from: string; to: string }[]
+): AppStateV0 {
+  return updateTaskArchive(state, (archive) => ({
+    ...archive,
+    taskLinksByScope: { ...archive.taskLinksByScope, [scopeKey]: links },
+  }));
+}
+
+export function addStandaloneTask(
+  state: AppStateV0,
+  title: string,
+  parentId: string | null = null,
+  notes?: string
+): { state: AppStateV0; task: TaskNode } {
   const task: TaskNode = {
     id: makeId("task"),
     title,
+    notes: notes?.trim() || undefined,
     parentId,
     status: "NONE",
+    createdAt: getVirtualTimestamp(),
   };
 
-  const nextPlan: MonthPlan = { ...plan, tasks: [...plan.tasks, task] };
-  return { state: upsertMonth(state, nextPlan), task };
+  return {
+    state: updateTaskArchive(state, (archive) => ({
+      ...archive,
+      standaloneTasks: [...archive.standaloneTasks, task],
+    })),
+    task,
+  };
+}
+
+export function addTaskWithMilestone(
+  state: AppStateV0,
+  title: string,
+  milestoneId: string,
+  parentId: string | null = null,
+  notes?: string
+): { state: AppStateV0; task: TaskNode } {
+  const archive = getTaskArchive(state);
+  const existingTasks = archive.tasksByMilestoneId[milestoneId] ?? [];
+  const task: TaskNode = {
+    id: makeId("task"),
+    title,
+    notes: notes?.trim() || undefined,
+    parentId,
+    status: "NONE",
+    linkedMilestoneId: milestoneId,
+    createdAt: getVirtualTimestamp(),
+  };
+
+  return {
+    state: updateTaskArchive(state, (current) =>
+      setTaskBucket(current, milestoneId, [...existingTasks, task])
+    ),
+    task,
+  };
 }
 
 export function setDayTasks(
@@ -245,17 +607,15 @@ export function setDayTasks(
   return updateDay(withDay, { ...day, primaryTaskId: primary, secondaryTaskIds: secondary });
 }
 
-export function applyStatusToMonth(
+export function applyTaskStatus(
   state: AppStateV0,
-  ym: YM,
   taskId: string,
   outcome: "COMPLETED" | "NOT_COMPLETED" | undefined
 ): AppStateV0 {
-  const plan = getMonth(state, ym);
-  if (!plan) return state;
-
-  const existing = plan.tasks.find((t) => t.id === taskId);
-  if (!existing) return state;
+  const archive = getTaskArchive(state);
+  const existingBucket = findTaskBucketById(archive, taskId);
+  if (!existingBucket) return state;
+  const existing = existingBucket.task;
 
   // v2: Toggle behavior - clicking the same outcome reverts to NONE
   const nextStatus =
@@ -267,12 +627,19 @@ export function applyStatusToMonth(
 
   if (nextStatus === existing.status) return state;
 
-  const nextPlan: MonthPlan = {
-    ...plan,
-    tasks: plan.tasks.map((t) => (t.id === taskId ? { ...t, status: nextStatus } : t)),
-  };
-
-  let nextState = upsertMonth(state, nextPlan);
+  const now = getVirtualTimestamp();
+  const nextTasks = existingBucket.tasks.map((task) =>
+    task.id === taskId
+      ? {
+          ...task,
+          status: nextStatus,
+          completedAt: nextStatus === "GREEN" ? task.completedAt ?? now : undefined,
+        }
+      : task
+  );
+  let nextState = updateTaskArchive(state, (current) =>
+    setTaskBucket(current, existingBucket.milestoneId, nextTasks)
+  );
 
   // v6.2: Auto-progress milestone to IN_PROGRESS when a task is marked
   if (existing.linkedMilestoneId && nextState.grandPlan && (nextStatus === "GREEN" || nextStatus === "YELLOW")) {
@@ -308,7 +675,7 @@ export function setTaskOutcome(
   else delete nextMap[taskId];
 
   let next = updateDay(withDay, { ...day, outcomeByTaskId: nextMap });
-  next = applyStatusToMonth(next, ym, taskId, outcome);
+  next = applyTaskStatus(next, taskId, outcome);
   return next;
 }
 
@@ -360,34 +727,36 @@ export function setFocusTemplateMilestoneForDay(
 
 // v2: Task tree editing functions
 
-export function updateTaskInMonth(
+export function updateTask(
   state: AppStateV0,
-  ym: YM,
   taskId: string,
-  updates: Partial<Pick<TaskNode, "title" | "description" | "notes" | "boardX" | "boardY" | "boardW" | "boardH" | "parentId" | "status">>
+  updates: Partial<Pick<TaskNode, "title" | "notes" | "boardX" | "boardY" | "boardW" | "boardH" | "parentId" | "status">>
 ): AppStateV0 {
-  const plan = getMonth(state, ym);
-  if (!plan) return state;
+  const archive = getTaskArchive(state);
+  const existingBucket = findTaskBucketById(archive, taskId);
+  if (!existingBucket) return state;
 
-  const nextTasks = plan.tasks.map((t) => (t.id === taskId ? { ...t, ...updates } : t));
-  return upsertMonth(state, { ...plan, tasks: nextTasks });
+  const nextTasks = existingBucket.tasks.map((task) => (task.id === taskId ? { ...task, ...updates } : task));
+  return updateTaskArchive(state, (current) =>
+    setTaskBucket(current, existingBucket.milestoneId, nextTasks)
+  );
 }
 
-export function deleteTaskFromMonth(
+export function deleteTask(
   state: AppStateV0,
-  ym: YM,
   taskId: string,
   cascadeChildren: boolean = true
 ): AppStateV0 {
-  const plan = getMonth(state, ym);
-  if (!plan) return state;
+  const archive = getTaskArchive(state);
+  const existingBucket = findTaskBucketById(archive, taskId);
+  if (!existingBucket) return state;
 
   let toDelete = new Set([taskId]);
 
   if (cascadeChildren) {
     // Find all descendants recursively
     const findChildren = (parentId: string) => {
-      plan.tasks.forEach((t) => {
+      existingBucket.tasks.forEach((t) => {
         if (t.parentId === parentId && !toDelete.has(t.id)) {
           toDelete.add(t.id);
           findChildren(t.id);
@@ -397,24 +766,37 @@ export function deleteTaskFromMonth(
     findChildren(taskId);
   }
 
-  const nextTasks = plan.tasks.filter((t) => !toDelete.has(t.id));
-  return upsertMonth(state, { ...plan, tasks: nextTasks });
+  const nextTasks = existingBucket.tasks.filter((t) => !toDelete.has(t.id));
+  const nextLinks = (archive.taskLinksByScope[getTaskScopeKey(existingBucket.milestoneId)] ?? []).filter(
+    (link) => !toDelete.has(link.from) && !toDelete.has(link.to)
+  );
+
+  return updateTaskArchive(state, (current) => {
+    const nextArchive = setTaskBucket(current, existingBucket.milestoneId, nextTasks);
+    return {
+      ...nextArchive,
+      taskLinksByScope: {
+        ...nextArchive.taskLinksByScope,
+        [getTaskScopeKey(existingBucket.milestoneId)]: nextLinks,
+      },
+    };
+  });
 }
 
-export function reorderTaskInMonth(
+export function reorderTask(
   state: AppStateV0,
-  ym: YM,
   taskId: string,
   direction: "up" | "down"
 ): AppStateV0 {
-  const plan = getMonth(state, ym);
-  if (!plan) return state;
+  const archive = getTaskArchive(state);
+  const existingBucket = findTaskBucketById(archive, taskId);
+  if (!existingBucket) return state;
 
-  const task = plan.tasks.find((t) => t.id === taskId);
+  const task = existingBucket.tasks.find((candidate) => candidate.id === taskId);
   if (!task) return state;
 
   // Get siblings (tasks with same parentId)
-  const siblings = plan.tasks.filter((t) => t.parentId === task.parentId);
+  const siblings = existingBucket.tasks.filter((t) => t.parentId === task.parentId);
   const currentIndex = siblings.findIndex((t) => t.id === taskId);
 
   if (currentIndex === -1) return state;
@@ -425,7 +807,7 @@ export function reorderTaskInMonth(
   const swapTask = siblings[newIndex];
 
   // Swap positions by reordering the entire tasks array
-  const nextTasks = plan.tasks.map((t) => {
+  const nextTasks = existingBucket.tasks.map((t) => {
     if (t.id === taskId) return { ...t };
     if (t.id === swapTask.id) return { ...t };
     return t;
@@ -437,29 +819,31 @@ export function reorderTaskInMonth(
 
   [nextTasks[taskFullIndex], nextTasks[swapFullIndex]] = [nextTasks[swapFullIndex], nextTasks[taskFullIndex]];
 
-  return upsertMonth(state, { ...plan, tasks: nextTasks });
+  return updateTaskArchive(state, (current) =>
+    setTaskBucket(current, existingBucket.milestoneId, nextTasks)
+  );
 }
 
-export function moveTaskInMonth(
+export function moveTask(
   state: AppStateV0,
-  ym: YM,
   taskId: string,
   newParentId: string | null
 ): AppStateV0 {
-  const plan = getMonth(state, ym);
-  if (!plan) return state;
+  const archive = getTaskArchive(state);
+  const existingBucket = findTaskBucketById(archive, taskId);
+  if (!existingBucket) return state;
 
   // Prevent moving a task to be a child of itself or its descendants
   if (newParentId) {
     let checkParent: string | null = newParentId;
     while (checkParent) {
       if (checkParent === taskId) return state; // Circular reference detected
-      const parent = plan.tasks.find((t) => t.id === checkParent);
+      const parent = existingBucket.tasks.find((t) => t.id === checkParent);
       checkParent = parent?.parentId ?? null;
     }
   }
 
-  return updateTaskInMonth(state, ym, taskId, { parentId: newParentId });
+  return updateTask(state, taskId, { parentId: newParentId });
 }
 
 // v2: Utility functions
@@ -486,11 +870,18 @@ export function activateWorkingDay(state: AppStateV0, date: DateISO): AppStateV0
 }
 
 // v4: Close/Reopen day functionality
-function endOfDayTimestamp(date: DateISO): string {
+function localTimestampForDate(date: DateISO, hours: number, minutes: number, seconds = 0): string {
   const [y, m, d] = date.split("-").map((part) => Number(part));
   if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return getVirtualTimestamp();
-  const end = new Date(y, m - 1, d, 23, 59, 59, 0);
-  return end.toISOString();
+  return new Date(y, m - 1, d, hours, minutes, seconds, 0).toISOString();
+}
+
+function endOfDayTimestamp(date: DateISO): string {
+  return localTimestampForDate(date, 23, 59, 59);
+}
+
+function defaultStartedAtTimestamp(date: DateISO): string {
+  return localTimestampForDate(date, 9, 0, 0);
 }
 
 export function closeDay(state: AppStateV0, date: DateISO): AppStateV0 {
@@ -499,7 +890,9 @@ export function closeDay(state: AppStateV0, date: DateISO): AppStateV0 {
 
   if (day.isClosed) return withDay;
 
-  const endedAt = getVirtualTimestamp();
+  const isPastDate = date < getTodayDate();
+  const endedAt = isPastDate ? endOfDayTimestamp(date) : getVirtualTimestamp();
+  const autoClosed = isPastDate;
 
   // End any active session before closing
   let next = withDay;
@@ -512,7 +905,13 @@ export function closeDay(state: AppStateV0, date: DateISO): AppStateV0 {
     }
   }
 
-  const updated = updateDay(next, { ...day, isClosed: true, activeSessionId: undefined, endedAt, autoClosed: false });
+  const updated = updateDay(next, {
+    ...day,
+    isClosed: true,
+    activeSessionId: undefined,
+    endedAt,
+    autoClosed,
+  });
   const hasEndedEvent = Array.isArray(day.events)
     ? day.events.some((e) => e.kind === "SYSTEM" && e.text === "Day ended")
     : false;
@@ -543,7 +942,13 @@ export function autoCloseDay(state: AppStateV0, date: DateISO): AppStateV0 {
     }
   }
 
-  const updated = updateDay(next, { ...day, isClosed: true, activeSessionId: undefined, endedAt, autoClosed: true });
+  const updated = updateDay(next, {
+    ...day,
+    isClosed: true,
+    activeSessionId: undefined,
+    endedAt,
+    autoClosed: true,
+  });
   const hasEndedEvent = Array.isArray(day.events)
     ? day.events.some((e) => e.kind === "SYSTEM" && e.text === "Day ended")
     : false;
@@ -563,7 +968,27 @@ export function reopenDay(state: AppStateV0, date: DateISO): AppStateV0 {
   const cleanedEvents = Array.isArray(day.events)
     ? day.events.filter((e) => !(e.kind === "SYSTEM" && e.text === "Day ended"))
     : day.events;
-  return updateDay(withDay, { ...day, isClosed: false, endedAt: undefined, autoClosed: false, events: cleanedEvents });
+  return updateDay(withDay, {
+    ...day,
+    isClosed: false,
+    endedAt: undefined,
+    autoClosed: false,
+    events: cleanedEvents,
+  });
+}
+
+export function preparePastDayForEditing(state: AppStateV0, date: DateISO): AppStateV0 {
+  const ym = ymFromDate(date);
+  const reopened = reopenMonth(state, ym);
+  const { state: withDay, day } = getOrCreateDay(reopened, date, ym);
+  return updateDay(withDay, {
+    ...day,
+    isWorkingDay: true,
+    startedAt: day.startedAt ?? defaultStartedAtTimestamp(date),
+    isClosed: true,
+    endedAt: day.endedAt ?? endOfDayTimestamp(date),
+    autoClosed: day.endedAt ? !!day.autoClosed : true,
+  });
 }
 
 // v5: Close/Reopen month functionality
@@ -1063,14 +1488,15 @@ export function updateGrandPlan(
 }
 
 export function deleteGrandPlan(state: AppStateV0): AppStateV0 {
-  // v6.1: Clean up linkedMilestoneId from all tasks in all months
+  const milestoneIds = new Set(state.grandPlan?.milestones.map((milestone) => milestone.id) ?? []);
   const cleanedMonths: Record<string, MonthPlan> = {};
   for (const [ym, plan] of Object.entries(state.months)) {
-    const cleanedTasks = plan.tasks.map((t) => {
-      const { linkedMilestoneId, ...rest } = t;
-      return rest as TaskNode;
-    });
-    cleanedMonths[ym] = { ...plan, tasks: cleanedTasks, pinnedMilestoneIds: [], primaryMilestoneId: undefined };
+    cleanedMonths[ym] = {
+      ...plan,
+      templates: plan.templates.map((template) => ({ ...template, linkedMilestoneId: null })),
+      pinnedMilestoneIds: [],
+      primaryMilestoneId: undefined,
+    };
   }
 
   const cleanedDays: Record<string, DayEntry> = {};
@@ -1082,7 +1508,39 @@ export function deleteGrandPlan(state: AppStateV0): AppStateV0 {
     cleanedDays[date] = { ...day, focusMilestoneByTemplateId: undefined };
   }
 
-  return { ...state, grandPlan: undefined, months: cleanedMonths, days: cleanedDays };
+  return {
+    ...state,
+    grandPlan: undefined,
+    months: cleanedMonths,
+    taskArchive: moveMilestoneTasksToStandalone(getTaskArchive(state), milestoneIds),
+    days: cleanedDays,
+  };
+}
+
+function moveMilestoneTasksToStandalone(archive: TaskArchive, milestoneIds: Set<string>): TaskArchive {
+  if (milestoneIds.size === 0) return archive;
+
+  const nextStandaloneById = new Map(archive.standaloneTasks.map((task) => [task.id, task] as const));
+  const nextTasksByMilestoneId = { ...archive.tasksByMilestoneId };
+  const nextBoardByScope = { ...archive.boardByScope };
+  const nextTaskLinksByScope = { ...archive.taskLinksByScope };
+
+  milestoneIds.forEach((milestoneId) => {
+    (archive.tasksByMilestoneId[milestoneId] ?? []).forEach((task) => {
+      nextStandaloneById.set(task.id, { ...task, linkedMilestoneId: undefined });
+    });
+    delete nextTasksByMilestoneId[milestoneId];
+    delete nextBoardByScope[getTaskScopeKey(milestoneId)];
+    delete nextTaskLinksByScope[getTaskScopeKey(milestoneId)];
+  });
+
+  return {
+    ...archive,
+    standaloneTasks: Array.from(nextStandaloneById.values()),
+    tasksByMilestoneId: nextTasksByMilestoneId,
+    boardByScope: nextBoardByScope,
+    taskLinksByScope: nextTaskLinksByScope,
+  };
 }
 
 // Category CRUD
@@ -1133,17 +1591,8 @@ export function deleteCategory(state: AppStateV0, categoryId: string): AppStateV
     state.grandPlan.milestones.filter((m) => m.categoryId === categoryId).map((m) => m.id)
   );
 
-  // v6.1: Clean up linkedMilestoneId from tasks linked to deleted milestones
-  // v6.3: Also unlink templates (set to null = standalone)
   const cleanedMonths: Record<string, MonthPlan> = {};
   for (const [ym, plan] of Object.entries(state.months)) {
-    const cleanedTasks = plan.tasks.map((t) => {
-      if (t.linkedMilestoneId && milestoneIds.has(t.linkedMilestoneId)) {
-        const { linkedMilestoneId, ...rest } = t;
-        return rest as TaskNode;
-      }
-      return t;
-    });
     const cleanedTemplates = plan.templates.map((t) => {
       if (t.linkedMilestoneId && milestoneIds.has(t.linkedMilestoneId)) {
         return { ...t, linkedMilestoneId: null };
@@ -1156,7 +1605,6 @@ export function deleteCategory(state: AppStateV0, categoryId: string): AppStateV
       : nextPinned[0];
     cleanedMonths[ym] = {
       ...plan,
-      tasks: cleanedTasks,
       templates: cleanedTemplates,
       pinnedMilestoneIds: nextPinned,
       primaryMilestoneId: nextPrimary,
@@ -1180,6 +1628,7 @@ export function deleteCategory(state: AppStateV0, categoryId: string): AppStateV
   return {
     ...state,
     months: cleanedMonths,
+    taskArchive: moveMilestoneTasksToStandalone(getTaskArchive(state), milestoneIds),
     days: cleanedDays,
     grandPlan: {
       ...state.grandPlan,
@@ -1320,17 +1769,8 @@ export function deleteMilestone(state: AppStateV0, milestoneId: string, cascadeC
         .sort((a, b) => a.order - b.order);
   const promotedId = children.length > 0 ? children[0].id : null;
 
-  // v6.1: Clean up linkedMilestoneId from tasks linked to deleted milestones
-  // v6.3: Also unlink templates (set to null = standalone)
   const cleanedMonths: Record<string, MonthPlan> = {};
   for (const [ym, plan] of Object.entries(state.months)) {
-    const cleanedTasks = plan.tasks.map((t) => {
-      if (t.linkedMilestoneId && toDelete.has(t.linkedMilestoneId)) {
-        const { linkedMilestoneId, ...rest } = t;
-        return rest as TaskNode;
-      }
-      return t;
-    });
     const cleanedTemplates = plan.templates.map((t) => {
       if (t.linkedMilestoneId && toDelete.has(t.linkedMilestoneId)) {
         return { ...t, linkedMilestoneId: null };
@@ -1343,7 +1783,6 @@ export function deleteMilestone(state: AppStateV0, milestoneId: string, cascadeC
       : nextPinned[0];
     cleanedMonths[ym] = {
       ...plan,
-      tasks: cleanedTasks,
       templates: cleanedTemplates,
       pinnedMilestoneIds: nextPinned,
       primaryMilestoneId: nextPrimary,
@@ -1367,6 +1806,7 @@ export function deleteMilestone(state: AppStateV0, milestoneId: string, cascadeC
   return {
     ...state,
     months: cleanedMonths,
+    taskArchive: moveMilestoneTasksToStandalone(getTaskArchive(state), toDelete),
     days: cleanedDays,
     grandPlan: {
       ...state.grandPlan,
@@ -1419,34 +1859,6 @@ export function reorderMilestone(state: AppStateV0, milestoneId: string, directi
   };
 }
 
-// v6.1: Task with milestone linking
-
-export function addTaskWithMilestone(
-  state: AppStateV0,
-  ym: YM,
-  title: string,
-  milestoneId: string,
-  parentId: string | null = null,
-  description?: string
-): { state: AppStateV0; task: TaskNode } | { state: AppStateV0; task: undefined } {
-  const plan = getMonth(state, ym);
-  if (!plan) return { state, task: undefined };
-
-  const task: TaskNode = {
-    id: makeId("task"),
-    title,
-    description: description?.trim() || undefined,
-    parentId,
-    status: "NONE",
-    linkedMilestoneId: milestoneId,
-  };
-
-  const pinned = Array.isArray(plan.pinnedMilestoneIds) ? plan.pinnedMilestoneIds : [];
-  const nextPinned = pinned.includes(milestoneId) ? pinned : [...pinned, milestoneId];
-  const nextPlan: MonthPlan = { ...plan, tasks: [...plan.tasks, task], pinnedMilestoneIds: nextPinned };
-  return { state: upsertMonth(state, nextPlan), task };
-}
-
 export function getMilestonesInMonth(state: AppStateV0, ym: YM): MilestoneNode[] {
   const plan = getMonth(state, ym);
   if (!plan || !state.grandPlan) return [];
@@ -1467,22 +1879,7 @@ export function getMilestonesInMonth(state: AppStateV0, ym: YM): MilestoneNode[]
   // Prefer explicit month pins first (in user order)
   (plan.pinnedMilestoneIds ?? []).forEach((id) => push(id));
 
-  // Also include any milestones referenced by tasks (legacy / safety)
-  plan.tasks.forEach((t) => push(t.linkedMilestoneId));
-
   return orderedIds.map((id) => byId.get(id)!).filter(Boolean);
-}
-
-export function getTasksForMilestone(state: AppStateV0, ym: YM, milestoneId: string): TaskNode[] {
-  const plan = getMonth(state, ym);
-  if (!plan) return [];
-  return plan.tasks.filter((t) => t.linkedMilestoneId === milestoneId);
-}
-
-export function getStandaloneTasks(state: AppStateV0, ym: YM): TaskNode[] {
-  const plan = getMonth(state, ym);
-  if (!plan) return [];
-  return plan.tasks.filter((t) => !t.linkedMilestoneId);
 }
 
 // Validation
