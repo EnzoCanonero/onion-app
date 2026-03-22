@@ -456,6 +456,7 @@ export default function TaskSelectionModal({
                           </label>
                         );
                       })}
+                      <div aria-hidden="true" style={{ height: 28 }} />
                     </div>
                   </div>
                 )}
@@ -573,6 +574,7 @@ export default function TaskSelectionModal({
                           </label>
                         );
                       })}
+                      <div aria-hidden="true" style={{ height: 28 }} />
                     </div>
                   </div>
                 )}
