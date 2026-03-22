@@ -11,11 +11,20 @@ import {
   autoCloseMonth,
   reopenMonth,
   isMonthInGrandPlanPeriod,
+  addStandaloneTask,
   addTaskWithMilestone,
+  getAllTasks,
   getMilestonesInMonth,
-  deleteTaskFromMonth,
-  updateTaskInMonth,
-  applyStatusToMonth,
+  getStandaloneTasks,
+  getTasksForMilestone,
+  getTasksForMonth,
+  getTaskBoardForScope,
+  getTaskLinksForScope,
+  updateTaskBoardForScope,
+  updateTaskLinksForScope,
+  deleteTask,
+  updateTask,
+  applyTaskStatus,
   updateMilestone,
   getCurrentYM,
 } from "../app/storage";
@@ -89,7 +98,6 @@ function getPreviousYM(ym: YM): YM | null {
 function seedPlan(ym: YM): MonthPlan {
   return {
     ym,
-    tasks: [],
     templates: [],
     pinnedMilestoneIds: [],
     primaryMilestoneId: undefined,
@@ -146,7 +154,7 @@ function TaskGroup({
   onAddTask: (milestoneId: string | null) => void;
   onUpdateTask: (
     taskId: string,
-    updates: Partial<Pick<TaskNode, "title" | "description" | "notes" | "boardX" | "boardY" | "boardW" | "boardH">>
+    updates: Partial<Pick<TaskNode, "title" | "notes" | "boardX" | "boardY" | "boardW" | "boardH">>
   ) => void;
   onSetTaskStatus: (taskId: string, outcome: "COMPLETED" | "NOT_COMPLETED" | undefined) => void;
   onDeleteTask: (taskId: string) => void;
@@ -161,7 +169,6 @@ function TaskGroup({
 }) {
   const [taskModalTaskId, setTaskModalTaskId] = useState<string | null>(null);
   const [taskModalTitle, setTaskModalTitle] = useState("");
-  const [taskModalDescription, setTaskModalDescription] = useState("");
   const [taskModalNotes, setTaskModalNotes] = useState("");
   const [taskModalError, setTaskModalError] = useState<string | null>(null);
 
@@ -332,15 +339,13 @@ function TaskGroup({
   const openTaskModal = (task: TaskNode) => {
     setTaskModalTaskId(task.id);
     setTaskModalTitle(task.title);
-    setTaskModalDescription(task.description ?? "");
-    setTaskModalNotes(task.notes ?? "");
+    setTaskModalNotes((task.notes ?? "").trim());
     setTaskModalError(null);
   };
 
   const closeTaskModal = () => {
     setTaskModalTaskId(null);
     setTaskModalTitle("");
-    setTaskModalDescription("");
     setTaskModalNotes("");
     setTaskModalError(null);
   };
@@ -356,11 +361,9 @@ function TaskGroup({
       setTaskModalError("Title is required.");
       return;
     }
-    const nextDescription = taskModalDescription.trim();
     const nextNotes = taskModalNotes.trim();
     onUpdateTask(taskModalTaskId, {
       title: nextTitle,
-      description: nextDescription || undefined,
       notes: nextNotes || undefined,
     });
     closeTaskModal();
@@ -1449,7 +1452,7 @@ function TaskGroup({
                 const statusLabel = task.status === "GREEN" ? "Completed" : task.status === "YELLOW" ? "In Progress" : "Not Started";
                 const statusColor = task.status === "GREEN" ? "#10b981" : task.status === "YELLOW" ? "#f59e0b" : "#9ca3af";
                 const statusBgColor = task.status === "GREEN" ? "#d1fae5" : task.status === "YELLOW" ? "#fef3c7" : "#f3f4f6";
-                const description = (task.description ?? "").trim();
+                const notes = (task.notes ?? "").trim();
 
                 const isLinkSelected = isLinkMode && linkFromTaskId === task.id;
                 const isDragging = dragPreview?.taskId === task.id;
@@ -1546,8 +1549,8 @@ function TaskGroup({
                       style={{
                         marginTop: 8,
                         fontSize: 13,
-                        color: description ? "#4b5563" : "#9ca3af",
-                        fontStyle: description ? "normal" : "italic",
+                        color: notes ? "#4b5563" : "#9ca3af",
+                        fontStyle: notes ? "normal" : "italic",
                         lineHeight: 1.45,
                         display: "-webkit-box",
                         WebkitLineClamp: 4,
@@ -1556,7 +1559,7 @@ function TaskGroup({
                         whiteSpace: "pre-wrap",
                       }}
                     >
-                      {description || "Add description…"}
+                      {notes || "Add notes…"}
                     </div>
 
                     <div
@@ -1759,32 +1762,7 @@ function TaskGroup({
 
             <div style={{ marginBottom: 12 }}>
               <label style={{ display: "block", marginBottom: 6, fontWeight: 600, fontSize: 12, color: "#333" }}>
-                Short Description
-              </label>
-	              <textarea
-	                value={taskModalDescription}
-	                onChange={(e) => setTaskModalDescription(e.target.value)}
-	                readOnly={isCompleted}
-	                rows={4}
-	                style={{
-	                  width: "100%",
-	                  padding: 10,
-	                  fontSize: 13,
-	                  backgroundColor: isCompleted ? "rgba(255,255,255,0.55)" : "white",
-	                  border: `1px solid ${noteBorderColor}`,
-	                  borderRadius: 6,
-	                  boxSizing: "border-box",
-	                  outline: "none",
-	                  resize: "vertical",
-	                  fontFamily: "inherit",
-	                  cursor: isCompleted ? "default" : "text",
-	                }}
-	              />
-	            </div>
-
-            <div style={{ marginBottom: 12 }}>
-              <label style={{ display: "block", marginBottom: 6, fontWeight: 600, fontSize: 12, color: "#333" }}>
-                Notes / Comments
+                Notes
               </label>
 	              <textarea
 	                value={taskModalNotes}
@@ -2515,17 +2493,17 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
 
   const handleUpdateTask = (
     taskId: string,
-    updates: Partial<Pick<TaskNode, "title" | "description" | "notes" | "boardX" | "boardY" | "boardW" | "boardH">>
+    updates: Partial<Pick<TaskNode, "title" | "notes" | "boardX" | "boardY" | "boardW" | "boardH">>
   ) => {
-    mutate((s) => updateTaskInMonth(s, ymSafe, taskId, updates));
+    mutate((s) => updateTask(s, taskId, updates));
   };
 
   const handleDeleteTask = (taskId: string) => {
-    mutate((s) => deleteTaskFromMonth(s, ymSafe, taskId));
+    mutate((s) => deleteTask(s, taskId));
   };
 
   const handleSetTaskStatus = (taskId: string, outcome: "COMPLETED" | "NOT_COMPLETED" | undefined) => {
-    mutate((s) => applyStatusToMonth(s, ymSafe, taskId, outcome));
+    mutate((s) => applyTaskStatus(s, taskId, outcome));
   };
 
   // v8: Milestones pinned to this month (shown as "pins" at the top)
@@ -2706,83 +2684,12 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
     );
   }
 
-  // v6.1: Get standalone tasks (no linkedMilestoneId, or linked to a non-existent milestone)
-  const standaloneTasks = useMemo(() => {
-    if (!plan) return [];
-    const validMilestoneIds = new Set(
-      state.grandPlan?.milestones.map((m) => m.id) ?? []
-    );
-    return plan.tasks.filter(
-      (t) => !t.linkedMilestoneId || !validMilestoneIds.has(t.linkedMilestoneId)
-    );
-  }, [plan, state.grandPlan]);
+  const allTasks = useMemo(() => getAllTasks(state), [state]);
+  const monthTasks = useMemo(() => getTasksForMonth(state, ymSafe), [state, ymSafe]);
+  const standaloneTasks = useMemo(() => getStandaloneTasks(state), [state]);
 
   const monthWizardSteps = ["Milestones", "Focus sessions"] as const;
   const monthWizardTitle = monthWizardSteps[monthWizardStep] ?? monthWizardSteps[0];
-
-
-  // v6.1: Get tasks for a specific milestone
-  const getTasksForMilestone = (milestoneId: string) => {
-    return plan?.tasks.filter((t) => t.linkedMilestoneId === milestoneId) ?? [];
-  };
-
-  const importMilestoneBoardFromPrevious = (plan0: MonthPlan, milestoneId: string) => {
-    if (!previousPlan) return plan0;
-    if (plan0.tasks.some((t) => t.linkedMilestoneId === milestoneId)) return plan0;
-
-    const prevTasks = previousPlan.tasks.filter((t) => t.linkedMilestoneId === milestoneId);
-    if (prevTasks.length === 0) return plan0;
-
-    const scopeKey = `milestone:${milestoneId}`;
-    const nextTasks = [...plan0.tasks, ...prevTasks.map((t) => ({ ...t }))];
-    const nextBoardByScope = { ...(plan0.boardByScope ?? {}) };
-    const prevBoard = previousPlan.boardByScope?.[scopeKey];
-    if (prevBoard) nextBoardByScope[scopeKey] = { ...prevBoard };
-    const nextLinksByScope = { ...(plan0.taskLinksByScope ?? {}) };
-    const prevLinks = previousPlan.taskLinksByScope?.[scopeKey];
-    if (prevLinks) nextLinksByScope[scopeKey] = prevLinks.map((l) => ({ ...l }));
-
-    return {
-      ...plan0,
-      tasks: nextTasks,
-      boardByScope: nextBoardByScope,
-      taskLinksByScope: nextLinksByScope,
-    };
-  };
-
-  // Restore milestone board from stash (same month re-pin) or previous month (carryover)
-  const restoreOrImportMilestoneBoard = (plan0: MonthPlan, milestoneId: string) => {
-    // Already has tasks for this milestone — nothing to restore
-    if (plan0.tasks.some((t) => t.linkedMilestoneId === milestoneId)) return plan0;
-
-    // Try stash first (re-pinning within the same month)
-    const stashed = plan0.stashedByMilestone?.[milestoneId];
-    if (stashed && stashed.tasks.length > 0) {
-      const scopeKey = `milestone:${milestoneId}`;
-      const nextTasks = [...plan0.tasks, ...stashed.tasks.map((t) => ({ ...t }))];
-      const nextBoardByScope = { ...(plan0.boardByScope ?? {}) };
-      if (stashed.board) nextBoardByScope[scopeKey] = { ...stashed.board };
-      const nextLinksByScope = { ...(plan0.taskLinksByScope ?? {}) };
-      if (stashed.links) nextLinksByScope[scopeKey] = stashed.links.map((l) => ({ ...l }));
-      // Remove from stash after restoring
-      const nextStashed = { ...(plan0.stashedByMilestone ?? {}) };
-      delete nextStashed[milestoneId];
-      return {
-        ...plan0,
-        tasks: nextTasks,
-        boardByScope: nextBoardByScope,
-        taskLinksByScope: nextLinksByScope,
-        stashedByMilestone: nextStashed,
-      };
-    }
-
-    // Fall back to previous month carryover
-    if (carryoverMilestoneIds.has(milestoneId)) {
-      return importMilestoneBoardFromPrevious(plan0, milestoneId);
-    }
-
-    return plan0;
-  };
 
   // v8: Pin milestone to this month board (no automatic task creation)
   const handlePinMilestone = (milestone: MilestoneNode) => {
@@ -2795,9 +2702,7 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
         ? plan0.pinnedMilestoneIds
         : [...plan0.pinnedMilestoneIds, milestone.id];
       const nextPrimary = plan0.primaryMilestoneId ?? milestone.id;
-      let nextPlan: MonthPlan = { ...plan0, pinnedMilestoneIds: nextPinned, primaryMilestoneId: nextPrimary };
-      nextPlan = restoreOrImportMilestoneBoard(nextPlan, milestone.id);
-      let nextState = upsertMonth(s0, nextPlan);
+      let nextState = upsertMonth(s0, { ...plan0, pinnedMilestoneIds: nextPinned, primaryMilestoneId: nextPrimary });
       const m0 = nextState.grandPlan?.milestones.find((m) => m.id === milestone.id);
       if (m0 && m0.status === "NOT_STARTED") {
         nextState = updateMilestone(nextState, milestone.id, { status: "IN_PROGRESS" });
@@ -2808,7 +2713,6 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
     setShowMilestonePicker(false);
   };
 
-  // Unpin milestone from this month — stashes tasks/board so re-pinning restores them
   const handleUnpinMilestone = (milestoneId: string) => {
     if (!plan) return;
     mutate((s0) => {
@@ -2818,36 +2722,10 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
       const nextPrimary = plan0.primaryMilestoneId === milestoneId
         ? nextPinned[0] ?? undefined
         : plan0.primaryMilestoneId;
-
-      // Stash tasks and board data for this milestone
-      const scopeKey = `milestone:${milestoneId}`;
-      const stashedTasks = plan0.tasks.filter((t) => t.linkedMilestoneId === milestoneId);
-      const stashedBoard = plan0.boardByScope?.[scopeKey];
-      const stashedLinks = plan0.taskLinksByScope?.[scopeKey];
-      const nextStashed = { ...(plan0.stashedByMilestone ?? {}) };
-      if (stashedTasks.length > 0 || stashedBoard || stashedLinks) {
-        nextStashed[milestoneId] = {
-          tasks: stashedTasks.map((t) => ({ ...t })),
-          board: stashedBoard ? { ...stashedBoard } : undefined,
-          links: stashedLinks ? stashedLinks.map((l) => ({ ...l })) : undefined,
-        };
-      }
-
-      // Remove from active data
-      const nextTasks = plan0.tasks.filter((t) => t.linkedMilestoneId !== milestoneId);
-      const nextBoardByScope = { ...(plan0.boardByScope ?? {}) };
-      delete nextBoardByScope[scopeKey];
-      const nextLinksByScope = { ...(plan0.taskLinksByScope ?? {}) };
-      delete nextLinksByScope[scopeKey];
-
       return upsertMonth(s0, {
         ...plan0,
         pinnedMilestoneIds: nextPinned,
         primaryMilestoneId: nextPrimary,
-        tasks: nextTasks,
-        boardByScope: nextBoardByScope,
-        taskLinksByScope: nextLinksByScope,
-        stashedByMilestone: nextStashed,
       });
     });
     setSelectedMilestoneId((prev) => prev === milestoneId ? null : prev);
@@ -2861,9 +2739,7 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
       const nextPinned = plan0.pinnedMilestoneIds.includes(milestoneId)
         ? plan0.pinnedMilestoneIds
         : [...plan0.pinnedMilestoneIds, milestoneId];
-      let nextPlan: MonthPlan = { ...plan0, pinnedMilestoneIds: nextPinned, primaryMilestoneId: milestoneId };
-      nextPlan = restoreOrImportMilestoneBoard(nextPlan, milestoneId);
-      let nextState = upsertMonth(s0, nextPlan);
+      let nextState = upsertMonth(s0, { ...plan0, pinnedMilestoneIds: nextPinned, primaryMilestoneId: milestoneId });
       const m0 = nextState.grandPlan?.milestones.find((m) => m.id === milestoneId);
       if (m0 && m0.status === "NOT_STARTED") {
         nextState = updateMilestone(nextState, milestoneId, { status: "IN_PROGRESS" });
@@ -2892,15 +2768,11 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
     mutate((s0) => {
       const plan0 = getMonth(s0, ymSafe);
       if (!plan0) return s0;
-      let nextPlan: MonthPlan = {
+      const nextPlan: MonthPlan = {
         ...plan0,
         pinnedMilestoneIds: nextPinned,
         primaryMilestoneId: fallbackPrimary,
       };
-
-      nextPinned.forEach((milestoneId) => {
-        nextPlan = restoreOrImportMilestoneBoard(nextPlan, milestoneId);
-      });
 
       let nextState = upsertMonth(s0, nextPlan);
       nextPinned.forEach((milestoneId) => {
@@ -3041,12 +2913,12 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
   if (plan?.isClosed) {
     const grandPlan = state.grandPlan;
 
-    const tasksTotalCount = plan.tasks.length;
-    const tasksCompletedCount = plan.tasks.filter((t) => t.status === "GREEN").length;
+    const tasksTotalCount = monthTasks.length;
+    const tasksCompletedCount = monthTasks.filter((t) => t.status === "GREEN").length;
     const completionRate = tasksTotalCount > 0 ? Math.round((tasksCompletedCount / tasksTotalCount) * 100) : 0;
 
     const dates = listDatesInMonth(ymSafe);
-    const tasksById = new Map(plan.tasks.map((t) => [t.id, t] as const));
+    const tasksById = new Map(allTasks.map((t) => [t.id, t] as const));
     const templatesById = new Map(plan.templates.map((t) => [t.id, t] as const));
 
     const categoryMetas = [
@@ -3463,30 +3335,20 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
 		                  : "Standalone";
 
 		                const color = milestone ? category?.color ?? APP_MAIN_COLOR : "#000";
-		                const tasks = milestone ? getTasksForMilestone(milestone.id) : standaloneTasks;
+		                const tasks = milestone ? getTasksForMilestone(state, milestone.id) : standaloneTasks;
 
 		                const scopeKey = milestone ? `milestone:${milestone.id}` : "standalone";
 		                const zoomStorageKey = `focustree:month-setup:board-zoom:${ymSafe}:${scopeKey}`;
 		                const defaultBoardSize = { width: 2400, height: 1400 };
-		                const boardSize = plan.boardByScope?.[scopeKey] ?? defaultBoardSize;
-		                const links = plan.taskLinksByScope?.[scopeKey] ?? [];
+		                const boardSize = getTaskBoardForScope(state, scopeKey) ?? defaultBoardSize;
+		                const links = getTaskLinksForScope(state, scopeKey);
 
 	                const handleUpdateBoardSize = (next: { width: number; height: number }) => {
-	                  mutate((s0) => {
-	                    const plan0 = getMonth(s0, ymSafe);
-	                    if (!plan0) return s0;
-	                    const nextBoardByScope = { ...(plan0.boardByScope ?? {}), [scopeKey]: next };
-	                    return upsertMonth(s0, { ...plan0, boardByScope: nextBoardByScope });
-	                  });
+	                  mutate((s0) => updateTaskBoardForScope(s0, scopeKey, next));
 	                };
 
 	                const handleUpdateLinks = (next: { from: string; to: string }[]) => {
-	                  mutate((s0) => {
-	                    const plan0 = getMonth(s0, ymSafe);
-	                    if (!plan0) return s0;
-	                    const nextLinksByScope = { ...(plan0.taskLinksByScope ?? {}), [scopeKey]: next };
-	                    return upsertMonth(s0, { ...plan0, taskLinksByScope: nextLinksByScope });
-	                  });
+	                  mutate((s0) => updateTaskLinksForScope(s0, scopeKey, next));
 	                };
 
 		                return (
@@ -4501,20 +4363,17 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
                   return category?.color ?? APP_MAIN_COLOR;
                 })()}
 	              titlePlaceholder="Task title..."
-	              descriptionLabel="Short Description"
-	              descriptionPlaceholder="What needs to be done (optional)..."
+	              descriptionLabel="Notes"
+	              descriptionPlaceholder="What should be visible on this task card? (optional)..."
 	              confirmLabel="Add Task"
 	              onCancel={() => setCreatingTask(null)}
-	              onConfirm={(title, description) => {
-                  const nextDescription = description.trim() || undefined;
+	              onConfirm={(title, notes) => {
+                  const nextNotes = notes.trim() || undefined;
                   const milestoneId = creatingTask.milestoneId;
 
                   mutate((s0) => {
-                    const plan0 = getMonth(s0, ymSafe);
-                    if (!plan0) return s0;
-
                     if (milestoneId) {
-                      const result = addTaskWithMilestone(s0, ymSafe, title.trim(), milestoneId, null, nextDescription);
+                      const result = addTaskWithMilestone(s0, title.trim(), milestoneId, null, nextNotes);
                       let nextState = result.state;
                       const m0 = nextState.grandPlan?.milestones.find((m) => m.id === milestoneId);
                       if (m0 && m0.status === "NOT_STARTED") {
@@ -4523,15 +4382,7 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
                       return nextState;
                     }
 
-                    const task: TaskNode = {
-                      id: makeId("task"),
-                      title: title.trim(),
-                      description: nextDescription,
-                      parentId: null,
-                      status: "NONE",
-                    };
-
-                    return upsertMonth(s0, { ...plan0, tasks: [...plan0.tasks, task] });
+                    return addStandaloneTask(s0, title.trim(), null, nextNotes).state;
                   });
 
                   setCreatingTask(null);
