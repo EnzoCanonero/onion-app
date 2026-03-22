@@ -93,6 +93,11 @@ export type MonthPlan = {
   isClosed?: boolean; // v5: true if month is closed (read-only report mode)
   boardByScope?: Record<string, { width: number; height: number }>;
   taskLinksByScope?: Record<string, { from: string; to: string }[]>;
+  stashedByMilestone?: Record<string, {
+    tasks: TaskNode[];
+    board?: { width: number; height: number };
+    links?: { from: string; to: string }[];
+  }>;
 };
 
 export type ProductivitySession = {

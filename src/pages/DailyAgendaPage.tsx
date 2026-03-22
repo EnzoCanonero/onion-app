@@ -172,6 +172,7 @@ function DailyAgendaPageContent({
 
   const [tick, setTick] = useState(0);
   const [showTaskModal, setShowTaskModal] = useState(false);
+  const [hideCompletedTasks, setHideCompletedTasks] = useState(false);
   const [showStartWizard, setShowStartWizard] = useState(false);
   const [wizardStep, setWizardStep] = useState(0);
   const [showCloseModal, setShowCloseModal] = useState(false);
@@ -448,6 +449,17 @@ function DailyAgendaPageContent({
       disabled: m.status === "COMPLETED",
     }));
   }, [state, ym]);
+
+  const primaryTask = day.primaryTaskId ? tasksById.get(day.primaryTaskId) : undefined;
+  const showPrimaryTask = Boolean(day.primaryTaskId) && (!hideCompletedTasks || primaryTask?.status !== "GREEN");
+  const visibleSecondaryTaskIds = useMemo(() => {
+    return day.secondaryTaskIds.filter((id) => {
+      const task = tasksById.get(id);
+      if (!task) return false;
+      if (!hideCompletedTasks) return true;
+      return task.status !== "GREEN";
+    });
+  }, [day.secondaryTaskIds, tasksById, hideCompletedTasks]);
 
   const wizardSteps = ["Tasks", "Meetings", "Focus Sessions"] as const;
   const wizardStepTitle = wizardSteps[wizardStep] ?? wizardSteps[0];
@@ -791,6 +803,18 @@ function DailyAgendaPageContent({
         completedSessions={sessionsForDate}
         onStartSession={showSessionControls ? startSession : undefined}
         onEndSession={showSessionControls ? endSession : undefined}
+        onEditCompletedSession={(sessionId, startedAt, endedAt) =>
+          mutate((s0) => {
+            const ms = Date.parse(endedAt) - Date.parse(startedAt);
+            if (!Number.isFinite(ms) || ms <= 0) return s0;
+            const actualMinutes = Math.max(0, Math.round(ms / 60000));
+            return updateSession(s0, sessionId, {
+              startedAt,
+              endedAt,
+              actualMinutes,
+            });
+          })
+        }
         isSkipped={isSkipped}
         onToggleSkipped={() => mutate((s0) => toggleFocusTemplateSkippedForDay(s0, dateSafe, template.id))}
         onReschedule={(nextOverride) =>
@@ -1476,21 +1500,41 @@ function DailyAgendaPageContent({
           >
             <h3 style={{ margin: 0 }} data-tutorial-target="daily-plan-review">Daily Tasks</h3>
             {day.primaryTaskId ? (
-              <button
-                onClick={() => setShowTaskModal(true)}
-                style={{
-                  padding: "4px 8px",
-                  fontSize: 14,
-                  backgroundColor: "white",
-                  border: "1px solid #ddd",
-                  borderRadius: 6,
-                  cursor: "pointer",
-                  opacity: 0.9,
-                }}
-                title="Edit task selection"
-              >
-                ✏️
-              </button>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => setHideCompletedTasks((v) => !v)}
+                  style={{
+                    padding: "4px 10px",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    backgroundColor: hideCompletedTasks ? "#eef2ff" : "white",
+                    color: hideCompletedTasks ? "#3730a3" : "#444",
+                    border: "1px solid #ddd",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                    opacity: 0.95,
+                  }}
+                  title={hideCompletedTasks ? "Show completed tasks" : "Hide completed tasks"}
+                >
+                  {hideCompletedTasks ? "Show Completed" : "Hide Completed"}
+                </button>
+                <button
+                  onClick={() => setShowTaskModal(true)}
+                  style={{
+                    padding: "4px 8px",
+                    fontSize: 14,
+                    backgroundColor: "white",
+                    border: "1px solid #ddd",
+                    borderRadius: 6,
+                    cursor: "pointer",
+                    opacity: 0.9,
+                  }}
+                  title="Edit task selection"
+                >
+                  ✏️
+                </button>
+              </div>
             ) : null}
           </div>
 
@@ -1531,94 +1575,96 @@ function DailyAgendaPageContent({
             </div>
           ) : (
             <div>
-	              {/* Primary Task - Gold Rectangle */}
-	              <div
-	            style={{
-	              border: "2px solid #eee",
-	              borderLeft: `6px solid ${getCategoryMeta(state.grandPlan, tasksById.get(day.primaryTaskId)?.linkedMilestoneId).color}`,
-	              borderRadius: 12,
-	              padding: 16,
-	              marginBottom: 16,
-	              backgroundColor: "#fff8e1",
-	              boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
-	            }}
-	          >
-            <div style={{ marginBottom: 12 }}>
-	              <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 4 }}>
-	                {tasksById.get(day.primaryTaskId)?.title ?? "Unknown"}
-	              </div>
-	            </div>
+              {/* Primary Task - Gold Rectangle */}
+              {showPrimaryTask ? (
+                <div
+                  style={{
+                    border: "2px solid #eee",
+                    borderLeft: `6px solid ${getCategoryMeta(state.grandPlan, primaryTask?.linkedMilestoneId).color}`,
+                    borderRadius: 12,
+                    padding: 16,
+                    marginBottom: 16,
+                    backgroundColor: "#fff8e1",
+                    boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+                  }}
+                >
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 4 }}>
+                      {primaryTask?.title ?? "Unknown"}
+                    </div>
+                  </div>
 
-            {/* Outcome Buttons for Primary */}
-            {day.primaryTaskId && (() => {
-              const task = tasksById.get(day.primaryTaskId);
-              const isCompleted = task?.status === "GREEN";
-              const isInProgress = task?.status === "YELLOW";
-              return (
-                <div>
-                  <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6, color: "#666" }}>
-                    Update status:
-                  </div>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    <button
-                      onClick={() => setOutcome(day.primaryTaskId!, "COMPLETED")}
-                      style={{
-                        padding: "6px 12px",
-                        fontSize: 13,
-                        fontWeight: 600,
-                        backgroundColor: isCompleted ? "#4caf50" : "white",
-                        color: isCompleted ? "white" : "#4caf50",
-                        border: `2px solid #4caf50`,
-                        borderRadius: 6,
-                        cursor: "pointer",
-                      }}
-                    >
-                      ✓ Completed
-                    </button>
-                    <button
-                      onClick={() => setOutcome(day.primaryTaskId!, "NOT_COMPLETED")}
-                      style={{
-                        padding: "6px 12px",
-                        fontSize: 13,
-                        fontWeight: 600,
-                        backgroundColor: isInProgress ? "#ff9800" : "white",
-                        color: isInProgress ? "white" : "#ff9800",
-                        border: `2px solid #ff9800`,
-                        borderRadius: 6,
-                        cursor: "pointer",
-                      }}
-                    >
-                      ⏳ Work in Progress
-                    </button>
-                  </div>
+                  {/* Outcome Buttons for Primary */}
+                  {day.primaryTaskId && (() => {
+                    const task = tasksById.get(day.primaryTaskId);
+                    const isCompleted = task?.status === "GREEN";
+                    const isInProgress = task?.status === "YELLOW";
+                    return (
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6, color: "#666" }}>
+                          Update status:
+                        </div>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          <button
+                            onClick={() => setOutcome(day.primaryTaskId!, "COMPLETED")}
+                            style={{
+                              padding: "6px 12px",
+                              fontSize: 13,
+                              fontWeight: 600,
+                              backgroundColor: isCompleted ? "#4caf50" : "white",
+                              color: isCompleted ? "white" : "#4caf50",
+                              border: `2px solid #4caf50`,
+                              borderRadius: 6,
+                              cursor: "pointer",
+                            }}
+                          >
+                            ✓ Completed
+                          </button>
+                          <button
+                            onClick={() => setOutcome(day.primaryTaskId!, "NOT_COMPLETED")}
+                            style={{
+                              padding: "6px 12px",
+                              fontSize: 13,
+                              fontWeight: 600,
+                              backgroundColor: isInProgress ? "#ff9800" : "white",
+                              color: isInProgress ? "white" : "#ff9800",
+                              border: `2px solid #ff9800`,
+                              borderRadius: 6,
+                              cursor: "pointer",
+                            }}
+                          >
+                            ⏳ Work in Progress
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
-              );
-            })()}
-          </div>
+              ) : null}
 
-          {/* Secondary Tasks */}
-          {day.secondaryTaskIds.length > 0 && (
-            <div style={{ marginBottom: 16 }}>
-	              <div style={{ display: "grid", gap: 8 }}>
-                {day.secondaryTaskIds.map((id) => {
+              {/* Secondary Tasks */}
+              {visibleSecondaryTaskIds.length > 0 && (
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {visibleSecondaryTaskIds.map((id) => {
                   const task = tasksById.get(id);
                   if (!task) return null;
                   const accentColor = getCategoryMeta(state.grandPlan, task.linkedMilestoneId).color;
                   return (
                     <div
-	                      key={id}
-	                      style={{
-	                        border: "2px solid #eee",
-	                        borderLeft: `6px solid ${accentColor}`,
-	                        borderRadius: 12,
-	                        padding: 16,
-	                        backgroundColor: "rgba(255,255,255,0.92)",
-	                        boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
-	                      }}
-	                    >
-	                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-	                        <div style={{ fontWeight: 500 }}>{task.title}</div>
-	                      </div>
+                      key={id}
+                      style={{
+                        border: "2px solid #eee",
+                        borderLeft: `6px solid ${accentColor}`,
+                        borderRadius: 12,
+                        padding: 16,
+                        backgroundColor: "rgba(255,255,255,0.92)",
+                        boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                        <div style={{ fontWeight: 500 }}>{task.title}</div>
+                      </div>
 
                       {/* Outcome Buttons */}
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -1655,10 +1701,27 @@ function DailyAgendaPageContent({
                       </div>
                     </div>
                   );
-                })}
-              </div>
-            </div>
-          )}
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {hideCompletedTasks && !showPrimaryTask && visibleSecondaryTaskIds.length === 0 ? (
+                <div
+                  style={{
+                    textAlign: "center",
+                    padding: 20,
+                    backgroundColor: "white",
+                    border: "1px solid #e5e7eb",
+                    borderRadius: 12,
+                    color: "#6b7280",
+                    fontSize: 13,
+                    marginBottom: 16,
+                  }}
+                >
+                  All selected tasks are completed. Toggle "Show Completed" to view them.
+                </div>
+              ) : null}
 
             </div>
           )}

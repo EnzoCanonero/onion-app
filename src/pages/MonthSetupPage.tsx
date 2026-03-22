@@ -15,6 +15,7 @@ import {
   getMilestonesInMonth,
   deleteTaskFromMonth,
   updateTaskInMonth,
+  applyStatusToMonth,
   updateMilestone,
   getCurrentYM,
 } from "../app/storage";
@@ -104,6 +105,7 @@ type MilestoneNavigationProps = {
   primaryMilestoneId: string | null;
   onSelectMilestone: (id: string | null) => void;
   onPinMilestone?: () => void;
+  onUnpinMilestone?: (id: string) => void;
 };
 
 // Component for editing tasks under a milestone group
@@ -120,6 +122,7 @@ function TaskGroup({
   zoomStorageKey,
   onAddTask,
   onUpdateTask,
+  onSetTaskStatus,
   onDeleteTask,
   onMarkMilestoneCompleted,
   isObjective = false,
@@ -145,6 +148,7 @@ function TaskGroup({
     taskId: string,
     updates: Partial<Pick<TaskNode, "title" | "description" | "notes" | "boardX" | "boardY" | "boardW" | "boardH">>
   ) => void;
+  onSetTaskStatus: (taskId: string, outcome: "COMPLETED" | "NOT_COMPLETED" | undefined) => void;
   onDeleteTask: (taskId: string) => void;
   onMarkMilestoneCompleted?: (milestoneId: string) => void;
   isObjective?: boolean;
@@ -1089,7 +1093,7 @@ function TaskGroup({
 	                      )}
 
 	                      {/* Milestone actions - only for selected milestone */}
-	                      {milestoneNavigation.currentMilestoneId && (canSetObjective || onMarkMilestoneCompleted) && (
+	                      {milestoneNavigation.currentMilestoneId && (canSetObjective || onMarkMilestoneCompleted || milestoneNavigation.onUnpinMilestone) && (
 	                        <>
 	                          <div style={{ height: 1, backgroundColor: "#e5e7eb", margin: "8px 0" }} />
 
@@ -1180,6 +1184,45 @@ function TaskGroup({
 	                                fontSize: 11,
 	                              }}>✓</span>
 	                              <span>Mark Complete</span>
+	                            </button>
+	                          )}
+
+	                          {/* Unpin milestone */}
+	                          {milestoneNavigation.onUnpinMilestone && (
+	                            <button
+	                              onClick={() => {
+	                                milestoneNavigation.onUnpinMilestone!(milestoneNavigation.currentMilestoneId!);
+	                                setMilestoneDropdownOpen(false);
+	                              }}
+	                              style={{
+	                                width: "100%",
+	                                padding: "10px 14px",
+	                                fontSize: 12,
+	                                fontWeight: 600,
+	                                backgroundColor: "transparent",
+	                                color: "#dc2626",
+	                                border: "none",
+	                                cursor: "pointer",
+	                                display: "flex",
+	                                alignItems: "center",
+	                                gap: 10,
+	                                textAlign: "left",
+	                                transition: "background-color 0.15s ease",
+	                              }}
+	                              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "#fef2f2"}
+	                              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "transparent"}
+	                            >
+	                              <span style={{
+	                                width: 20,
+	                                height: 20,
+	                                borderRadius: 6,
+	                                backgroundColor: "#fef2f2",
+	                                display: "flex",
+	                                alignItems: "center",
+	                                justifyContent: "center",
+	                                fontSize: 11,
+	                              }}>✕</span>
+	                              <span>Unpin from Month</span>
 	                            </button>
 	                          )}
 	                        </>
@@ -1403,6 +1446,7 @@ function TaskGroup({
 	                if (!rect) return null;
 
                 const statusGlyph = task.status === "GREEN" ? "✓" : task.status === "YELLOW" ? "◐" : "○";
+                const statusLabel = task.status === "GREEN" ? "Completed" : task.status === "YELLOW" ? "In Progress" : "Not Started";
                 const statusColor = task.status === "GREEN" ? "#10b981" : task.status === "YELLOW" ? "#f59e0b" : "#9ca3af";
                 const statusBgColor = task.status === "GREEN" ? "#d1fae5" : task.status === "YELLOW" ? "#fef3c7" : "#f3f4f6";
                 const description = (task.description ?? "").trim();
@@ -1430,7 +1474,7 @@ function TaskGroup({
                       top: rect.y,
                       width: rect.w,
                       height: rect.h,
-                      padding: "14px 14px 28px",
+                      padding: "14px 14px 42px",
                       boxSizing: "border-box",
                       borderRadius: 12,
                       backgroundColor: "#ffffff",
@@ -1515,21 +1559,97 @@ function TaskGroup({
                       {description || "Add description…"}
                     </div>
 
-                    <div style={{
-                      position: "absolute",
-                      bottom: 8,
-                      left: 14,
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 4,
-                      padding: "3px 8px",
-                      borderRadius: 6,
-                      backgroundColor: statusBgColor,
-                      fontSize: 11,
-                      fontWeight: 600,
-                      color: statusColor,
-                    }}>
-                      {statusGlyph}
+                    <div
+                      style={{
+                        position: "absolute",
+                        bottom: 8,
+                        left: 14,
+                        right: 24,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: 8,
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                          padding: "3px 8px",
+                          borderRadius: 6,
+                          backgroundColor: statusBgColor,
+                          fontSize: 11,
+                          fontWeight: 700,
+                          color: statusColor,
+                          minWidth: 0,
+                        }}
+                        title={statusLabel}
+                      >
+                        <span>{statusGlyph}</span>
+                        <span
+                          style={{
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {statusLabel}
+                        </span>
+                      </div>
+
+                      {!isCompleted && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <button
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onSetTaskStatus(task.id, "COMPLETED");
+                            }}
+                            style={{
+                              width: 26,
+                              height: 26,
+                              borderRadius: 6,
+                              border: "1px solid #10b981",
+                              backgroundColor: task.status === "GREEN" ? "#10b981" : "#ffffff",
+                              color: task.status === "GREEN" ? "#ffffff" : "#10b981",
+                              cursor: "pointer",
+                              fontSize: 13,
+                              fontWeight: 800,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                            }}
+                            title={task.status === "GREEN" ? "Clear completed status" : "Mark task as completed"}
+                          >
+                            ✓
+                          </button>
+                          <button
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onSetTaskStatus(task.id, "NOT_COMPLETED");
+                            }}
+                            style={{
+                              width: 26,
+                              height: 26,
+                              borderRadius: 6,
+                              border: "1px solid #f59e0b",
+                              backgroundColor: task.status === "YELLOW" ? "#f59e0b" : "#ffffff",
+                              color: task.status === "YELLOW" ? "#ffffff" : "#f59e0b",
+                              cursor: "pointer",
+                              fontSize: 13,
+                              fontWeight: 800,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                            }}
+                            title={task.status === "YELLOW" ? "Clear work in progress status" : "Mark task as work in progress"}
+                          >
+                            ◐
+                          </button>
+                        </div>
+                      )}
                     </div>
 
                     {!isCompleted && !isLinkMode && (
@@ -2404,6 +2524,10 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
     mutate((s) => deleteTaskFromMonth(s, ymSafe, taskId));
   };
 
+  const handleSetTaskStatus = (taskId: string, outcome: "COMPLETED" | "NOT_COMPLETED" | undefined) => {
+    mutate((s) => applyStatusToMonth(s, ymSafe, taskId, outcome));
+  };
+
   // v8: Milestones pinned to this month (shown as "pins" at the top)
   const pinnedMilestones = getMilestonesInMonth(state, ymSafe);
   const pinnedIdsKey = (plan?.pinnedMilestoneIds ?? []).join("|");
@@ -2602,52 +2726,6 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
     return plan?.tasks.filter((t) => t.linkedMilestoneId === milestoneId) ?? [];
   };
 
-  // v8: Pin milestone to this month board (no automatic task creation)
-  const handlePinMilestone = (milestone: MilestoneNode) => {
-    if (!plan) return;
-    if (!selectableMilestoneIds.has(milestone.id)) return;
-    mutate((s0) => {
-      const plan0 = getMonth(s0, ymSafe);
-      if (!plan0) return s0;
-      const nextPinned = plan0.pinnedMilestoneIds.includes(milestone.id)
-        ? plan0.pinnedMilestoneIds
-        : [...plan0.pinnedMilestoneIds, milestone.id];
-      const nextPrimary = plan0.primaryMilestoneId ?? milestone.id;
-      let nextState = upsertMonth(s0, { ...plan0, pinnedMilestoneIds: nextPinned, primaryMilestoneId: nextPrimary });
-      const m0 = nextState.grandPlan?.milestones.find((m) => m.id === milestone.id);
-      if (m0 && m0.status === "NOT_STARTED") {
-        nextState = updateMilestone(nextState, milestone.id, { status: "IN_PROGRESS" });
-      }
-      return nextState;
-    });
-    setSelectedMilestoneId(milestone.id);
-    setShowMilestonePicker(false);
-  };
-
-  const handleSetObjectiveMilestone = (milestoneId: string) => {
-    if (!plan) return;
-    mutate((s0) => {
-      const plan0 = getMonth(s0, ymSafe);
-      if (!plan0) return s0;
-      const nextPinned = plan0.pinnedMilestoneIds.includes(milestoneId)
-        ? plan0.pinnedMilestoneIds
-        : [...plan0.pinnedMilestoneIds, milestoneId];
-      let nextState = upsertMonth(s0, { ...plan0, pinnedMilestoneIds: nextPinned, primaryMilestoneId: milestoneId });
-      const m0 = nextState.grandPlan?.milestones.find((m) => m.id === milestoneId);
-      if (m0 && m0.status === "NOT_STARTED") {
-        nextState = updateMilestone(nextState, milestoneId, { status: "IN_PROGRESS" });
-      }
-      return nextState;
-    });
-    setSelectedMilestoneId(milestoneId);
-  };
-
-  const closeMonthWizard = () => {
-    setShowMonthWizard(false);
-    setMonthWizardStep(0);
-    onWizardStateChange?.({ open: false, primarySelected: false, wizardStep: 0 });
-  };
-
   const importMilestoneBoardFromPrevious = (plan0: MonthPlan, milestoneId: string) => {
     if (!previousPlan) return plan0;
     if (plan0.tasks.some((t) => t.linkedMilestoneId === milestoneId)) return plan0;
@@ -2672,6 +2750,135 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
     };
   };
 
+  // Restore milestone board from stash (same month re-pin) or previous month (carryover)
+  const restoreOrImportMilestoneBoard = (plan0: MonthPlan, milestoneId: string) => {
+    // Already has tasks for this milestone — nothing to restore
+    if (plan0.tasks.some((t) => t.linkedMilestoneId === milestoneId)) return plan0;
+
+    // Try stash first (re-pinning within the same month)
+    const stashed = plan0.stashedByMilestone?.[milestoneId];
+    if (stashed && stashed.tasks.length > 0) {
+      const scopeKey = `milestone:${milestoneId}`;
+      const nextTasks = [...plan0.tasks, ...stashed.tasks.map((t) => ({ ...t }))];
+      const nextBoardByScope = { ...(plan0.boardByScope ?? {}) };
+      if (stashed.board) nextBoardByScope[scopeKey] = { ...stashed.board };
+      const nextLinksByScope = { ...(plan0.taskLinksByScope ?? {}) };
+      if (stashed.links) nextLinksByScope[scopeKey] = stashed.links.map((l) => ({ ...l }));
+      // Remove from stash after restoring
+      const nextStashed = { ...(plan0.stashedByMilestone ?? {}) };
+      delete nextStashed[milestoneId];
+      return {
+        ...plan0,
+        tasks: nextTasks,
+        boardByScope: nextBoardByScope,
+        taskLinksByScope: nextLinksByScope,
+        stashedByMilestone: nextStashed,
+      };
+    }
+
+    // Fall back to previous month carryover
+    if (carryoverMilestoneIds.has(milestoneId)) {
+      return importMilestoneBoardFromPrevious(plan0, milestoneId);
+    }
+
+    return plan0;
+  };
+
+  // v8: Pin milestone to this month board (no automatic task creation)
+  const handlePinMilestone = (milestone: MilestoneNode) => {
+    if (!plan) return;
+    if (!selectableMilestoneIds.has(milestone.id)) return;
+    mutate((s0) => {
+      const plan0 = getMonth(s0, ymSafe);
+      if (!plan0) return s0;
+      const nextPinned = plan0.pinnedMilestoneIds.includes(milestone.id)
+        ? plan0.pinnedMilestoneIds
+        : [...plan0.pinnedMilestoneIds, milestone.id];
+      const nextPrimary = plan0.primaryMilestoneId ?? milestone.id;
+      let nextPlan: MonthPlan = { ...plan0, pinnedMilestoneIds: nextPinned, primaryMilestoneId: nextPrimary };
+      nextPlan = restoreOrImportMilestoneBoard(nextPlan, milestone.id);
+      let nextState = upsertMonth(s0, nextPlan);
+      const m0 = nextState.grandPlan?.milestones.find((m) => m.id === milestone.id);
+      if (m0 && m0.status === "NOT_STARTED") {
+        nextState = updateMilestone(nextState, milestone.id, { status: "IN_PROGRESS" });
+      }
+      return nextState;
+    });
+    setSelectedMilestoneId(milestone.id);
+    setShowMilestonePicker(false);
+  };
+
+  // Unpin milestone from this month — stashes tasks/board so re-pinning restores them
+  const handleUnpinMilestone = (milestoneId: string) => {
+    if (!plan) return;
+    mutate((s0) => {
+      const plan0 = getMonth(s0, ymSafe);
+      if (!plan0) return s0;
+      const nextPinned = plan0.pinnedMilestoneIds.filter((id) => id !== milestoneId);
+      const nextPrimary = plan0.primaryMilestoneId === milestoneId
+        ? nextPinned[0] ?? undefined
+        : plan0.primaryMilestoneId;
+
+      // Stash tasks and board data for this milestone
+      const scopeKey = `milestone:${milestoneId}`;
+      const stashedTasks = plan0.tasks.filter((t) => t.linkedMilestoneId === milestoneId);
+      const stashedBoard = plan0.boardByScope?.[scopeKey];
+      const stashedLinks = plan0.taskLinksByScope?.[scopeKey];
+      const nextStashed = { ...(plan0.stashedByMilestone ?? {}) };
+      if (stashedTasks.length > 0 || stashedBoard || stashedLinks) {
+        nextStashed[milestoneId] = {
+          tasks: stashedTasks.map((t) => ({ ...t })),
+          board: stashedBoard ? { ...stashedBoard } : undefined,
+          links: stashedLinks ? stashedLinks.map((l) => ({ ...l })) : undefined,
+        };
+      }
+
+      // Remove from active data
+      const nextTasks = plan0.tasks.filter((t) => t.linkedMilestoneId !== milestoneId);
+      const nextBoardByScope = { ...(plan0.boardByScope ?? {}) };
+      delete nextBoardByScope[scopeKey];
+      const nextLinksByScope = { ...(plan0.taskLinksByScope ?? {}) };
+      delete nextLinksByScope[scopeKey];
+
+      return upsertMonth(s0, {
+        ...plan0,
+        pinnedMilestoneIds: nextPinned,
+        primaryMilestoneId: nextPrimary,
+        tasks: nextTasks,
+        boardByScope: nextBoardByScope,
+        taskLinksByScope: nextLinksByScope,
+        stashedByMilestone: nextStashed,
+      });
+    });
+    setSelectedMilestoneId((prev) => prev === milestoneId ? null : prev);
+  };
+
+  const handleSetObjectiveMilestone = (milestoneId: string) => {
+    if (!plan) return;
+    mutate((s0) => {
+      const plan0 = getMonth(s0, ymSafe);
+      if (!plan0) return s0;
+      const nextPinned = plan0.pinnedMilestoneIds.includes(milestoneId)
+        ? plan0.pinnedMilestoneIds
+        : [...plan0.pinnedMilestoneIds, milestoneId];
+      let nextPlan: MonthPlan = { ...plan0, pinnedMilestoneIds: nextPinned, primaryMilestoneId: milestoneId };
+      nextPlan = restoreOrImportMilestoneBoard(nextPlan, milestoneId);
+      let nextState = upsertMonth(s0, nextPlan);
+      const m0 = nextState.grandPlan?.milestones.find((m) => m.id === milestoneId);
+      if (m0 && m0.status === "NOT_STARTED") {
+        nextState = updateMilestone(nextState, milestoneId, { status: "IN_PROGRESS" });
+      }
+      return nextState;
+    });
+    setSelectedMilestoneId(milestoneId);
+  };
+
+  const closeMonthWizard = () => {
+    setShowMonthWizard(false);
+    setMonthWizardStep(0);
+    onWizardStateChange?.({ open: false, primarySelected: false, wizardStep: 0 });
+  };
+
   const applyMonthWizardMilestones = () => {
     if (!plan) return;
     const filteredSecondary = monthWizardSecondaryIds.filter(
@@ -2691,9 +2898,8 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
         primaryMilestoneId: fallbackPrimary,
       };
 
-      const carryoverToImport = nextPinned.filter((id) => carryoverMilestoneIds.has(id));
-      carryoverToImport.forEach((milestoneId) => {
-        nextPlan = importMilestoneBoardFromPrevious(nextPlan, milestoneId);
+      nextPinned.forEach((milestoneId) => {
+        nextPlan = restoreOrImportMilestoneBoard(nextPlan, milestoneId);
       });
 
       let nextState = upsertMonth(s0, nextPlan);
@@ -3299,6 +3505,7 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
 			                    zoomStorageKey={zoomStorageKey}
 			                    onAddTask={handleAddTask}
 			                    onUpdateTask={handleUpdateTask}
+			                    onSetTaskStatus={handleSetTaskStatus}
 			                    onDeleteTask={handleDeleteTask}
 		                    onMarkMilestoneCompleted={milestone ? handleMarkMilestoneCompleted : undefined}
 		                    hideTitle
@@ -3311,6 +3518,7 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
 		                      primaryMilestoneId,
 		                      onSelectMilestone: setSelectedMilestoneId,
 		                      onPinMilestone: isInPeriod && state.grandPlan && state.grandPlan.milestones.length > 0 ? () => setShowMilestonePicker(true) : undefined,
+		                      onUnpinMilestone: isInPeriod ? handleUnpinMilestone : undefined,
 		                    }}
 		                  />
 		                );
