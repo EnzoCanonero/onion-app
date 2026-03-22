@@ -57,7 +57,7 @@ import {
   type DonutSlice,
   type StackedDatum,
 } from "../components/ReportCharts";
-import { formatDateLabel, getCategoryMeta, listDatesInMonth, UNKNOWN_CATEGORY, UNCATEGORIZED_CATEGORY } from "../app/reporting";
+import { formatDateLabel, getCategoryMeta, getColorHue, listDatesInMonth, UNKNOWN_CATEGORY, UNCATEGORIZED_CATEGORY } from "../app/reporting";
 import { APP_MAIN_COLOR, REPORT_THEME } from "../app/theme";
 
 function parseTimeToMinutes(time: string): number | null {
@@ -239,6 +239,53 @@ function TaskGroup({
 
   const [dragPreview, setDragPreview] = useState<{ taskId: string; x: number; y: number } | null>(null);
   const [resizePreview, setResizePreview] = useState<{ taskId: string; w: number; h: number } | null>(null);
+
+  const pinnedMilestoneGroups = useMemo(() => {
+    if (!milestoneNavigation) return [] as Array<{ category: Category | null; milestones: MilestoneNode[] }>;
+
+    const categoriesById = new Map(milestoneNavigation.categories.map((category) => [category.id, category] as const));
+    const sortedCategories = milestoneNavigation.categories
+      .slice()
+      .sort((a, b) => {
+        const hueDiff = getColorHue(a.color) - getColorHue(b.color);
+        if (hueDiff !== 0) return hueDiff;
+        return a.title.localeCompare(b.title);
+      });
+
+    return sortedCategories
+      .map((category) => {
+        const milestones = milestoneNavigation.pinnedMilestones
+          .filter((milestone) => milestone.categoryId === category.id)
+          .slice()
+          .sort((a, b) => {
+            const aIsPrimary = milestoneNavigation.primaryMilestoneId === a.id;
+            const bIsPrimary = milestoneNavigation.primaryMilestoneId === b.id;
+            if (aIsPrimary !== bIsPrimary) return aIsPrimary ? -1 : 1;
+            if (a.order !== b.order) return a.order - b.order;
+            return a.title.localeCompare(b.title);
+          });
+        if (milestones.length === 0) return null;
+        return { category, milestones };
+      })
+      .filter((group): group is { category: Category; milestones: MilestoneNode[] } => group !== null)
+      .concat(
+        (() => {
+          const uncategorizedMilestones = milestoneNavigation.pinnedMilestones
+            .filter((milestone) => !categoriesById.has(milestone.categoryId))
+            .slice()
+            .sort((a, b) => {
+              const aIsPrimary = milestoneNavigation.primaryMilestoneId === a.id;
+              const bIsPrimary = milestoneNavigation.primaryMilestoneId === b.id;
+              if (aIsPrimary !== bIsPrimary) return aIsPrimary ? -1 : 1;
+              if (a.order !== b.order) return a.order - b.order;
+              return a.title.localeCompare(b.title);
+            });
+          return uncategorizedMilestones.length > 0
+            ? [{ category: null, milestones: uncategorizedMilestones }]
+            : [];
+        })()
+      );
+  }, [milestoneNavigation]);
 
   useEffect(() => {
     if (!isLinkMode) setLinkFromTaskId(null);
@@ -975,58 +1022,91 @@ function TaskGroup({
 	                        Milestones
 	                      </div>
 	                      {/* Pinned milestones */}
-	                      {milestoneNavigation.pinnedMilestones.map((m) => {
-	                        const cat = milestoneNavigation.categories.find((c) => c.id === m.categoryId);
-	                        const mColor = cat?.color ?? APP_MAIN_COLOR;
-	                        const isPrimary = milestoneNavigation.primaryMilestoneId === m.id;
-	                        const isActive = milestoneNavigation.currentMilestoneId === m.id;
-	                        return (
-	                          <button
-	                            key={m.id}
-	                            onClick={() => {
-	                              milestoneNavigation.onSelectMilestone(m.id);
-	                              setMilestoneDropdownOpen(false);
-	                            }}
+	                      {pinnedMilestoneGroups.map((group, groupIndex) => (
+	                        <div
+	                          key={group.category?.id ?? `uncategorized-${groupIndex}`}
+	                          style={{
+	                            borderTop: groupIndex === 0 ? "none" : "1px solid #eef2f7",
+	                            marginTop: groupIndex === 0 ? 0 : 6,
+	                            paddingTop: groupIndex === 0 ? 0 : 8,
+	                          }}
+	                        >
+	                          <div
 	                            style={{
-	                              width: "100%",
-	                              padding: "10px 14px",
-	                              fontSize: 12,
-	                              fontWeight: isActive ? 800 : 600,
-	                              backgroundColor: isActive ? "#f3f4f6" : "transparent",
-	                              color: "#333",
-	                              border: "none",
-	                              cursor: "pointer",
+	                              padding: "4px 14px 6px",
+	                              fontSize: 11,
+	                              fontWeight: 700,
+	                              color: "#94a3b8",
+	                              lineHeight: 1.2,
 	                              display: "flex",
 	                              alignItems: "center",
-	                              gap: 10,
-	                              textAlign: "left",
+	                              gap: 8,
 	                            }}
-	                            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "#f9fafb"}
-	                            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = isActive ? "#f3f4f6" : "transparent"}
 	                          >
 	                            <span
 	                              style={{
-	                                width: 10,
-	                                height: 10,
+	                                width: 8,
+	                                height: 8,
 	                                borderRadius: "50%",
-	                                backgroundColor: mColor,
+	                                backgroundColor: group.category?.color ?? "#cbd5e1",
 	                                flexShrink: 0,
 	                              }}
 	                            />
-	                            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
-	                              {m.title}
-	                            </span>
-	                            {isPrimary && (
-	                              <span style={{ fontSize: 10, color: "#8a5a12", fontWeight: 800, backgroundColor: "#fef3c7", padding: "2px 6px", borderRadius: 4 }}>
-	                                ★
-	                              </span>
-	                            )}
-	                            {m.status === "COMPLETED" && (
-	                              <span style={{ fontSize: 10, color: "#059669" }}>✓</span>
-	                            )}
-	                          </button>
-	                        );
-	                      })}
+	                            <span>{group.category?.title ?? "Other"}</span>
+	                          </div>
+	                          {group.milestones.map((m) => {
+	                            const mColor = group.category?.color ?? APP_MAIN_COLOR;
+	                            const isPrimary = milestoneNavigation.primaryMilestoneId === m.id;
+	                            const isActive = milestoneNavigation.currentMilestoneId === m.id;
+	                            return (
+	                              <button
+	                                key={m.id}
+	                                onClick={() => {
+	                                  milestoneNavigation.onSelectMilestone(m.id);
+	                                  setMilestoneDropdownOpen(false);
+	                                }}
+	                                style={{
+	                                  width: "100%",
+	                                  padding: "10px 14px",
+	                                  fontSize: 12,
+	                                  fontWeight: isActive ? 800 : 600,
+	                                  backgroundColor: isActive ? "#f3f4f6" : "transparent",
+	                                  color: "#333",
+	                                  border: "none",
+	                                  cursor: "pointer",
+	                                  display: "flex",
+	                                  alignItems: "center",
+	                                  gap: 10,
+	                                  textAlign: "left",
+	                                }}
+	                                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "#f9fafb"}
+	                                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = isActive ? "#f3f4f6" : "transparent"}
+	                              >
+	                                <span
+	                                  style={{
+	                                    width: 10,
+	                                    height: 10,
+	                                    borderRadius: "50%",
+	                                    backgroundColor: mColor,
+	                                    flexShrink: 0,
+	                                  }}
+	                                />
+	                                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+	                                  {m.title}
+	                                </span>
+	                                {isPrimary && (
+	                                  <span style={{ fontSize: 10, color: "#8a5a12", fontWeight: 800, backgroundColor: "#fef3c7", padding: "2px 6px", borderRadius: 4 }}>
+	                                    ★
+	                                  </span>
+	                                )}
+	                                {m.status === "COMPLETED" && (
+	                                  <span style={{ fontSize: 10, color: "#059669" }}>✓</span>
+	                                )}
+	                              </button>
+	                            );
+	                          })}
+	                        </div>
+	                      ))}
 
 	                      {/* Standalone option */}
 	                      <button
@@ -2510,11 +2590,24 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
   const pinnedMilestones = getMilestonesInMonth(state, ymSafe);
   const pinnedIdsKey = (plan?.pinnedMilestoneIds ?? []).join("|");
   const primaryMilestoneId = plan?.primaryMilestoneId ?? null;
-  const primaryMilestone = pinnedMilestones.find((m) => m.id === primaryMilestoneId) ?? null;
-  const secondaryMilestones = pinnedMilestones.filter((m) => m.id !== primaryMilestoneId);
-  const orderedPinnedMilestones = primaryMilestone
-    ? [primaryMilestone, ...secondaryMilestones]
-    : secondaryMilestones;
+  const orderedPinnedMilestones = useMemo(() => {
+    const categoriesById = new Map((state.grandPlan?.categories ?? []).map((category) => [category.id, category] as const));
+    return pinnedMilestones
+      .slice()
+      .sort((a, b) => {
+        const aCategory = categoriesById.get(a.categoryId);
+        const bCategory = categoriesById.get(b.categoryId);
+        const hueDiff = getColorHue(aCategory?.color ?? "") - getColorHue(bCategory?.color ?? "");
+        if (hueDiff !== 0) return hueDiff;
+        const categoryTitleDiff = (aCategory?.title ?? "").localeCompare(bCategory?.title ?? "");
+        if (categoryTitleDiff !== 0) return categoryTitleDiff;
+        const aIsPrimary = a.id === primaryMilestoneId;
+        const bIsPrimary = b.id === primaryMilestoneId;
+        if (aIsPrimary !== bIsPrimary) return aIsPrimary ? -1 : 1;
+        if (a.order !== b.order) return a.order - b.order;
+        return a.title.localeCompare(b.title);
+      });
+  }, [pinnedMilestones, state.grandPlan?.categories, primaryMilestoneId]);
 
   useEffect(() => {
     try {
