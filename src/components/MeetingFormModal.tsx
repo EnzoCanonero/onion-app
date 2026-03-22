@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import type { DateISO, MeetingEntry, MeetingRecurrence } from "../app/types";
 import { formatDateDisplay } from "../app/storage";
+import { APP_MAIN_COLOR } from "../app/theme";
 
 interface MeetingFormModalProps {
   date: DateISO;
@@ -11,7 +12,8 @@ interface MeetingFormModalProps {
 
 interface FormState {
   title: string;
-  time: string;
+  startTime: string;
+  endTime: string;
   link: string;
   description: string;
   recurrence: MeetingRecurrence;
@@ -19,42 +21,76 @@ interface FormState {
 
 interface ValidationErrors {
   title?: string;
-  time?: string;
+  startTime?: string;
+  endTime?: string;
   link?: string;
 }
 
-function parseTimeToMinutes(time: string): number {
+const TIME_VALUE_REGEX = /^([01]\d|2[0-3]):([0-5]\d)$/;
+const RANGE_VALUE_REGEX = /^([01]\d|2[0-3]):([0-5]\d)-([01]\d|2[0-3]):([0-5]\d)$/;
+
+function parseTimeToMinutes(time: string): number | null {
+  if (!TIME_VALUE_REGEX.test(time)) return null;
   const [hours, minutes] = time.split(":").map(Number);
   return hours * 60 + minutes;
+}
+
+function minutesToTime(totalMinutes: number): string {
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+function addMinutesToTime(time: string, extraMinutes: number): string | null {
+  const startMinutes = parseTimeToMinutes(time);
+  if (startMinutes == null) return null;
+
+  const endMinutes = startMinutes + extraMinutes;
+  if (endMinutes >= 24 * 60) return null;
+  return minutesToTime(endMinutes);
+}
+
+function parseMeetingTime(time: string | undefined): Pick<FormState, "startTime" | "endTime"> {
+  if (time && RANGE_VALUE_REGEX.test(time)) {
+    const [startTime, endTime] = time.split("-");
+    return { startTime, endTime };
+  }
+
+  if (time && TIME_VALUE_REGEX.test(time)) {
+    return {
+      startTime: time,
+      endTime: addMinutesToTime(time, 60) ?? "10:00",
+    };
+  }
+
+  return { startTime: "09:00", endTime: "10:00" };
+}
+
+function buildMeetingTime(form: FormState): string {
+  return `${form.startTime}-${form.endTime}`;
 }
 
 function validateMeetingForm(form: FormState): ValidationErrors {
   const errors: ValidationErrors = {};
 
-  // Title validation
   if (!form.title.trim()) {
     errors.title = "Title is required";
   }
 
-  // Time validation
-  const singleTimeRegex = /^([01]\d|2[0-3]):([0-5]\d)$/;
-  const rangeRegex = /^([01]\d|2[0-3]):([0-5]\d)-([01]\d|2[0-3]):([0-5]\d)$/;
-
-  if (!singleTimeRegex.test(form.time) && !rangeRegex.test(form.time)) {
-    errors.time = "Invalid time format. Use HH:MM or HH:MM-HH:MM";
-  } else if (rangeRegex.test(form.time)) {
-    // Validate time range (end > start)
-    const [start, end] = form.time.split("-");
-    const startMinutes = parseTimeToMinutes(start);
-    const endMinutes = parseTimeToMinutes(end);
-
-    if (endMinutes <= startMinutes) {
-      errors.time = "End time must be after start time";
-    }
+  const startMinutes = parseTimeToMinutes(form.startTime);
+  if (startMinutes == null) {
+    errors.startTime = "Choose a valid start time";
   }
 
-  // Link validation (basic URL check)
-  if (form.link && !form.link.startsWith("http://") && !form.link.startsWith("https://")) {
+  const endMinutes = parseTimeToMinutes(form.endTime);
+  if (endMinutes == null) {
+    errors.endTime = "Choose a valid end time";
+  } else if (startMinutes != null && endMinutes <= startMinutes) {
+    errors.endTime = "End time must be after start time";
+  }
+
+  const trimmedLink = form.link.trim();
+  if (trimmedLink && !trimmedLink.startsWith("http://") && !trimmedLink.startsWith("https://")) {
     errors.link = "URL must start with http:// or https://";
   }
 
@@ -67,18 +103,32 @@ export default function MeetingFormModal({
   onSave,
   onCancel,
 }: MeetingFormModalProps) {
+  const initialTimeState = parseMeetingTime(meeting?.time);
   const [form, setForm] = useState<FormState>({
     title: meeting?.title ?? "",
-    time: meeting?.time ?? "",
+    startTime: initialTimeState.startTime,
+    endTime: initialTimeState.endTime,
     link: meeting?.link ?? "",
     description: meeting?.description ?? "",
     recurrence: meeting?.recurrence ?? "NONE",
   });
-
   const [errors, setErrors] = useState<ValidationErrors>({});
   const [touched, setTouched] = useState<Record<string, boolean>>({});
 
-  // Close on Escape key
+  useEffect(() => {
+    const nextTimeState = parseMeetingTime(meeting?.time);
+    setForm({
+      title: meeting?.title ?? "",
+      startTime: nextTimeState.startTime,
+      endTime: nextTimeState.endTime,
+      link: meeting?.link ?? "",
+      description: meeting?.description ?? "",
+      recurrence: meeting?.recurrence ?? "NONE",
+    });
+    setErrors({});
+    setTouched({});
+  }, [meeting, date]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -98,6 +148,26 @@ export default function MeetingFormModal({
     setTouched((prev) => ({ ...prev, [field]: true }));
   };
 
+  const handleStartTimeChange = (value: string) => {
+    setForm((prev) => {
+      const nextStartMinutes = parseTimeToMinutes(value);
+      const currentEndMinutes = parseTimeToMinutes(prev.endTime);
+      if (
+        nextStartMinutes != null &&
+        (currentEndMinutes == null || currentEndMinutes <= nextStartMinutes)
+      ) {
+        return {
+          ...prev,
+          startTime: value,
+          endTime: addMinutesToTime(value, 60) ?? prev.endTime,
+        };
+      }
+
+      return { ...prev, startTime: value };
+    });
+    setTouched((prev) => ({ ...prev, startTime: true }));
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -105,12 +175,12 @@ export default function MeetingFormModal({
     setErrors(validationErrors);
 
     if (Object.keys(validationErrors).length === 0) {
-      const ym = date.slice(0, 7) as any; // YM type
+      const ym = date.slice(0, 7) as any;
       onSave({
         date,
         ym,
         title: form.title.trim(),
-        time: form.time.trim(),
+        time: buildMeetingTime(form),
         link: form.link.trim() || undefined,
         description: form.description.trim() || undefined,
         recurrence: form.recurrence === "NONE" ? undefined : form.recurrence,
@@ -118,7 +188,6 @@ export default function MeetingFormModal({
     }
   };
 
-  // Validate on change (only show errors for touched fields)
   useEffect(() => {
     const validationErrors = validateMeetingForm(form);
     const filteredErrors: ValidationErrors = {};
@@ -131,12 +200,10 @@ export default function MeetingFormModal({
 
     setErrors(filteredErrors);
   }, [form, touched]);
-
   const hasErrors = Object.keys(validateMeetingForm(form)).length > 0;
 
   return (
     <>
-      {/* Backdrop */}
       <div
         onClick={onCancel}
         style={{
@@ -152,14 +219,13 @@ export default function MeetingFormModal({
           zIndex: 3000,
         }}
       >
-        {/* Modal */}
         <div
           onClick={(e) => e.stopPropagation()}
           style={{
             backgroundColor: "white",
             borderRadius: 12,
             padding: 24,
-            maxWidth: 500,
+            maxWidth: 560,
             width: "90%",
             boxShadow: "0 8px 16px rgba(0,0,0,0.2)",
           }}
@@ -172,7 +238,6 @@ export default function MeetingFormModal({
           </p>
 
           <form onSubmit={handleSubmit}>
-            {/* Title Field */}
             <div style={{ marginBottom: 16 }}>
               <label
                 htmlFor="title"
@@ -203,41 +268,90 @@ export default function MeetingFormModal({
               )}
             </div>
 
-            {/* Time Field */}
             <div style={{ marginBottom: 16 }}>
               <label
-                htmlFor="time"
-                style={{ display: "block", marginBottom: 4, fontSize: 14, fontWeight: 600 }}
+                style={{ display: "block", marginBottom: 6, fontSize: 14, fontWeight: 600 }}
               >
                 Time <span style={{ color: "#f44336" }}>*</span>
               </label>
-              <input
-                id="time"
-                type="text"
-                value={form.time}
-                onChange={(e) => handleChange("time", e.target.value)}
-                placeholder="14:30 or 14:30-15:30"
-                style={{
-                  width: "100%",
-                  padding: "8px 12px",
-                  fontSize: 14,
-                  border: `1px solid ${errors.time ? "#f44336" : "#ddd"}`,
-                  borderRadius: 6,
-                  boxSizing: "border-box",
-                }}
-              />
-              {errors.time ? (
-                <div style={{ marginTop: 4, fontSize: 12, color: "#f44336" }}>
-                  {errors.time}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 20px 1fr", gap: 10, alignItems: "start" }}>
+                <div>
+                  <label
+                    htmlFor="meeting-start-time"
+                    style={{ display: "block", marginBottom: 6, fontSize: 12, fontWeight: 700, color: "#475569" }}
+                  >
+                    Start
+                  </label>
+                  <input
+                    id="meeting-start-time"
+                    type="time"
+                    step={300}
+                    value={form.startTime}
+                    onChange={(e) => handleStartTimeChange(e.target.value)}
+                    style={{
+                      width: "100%",
+                      padding: "10px 12px",
+                      fontSize: 14,
+                      fontWeight: 600,
+                      border: `1px solid ${errors.startTime ? "#f44336" : "#cbd5e1"}`,
+                      borderRadius: 10,
+                      boxSizing: "border-box",
+                      backgroundColor: "white",
+                    }}
+                  />
+                  {errors.startTime && (
+                    <div style={{ marginTop: 6, fontSize: 12, color: "#f44336" }}>
+                      {errors.startTime}
+                    </div>
+                  )}
                 </div>
-              ) : (
-                <div style={{ marginTop: 4, fontSize: 12, color: "#666" }}>
-                  Enter single time (14:30) or range (14:30-15:30)
+
+                <div
+                  style={{
+                    paddingTop: 33,
+                    textAlign: "center",
+                    fontSize: 14,
+                    color: "#94a3b8",
+                    fontWeight: 700,
+                  }}
+                >
+                  →
                 </div>
-              )}
+
+                <div>
+                  <label
+                    htmlFor="meeting-end-time"
+                    style={{ display: "block", marginBottom: 6, fontSize: 12, fontWeight: 700, color: "#475569" }}
+                  >
+                    End
+                  </label>
+                  <input
+                    id="meeting-end-time"
+                    type="time"
+                    step={300}
+                    value={form.endTime}
+                    onChange={(e) => handleChange("endTime", e.target.value)}
+                    style={{
+                      width: "100%",
+                      padding: "10px 12px",
+                      fontSize: 14,
+                      fontWeight: 600,
+                      border: `1px solid ${errors.endTime ? "#f44336" : "#cbd5e1"}`,
+                      borderRadius: 10,
+                      boxSizing: "border-box",
+                      backgroundColor: "white",
+                    }}
+                  />
+                  {errors.endTime && (
+                    <div style={{ marginTop: 6, fontSize: 12, color: "#f44336" }}>
+                      {errors.endTime}
+                    </div>
+                  )}
+                </div>
+              </div>
+
             </div>
 
-            {/* Link Field */}
             <div style={{ marginBottom: 16 }}>
               <label
                 htmlFor="link"
@@ -267,7 +381,6 @@ export default function MeetingFormModal({
               )}
             </div>
 
-            {/* Description Field */}
             <div style={{ marginBottom: 20 }}>
               <label
                 htmlFor="description"
@@ -326,7 +439,6 @@ export default function MeetingFormModal({
               </select>
             </div>
 
-            {/* Action Buttons */}
             <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
               <button
                 type="button"
@@ -349,7 +461,7 @@ export default function MeetingFormModal({
                   padding: "10px 20px",
                   fontSize: 14,
                   fontWeight: 600,
-                  backgroundColor: hasErrors ? "#ccc" : "#2196f3",
+                  backgroundColor: hasErrors ? "#ccc" : APP_MAIN_COLOR,
                   color: "white",
                   border: "none",
                   borderRadius: 6,

@@ -106,7 +106,7 @@ function SingleTree({
                 ? "0 1px 4px rgba(0,0,0,0.08)"
                 : "0 2px 8px rgba(0,0,0,0.1)";
               const titleColor = isLocked ? "#64748b" : "#111";
-              const descriptionColor = isLocked ? "#94a3b8" : "#666";
+              const descriptionColor = isLocked ? "#94a3b8" : "#475569";
 
               return (
                 <div key={milestone.id} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
@@ -216,9 +216,21 @@ function SingleTree({
                   </div>
 
                   {milestone.description && (
-                    <div style={{ fontSize: 11, color: descriptionColor, marginTop: 4 }}>
-                      {milestone.description.slice(0, 40)}
-                      {milestone.description.length > 40 ? "..." : ""}
+                    <div
+                      style={{
+                        marginTop: 8,
+                        textAlign: "left",
+                        fontSize: 12,
+                        lineHeight: 1.5,
+                        color: descriptionColor,
+                        whiteSpace: "pre-wrap",
+                        overflow: "hidden",
+                        display: "-webkit-box",
+                        WebkitLineClamp: 5,
+                        WebkitBoxOrient: "vertical",
+                      }}
+                    >
+                      {milestone.description}
                     </div>
                   )}
 

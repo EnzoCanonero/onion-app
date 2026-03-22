@@ -4,6 +4,8 @@ import {
   loadState,
   saveState,
   getMonth,
+  getAllTasks,
+  getTasksForMonth,
   getOrCreateDay,
   ymFromDate,
   makeId,
@@ -18,6 +20,7 @@ import {
   activateWorkingDay,
   closeDay,
   autoCloseDay,
+  preparePastDayForEditing,
   reopenDay,
   addMeetingWithRecurrence,
   updateMeeting,
@@ -176,6 +179,7 @@ function DailyAgendaPageContent({
   const [showStartWizard, setShowStartWizard] = useState(false);
   const [wizardStep, setWizardStep] = useState(0);
   const [showCloseModal, setShowCloseModal] = useState(false);
+  const [isEditingPastClosedDay, setIsEditingPastClosedDay] = useState(false);
   const [wizardTaskDraft, setWizardTaskDraft] = useState<{
     primaryId?: string;
     secondaryIds: string[];
@@ -206,7 +210,7 @@ function DailyAgendaPageContent({
   const [leftColumnHeightPx, setLeftColumnHeightPx] = useState<number | undefined>(undefined);
 
   useLayoutEffect(() => {
-    if (!day.isWorkingDay || day.isClosed) {
+    if (!day.isWorkingDay || (day.isClosed && !isEditingPastClosedDay)) {
       setLeftColumnHeightPx(undefined);
       return;
     }
@@ -225,7 +229,7 @@ function DailyAgendaPageContent({
     const ro = new ResizeObserver(() => update());
     ro.observe(el);
     return () => ro.disconnect();
-  }, [day.isWorkingDay, day.isClosed, dateSafe]);
+  }, [day.isWorkingDay, day.isClosed, dateSafe, isEditingPastClosedDay]);
 
   // Persist newly created day entry (only once)
   if (withDay !== rawState && !shouldAutoClose) {
@@ -239,6 +243,10 @@ function DailyAgendaPageContent({
     saveState(next);
     setTick((x) => x + 1);
   }, [shouldAutoClose, dateSafe]);
+
+  useEffect(() => {
+    setIsEditingPastClosedDay(false);
+  }, [dateSafe]);
 
   const mutate = (fn: (s: typeof withDay) => typeof withDay) => {
     const current = loadState();
@@ -309,7 +317,9 @@ function DailyAgendaPageContent({
     });
   };
 
-  const tasksById = useMemo(() => new Map(plan.tasks.map((t) => [t.id, t] as const)), [plan.tasks]);
+  const allTasks = useMemo(() => getAllTasks(state), [state]);
+  const monthTasks = useMemo(() => getTasksForMonth(state, ym), [state, ym]);
+  const tasksById = useMemo(() => new Map(allTasks.map((t) => [t.id, t] as const)), [allTasks]);
 
   const completedMilestoneIds = useMemo(() => {
     return new Set(
@@ -318,12 +328,12 @@ function DailyAgendaPageContent({
   }, [state.grandPlan]);
 
   const selectableTasks = useMemo(() => {
-    return plan.tasks.filter(
+    return monthTasks.filter(
       (t) =>
         (t.status !== "GREEN" || day.outcomeByTaskId[t.id] === "COMPLETED") &&
         (!t.linkedMilestoneId || !completedMilestoneIds.has(t.linkedMilestoneId))
     );
-  }, [plan.tasks, completedMilestoneIds, day.outcomeByTaskId]);
+  }, [monthTasks, completedMilestoneIds, day.outcomeByTaskId]);
 
   const selectableTaskIds = useMemo(() => new Set(selectableTasks.map((t) => t.id)), [selectableTasks]);
 
@@ -540,6 +550,26 @@ function DailyAgendaPageContent({
     });
   };
 
+  const handleToggleReminder = (reminder: DailyReminderTemplate) => {
+    mutate((s0) => {
+      const { day: day0 } = getOrCreateDay(s0, dateSafe, ym);
+      const wasChecked = day0.reminderCheckedById?.[reminder.id] ?? false;
+      const willBeChecked = !wasChecked;
+      let next = toggleReminderChecked(s0, dateSafe, reminder.id);
+      const isInitialActivity =
+        reminder.id === "rem_email" || reminder.id === "rem_bureaucratic";
+      if (willBeChecked && isInitialActivity) {
+        next = appendDayEvent(next, dateSafe, {
+          id: makeId("evt"),
+          at: getVirtualTimestamp(),
+          kind: "REMINDER",
+          text: reminder.text,
+        });
+      }
+      return next;
+    });
+  };
+
   const updateJournal = (text: string) => {
     mutate((s0) => setDailyJournal(s0, dateSafe, text || undefined));
   };
@@ -555,7 +585,21 @@ function DailyAgendaPageContent({
   };
 
   const handleReopenDay = () => {
+    if (isPastDate) {
+      mutate((s0) => preparePastDayForEditing(s0, dateSafe));
+      setIsEditingPastClosedDay(true);
+      return;
+    }
     mutate((s0) => reopenDay(s0, dateSafe));
+  };
+
+  const handleOpenPastDayForEditing = () => {
+    mutate((s0) => preparePastDayForEditing(s0, dateSafe));
+    setIsEditingPastClosedDay(true);
+  };
+
+  const handleDoneEditingPastDay = () => {
+    setIsEditingPastClosedDay(false);
   };
 
   // v4: Meeting handlers
@@ -827,10 +871,11 @@ function DailyAgendaPageContent({
   };
 
   // v4: If day is closed, show journal-style read-only view
-  if (day.isClosed && day.isWorkingDay) {
+  if (day.isClosed && day.isWorkingDay && !isEditingPastClosedDay) {
     const startedAtTime = day.startedAt ? formatTime(day.startedAt) : "—";
-    const endedAtTime = day.autoClosed ? "Automatically closed" : day.endedAt ? formatTime(day.endedAt) : "—";
-    const endedAtDate = !day.autoClosed && day.endedAt ? day.endedAt.slice(0, 10) : undefined;
+    const endedAtTime = day.endedAt ? formatTime(day.endedAt) : "—";
+    const endedAtDate = day.endedAt ? day.endedAt.slice(0, 10) : undefined;
+    const closeStatusLabel = day.autoClosed ? "Auto-closed" : "Closed manually";
 
     const completedTasks = [
       day.primaryTaskId ? { id: day.primaryTaskId, isPrimary: true } : null,
@@ -920,6 +965,22 @@ function DailyAgendaPageContent({
               </div>
               <div style={{ marginTop: 8, fontSize: 13, color: REPORT_THEME.textSecondary }}>
                 {startedAtTime} — {endedAtTime}
+                {day.endedAt ? (
+                  <span
+                    style={{
+                      marginLeft: 8,
+                      padding: "2px 8px",
+                      borderRadius: 999,
+                      backgroundColor: day.autoClosed ? "#fef3c7" : "#ede9fe",
+                      color: day.autoClosed ? "#92400e" : "#5b21b6",
+                      fontSize: 11,
+                      fontWeight: 800,
+                      letterSpacing: 0.2,
+                    }}
+                  >
+                    {closeStatusLabel}
+                  </span>
+                ) : null}
                 {endedAtDate && endedAtDate !== dateSafe ? (
                   <span style={{ marginLeft: 8, color: REPORT_THEME.textMuted }}>(ended {endedAtDate})</span>
                 ) : null}
@@ -1228,7 +1289,7 @@ function DailyAgendaPageContent({
         {!day.isWorkingDay ? (
           isPastDate ? (
             /* Past date without activation → nothing to see */
-            <PastUnactivatedDayPanel date={dateSafe} />
+            <PastUnactivatedDayPanel date={dateSafe} onOpenForEditing={handleOpenPastDayForEditing} />
           ) : (
             /* Current date → show activation button */
             <div
@@ -1266,8 +1327,45 @@ function DailyAgendaPageContent({
             </div>
           )
         ) : (
-          <>
+	          <>
 	          {/* All sections below only show when day is activated */}
+
+	          {isEditingPastClosedDay && (
+	            <div
+	              style={{
+	                display: "flex",
+	                alignItems: "center",
+	                justifyContent: "space-between",
+	                gap: 12,
+	                flexWrap: "wrap",
+	                marginBottom: 20,
+	                padding: "12px 14px",
+	                border: "1px solid #e9d5ff",
+	                borderRadius: 12,
+	                backgroundColor: "#faf5ff",
+	              }}
+	            >
+	              <div style={{ fontSize: 13, fontWeight: 700, color: "#5b21b6" }}>
+	                Editing a closed past day
+	              </div>
+	              <button
+	                type="button"
+	                onClick={handleDoneEditingPastDay}
+	                style={{
+	                  padding: "8px 12px",
+	                  fontSize: 12,
+	                  fontWeight: 800,
+	                  backgroundColor: "white",
+	                  color: "#5b21b6",
+	                  border: "1px solid #d8b4fe",
+	                  borderRadius: 10,
+	                  cursor: "pointer",
+	                }}
+	              >
+	                Done Editing
+	              </button>
+	            </div>
+	          )}
 	
 	          <div style={{ display: "flex", gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
 	            <div
@@ -1366,48 +1464,70 @@ function DailyAgendaPageContent({
                   No reminders set. Click ✏️ to add some.
                 </p>
               ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 10, marginLeft: 8 }}>
+                <div style={{ display: "grid", gap: 10 }}>
                   {state.dailyReminderTemplates.map((reminder) => (
-                    <label
+                    <button
                       key={reminder.id}
+                      type="button"
+                      role="checkbox"
+                      aria-checked={day.reminderCheckedById?.[reminder.id] ?? false}
+                      onClick={() => handleToggleReminder(reminder)}
                       style={{
                         display: "flex",
                         alignItems: "center",
-                        gap: 10,
+                        gap: 12,
+                        width: "100%",
+                        padding: "12px 14px",
+                        textAlign: "left",
+                        backgroundColor: day.reminderCheckedById?.[reminder.id] ?? false ? "#f4efff" : "rgba(255,255,255,0.96)",
+                        border: `1.5px solid ${
+                          day.reminderCheckedById?.[reminder.id] ?? false ? `${APP_MAIN_COLOR}55` : "#e5e7eb"
+                        }`,
+                        borderRadius: 12,
+                        boxShadow:
+                          day.reminderCheckedById?.[reminder.id] ?? false
+                            ? "0 8px 18px rgba(103,58,183,0.10)"
+                            : "0 2px 8px rgba(15,23,42,0.04)",
                         cursor: "pointer",
                         fontSize: 15,
+                        transition: "background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease",
                       }}
                     >
-	                      <input
-	                        type="checkbox"
-	                        checked={day.reminderCheckedById?.[reminder.id] ?? false}
-	                        onChange={() => {
-	                          mutate((s0) => {
-	                            const { day: day0 } = getOrCreateDay(s0, dateSafe, ym);
-	                            const wasChecked = day0.reminderCheckedById?.[reminder.id] ?? false;
-	                            const willBeChecked = !wasChecked;
-	                            let next = toggleReminderChecked(s0, dateSafe, reminder.id);
-	                            const isInitialActivity =
-	                              reminder.id === "rem_email" || reminder.id === "rem_bureaucratic";
-	                            if (willBeChecked && isInitialActivity) {
-	                              next = appendDayEvent(next, dateSafe, {
-	                                id: makeId("evt"),
-	                                at: getVirtualTimestamp(),
-	                                kind: "REMINDER",
-	                                text: reminder.text,
-	                              });
-	                            }
-	                            return next;
-	                          });
-	                        }}
-	                        style={{
-	                          width: 18,
-	                          height: 18,
-                          cursor: "pointer",
+                      <div
+                        aria-hidden="true"
+                        style={{
+                          width: 22,
+                          height: 22,
+                          flexShrink: 0,
+                          borderRadius: "50%",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          backgroundColor: day.reminderCheckedById?.[reminder.id] ?? false ? APP_MAIN_COLOR : "white",
+                          border: `2px solid ${
+                            day.reminderCheckedById?.[reminder.id] ?? false ? APP_MAIN_COLOR : "#cbd5e1"
+                          }`,
+                          color: "white",
+                          fontSize: 12,
+                          fontWeight: 900,
                         }}
-                      />
-                      <span>{reminder.text}</span>
-                    </label>
+                      >
+                        ✓
+                      </div>
+                      <span
+                        style={{
+                          flex: 1,
+                          fontWeight: day.reminderCheckedById?.[reminder.id] ?? false ? 600 : 500,
+                          color: day.reminderCheckedById?.[reminder.id] ?? false ? "#312e81" : "#334155",
+                          textDecoration: day.reminderCheckedById?.[reminder.id] ?? false ? "line-through" : "none",
+                          textDecorationColor: `${APP_MAIN_COLOR}55`,
+                          textDecorationThickness: 2,
+                          lineHeight: 1.45,
+                        }}
+                      >
+                        {reminder.text}
+                      </span>
+                    </button>
                   ))}
                 </div>
               )
@@ -1817,7 +1937,7 @@ function DailyAgendaPageContent({
                     No focus templates scheduled for today. Edit templates in Month Setup to assign weekdays.
                   </p>
                 ) : (
-                  focusTemplatesForToday.map((template) => renderFocusTemplateCard(template, true))
+                  focusTemplatesForToday.map((template) => renderFocusTemplateCard(template, !isPastDate))
                 )}
               </div>
             </>
@@ -1886,7 +2006,7 @@ function DailyAgendaPageContent({
 	              }}
 	            />
 
-          {!tutorialMode && (
+          {!tutorialMode && !isEditingPastClosedDay && (
             <>
               {/* v4: Close Day Button */}
               <div style={{ marginTop: 28, textAlign: "center" }}>
