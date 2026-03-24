@@ -468,6 +468,27 @@ export function appendDayEvent(state: AppStateV0, date: DateISO, event: DayLogEv
   return updateDay(withDay, { ...day, events: [...events, event] });
 }
 
+export function upsertDayEvent(state: AppStateV0, date: DateISO, event: DayLogEvent): AppStateV0 {
+  const ym = ymFromDate(date);
+  const { state: withDay, day } = getOrCreateDay(state, date, ym);
+  const events = Array.isArray(day.events) ? day.events : [];
+  const existingIndex = events.findIndex((candidate) => candidate.id === event.id);
+  const nextEvents =
+    existingIndex === -1
+      ? [...events, event]
+      : events.map((candidate, index) => (index === existingIndex ? event : candidate));
+  return updateDay(withDay, { ...day, events: nextEvents });
+}
+
+export function removeDayEvent(state: AppStateV0, date: DateISO, eventId: string): AppStateV0 {
+  const ym = ymFromDate(date);
+  const { state: withDay, day } = getOrCreateDay(state, date, ym);
+  const events = Array.isArray(day.events) ? day.events : [];
+  const nextEvents = events.filter((event) => event.id !== eventId);
+  if (nextEvents.length === events.length) return withDay;
+  return updateDay(withDay, { ...day, events: nextEvents });
+}
+
 export function updateSession(state: AppStateV0, sessionId: string, patch: Partial<ProductivitySession>): AppStateV0 {
   return {
     ...state,
@@ -548,6 +569,21 @@ export function getAllTasks(state: AppStateV0): TaskNode[] {
 export function getTaskById(state: AppStateV0, taskId: string): TaskNode | undefined {
   const archive = getTaskArchive(state);
   return findTaskBucketById(archive, taskId)?.task;
+}
+
+export function getFrozenTaskIds(state: AppStateV0): Set<string> {
+  const frozenTaskIds = new Set<string>();
+  Object.values(state.days).forEach((day) => {
+    if (!day.isClosed) return;
+    Object.entries(day.outcomeByTaskId ?? {}).forEach(([taskId, outcome]) => {
+      if (outcome === "COMPLETED") frozenTaskIds.add(taskId);
+    });
+  });
+  return frozenTaskIds;
+}
+
+export function isTaskFrozen(state: AppStateV0, taskId: string): boolean {
+  return getFrozenTaskIds(state).has(taskId);
 }
 
 export function getTasksForMilestone(state: AppStateV0, milestoneId: string): TaskNode[] {
@@ -686,6 +722,7 @@ export function applyTaskStatus(
   taskId: string,
   outcome: "COMPLETED" | "NOT_COMPLETED" | undefined
 ): AppStateV0 {
+  if (isTaskFrozen(state, taskId)) return state;
   const archive = getTaskArchive(state);
   const existingBucket = findTaskBucketById(archive, taskId);
   if (!existingBucket) return state;
@@ -741,15 +778,68 @@ export function setTaskOutcome(
   taskId: string,
   outcome: "COMPLETED" | "NOT_COMPLETED" | undefined
 ): AppStateV0 {
+  if (isTaskFrozen(state, taskId)) return state;
   const ym = ymFromDate(date);
   const { state: withDay, day } = getOrCreateDay(state, date, ym);
-
+  const currentOutcome = day.outcomeByTaskId?.[taskId];
+  const nextOutcome = outcome && currentOutcome === outcome ? undefined : outcome;
   const nextMap = { ...day.outcomeByTaskId };
-  if (outcome) nextMap[taskId] = outcome;
+  if (nextOutcome) nextMap[taskId] = nextOutcome;
   else delete nextMap[taskId];
 
+  const archive = getTaskArchive(withDay);
+  const existingBucket = findTaskBucketById(archive, taskId);
+  if (!existingBucket) {
+    return updateDay(withDay, { ...day, outcomeByTaskId: nextMap });
+  }
+
+  const existing = existingBucket.task;
+  const nextStatus =
+    nextOutcome === "COMPLETED"
+      ? "GREEN"
+      : nextOutcome === "NOT_COMPLETED"
+        ? "YELLOW"
+        : "NONE";
+  const completedAt =
+    nextStatus === "GREEN"
+      ? existing.completedAt && existing.completedAt.slice(0, 10) === date
+        ? existing.completedAt
+        : date < getTodayDate()
+          ? localTimestampForDate(date, 23, 59, 59)
+          : getVirtualTimestamp()
+      : undefined;
+
+  const nextTasks = existingBucket.tasks.map((task) =>
+    task.id === taskId
+      ? {
+          ...task,
+          status: nextStatus,
+          completedAt,
+        }
+      : task
+  );
+
   let next = updateDay(withDay, { ...day, outcomeByTaskId: nextMap });
-  next = applyTaskStatus(next, taskId, outcome);
+  next = updateTaskArchive(next, (current) =>
+    setTaskBucket(current, existingBucket.milestoneId, nextTasks)
+  );
+
+  if (existing.linkedMilestoneId && next.grandPlan && nextStatus !== "NONE") {
+    const milestone = next.grandPlan.milestones.find((m) => m.id === existing.linkedMilestoneId);
+    if (milestone && milestone.status === "NOT_STARTED") {
+      next = {
+        ...next,
+        grandPlan: {
+          ...next.grandPlan,
+          milestones: next.grandPlan.milestones.map((m) =>
+            m.id === existing.linkedMilestoneId ? { ...m, status: "IN_PROGRESS" } : m
+          ),
+          updatedAt: getVirtualTimestamp(),
+        },
+      };
+    }
+  }
+
   return next;
 }
 
@@ -806,6 +896,7 @@ export function updateTask(
   taskId: string,
   updates: Partial<Pick<TaskNode, "title" | "notes" | "boardX" | "boardY" | "boardW" | "boardH" | "parentId" | "status">>
 ): AppStateV0 {
+  if (isTaskFrozen(state, taskId)) return state;
   const archive = getTaskArchive(state);
   const existingBucket = findTaskBucketById(archive, taskId);
   if (!existingBucket) return state;
@@ -821,6 +912,7 @@ export function deleteTask(
   taskId: string,
   cascadeChildren: boolean = true
 ): AppStateV0 {
+  if (isTaskFrozen(state, taskId)) return state;
   const archive = getTaskArchive(state);
   const existingBucket = findTaskBucketById(archive, taskId);
   if (!existingBucket) return state;
@@ -839,6 +931,8 @@ export function deleteTask(
     };
     findChildren(taskId);
   }
+
+  if (Array.from(toDelete).some((id) => isTaskFrozen(state, id))) return state;
 
   const nextTasks = existingBucket.tasks.filter((t) => !toDelete.has(t.id));
   const nextLinks = (archive.taskLinksByScope[getTaskScopeKey(existingBucket.milestoneId)] ?? []).filter(
@@ -862,6 +956,7 @@ export function reorderTask(
   taskId: string,
   direction: "up" | "down"
 ): AppStateV0 {
+  if (isTaskFrozen(state, taskId)) return state;
   const archive = getTaskArchive(state);
   const existingBucket = findTaskBucketById(archive, taskId);
   if (!existingBucket) return state;
@@ -903,6 +998,7 @@ export function moveTask(
   taskId: string,
   newParentId: string | null
 ): AppStateV0 {
+  if (isTaskFrozen(state, taskId)) return state;
   const archive = getTaskArchive(state);
   const existingBucket = findTaskBucketById(archive, taskId);
   if (!existingBucket) return state;
@@ -1036,6 +1132,7 @@ export function autoCloseDay(state: AppStateV0, date: DateISO): AppStateV0 {
 }
 
 export function reopenDay(state: AppStateV0, date: DateISO): AppStateV0 {
+  if (date < getTodayDate()) return state;
   const ym = ymFromDate(date);
   const reopened = reopenMonth(state, ym);
   const { state: withDay, day } = getOrCreateDay(reopened, date, ym);
@@ -1048,20 +1145,6 @@ export function reopenDay(state: AppStateV0, date: DateISO): AppStateV0 {
     endedAt: undefined,
     autoClosed: false,
     events: cleanedEvents,
-  });
-}
-
-export function preparePastDayForEditing(state: AppStateV0, date: DateISO): AppStateV0 {
-  const ym = ymFromDate(date);
-  const reopened = reopenMonth(state, ym);
-  const { state: withDay, day } = getOrCreateDay(reopened, date, ym);
-  return updateDay(withDay, {
-    ...day,
-    isWorkingDay: true,
-    startedAt: day.startedAt ?? defaultStartedAtTimestamp(date),
-    isClosed: true,
-    endedAt: day.endedAt ?? endOfDayTimestamp(date),
-    autoClosed: day.endedAt ? !!day.autoClosed : true,
   });
 }
 
@@ -1155,6 +1238,131 @@ export function formatDateDisplay(date: DateISO): string {
   } catch {
     return date;
   }
+}
+
+function meetingStartTimestamp(date: DateISO, time: string): string | undefined {
+  const start = time.split("-")[0]?.trim();
+  const parts = start?.split(":").map((part) => Number(part));
+  if (!parts || parts.length !== 2) return undefined;
+  const [hours, minutes] = parts;
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return undefined;
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return undefined;
+  return localTimestampForDate(date, hours, minutes, 0);
+}
+
+function getEventTimestamp(
+  day: DayEntry,
+  eventId: string,
+  kind: DayLogEvent["kind"],
+  legacyText: string | undefined,
+  fallbackAt: string
+): string {
+  const events = Array.isArray(day.events) ? day.events : [];
+  const exactMatch = events.find((event) => event.id === eventId);
+  if (exactMatch?.at) return exactMatch.at;
+  if (legacyText) {
+    const legacyMatch = events.find((event) => event.kind === kind && event.text === legacyText);
+    if (legacyMatch?.at) return legacyMatch.at;
+  }
+  return fallbackAt;
+}
+
+export function buildDayHistory(
+  state: AppStateV0,
+  date: DateISO,
+  plan?: MonthPlan
+): DayLogEvent[] {
+  const day = state.days[date];
+  if (!day) return [];
+
+  const activePlan = plan ?? getMonth(state, day.ym);
+  const tasksById = new Map(getAllTasks(state).map((task) => [task.id, task] as const));
+  const remindersById = new Map(state.dailyReminderTemplates.map((reminder) => [reminder.id, reminder] as const));
+  const templateTitleById = new Map((activePlan?.templates ?? []).map((template) => [template.id, template.title] as const));
+  const derivedEvents: DayLogEvent[] = [];
+
+  if (day.startedAt) {
+    derivedEvents.push({
+      id: `system:day-started:${date}`,
+      at: day.startedAt,
+      kind: "SYSTEM",
+      text: "Day started",
+    });
+  }
+
+  if (day.endedAt) {
+    derivedEvents.push({
+      id: `system:day-ended:${date}`,
+      at: day.endedAt,
+      kind: "SYSTEM",
+      text: "Day ended",
+    });
+  }
+
+  Object.entries(day.reminderCheckedById ?? {}).forEach(([reminderId, checked]) => {
+    if (!checked) return;
+    const reminderText = remindersById.get(reminderId)?.text ?? reminderId;
+    const fallbackAt = day.startedAt ?? localTimestampForDate(date, 9, 0, 0);
+    derivedEvents.push({
+      id: `reminder:checked:${reminderId}`,
+      at: getEventTimestamp(day, `reminder:checked:${reminderId}`, "REMINDER", reminderText, fallbackAt),
+      kind: "REMINDER",
+      text: reminderText,
+    });
+  });
+
+  Object.entries(day.outcomeByTaskId ?? {}).forEach(([taskId, outcome]) => {
+    if (outcome !== "COMPLETED") return;
+    const task = tasksById.get(taskId);
+    const title = task?.title ?? "Unknown task";
+    const text = `✓ Completed: ${title}`;
+    const fallbackAt =
+      task?.completedAt && task.completedAt.slice(0, 10) === date
+        ? task.completedAt
+        : day.endedAt ?? localTimestampForDate(date, 23, 59, 59);
+    derivedEvents.push({
+      id: `task:completed:${taskId}`,
+      at: getEventTimestamp(day, `task:completed:${taskId}`, "TASK", text, fallbackAt),
+      kind: "TASK",
+      text,
+    });
+  });
+
+  state.meetings
+    .filter((meeting) => meeting.date === date && meeting.attended && !meeting.skipped)
+    .forEach((meeting) => {
+      const text = `✓ Attended: ${meeting.title}`;
+      const fallbackAt = meetingStartTimestamp(date, meeting.time) ?? day.startedAt ?? localTimestampForDate(date, 12, 0, 0);
+      derivedEvents.push({
+        id: `meeting:attended:${meeting.id}`,
+        at: getEventTimestamp(day, `meeting:attended:${meeting.id}`, "MEETING", text, fallbackAt),
+        kind: "MEETING",
+        text,
+      });
+    });
+
+  state.sessions
+    .filter((session) => session.date === date && !!session.startedAt)
+    .forEach((session) => {
+      const templateTitle = templateTitleById.get(session.templateId) ?? "Focus session";
+      derivedEvents.push({
+        id: `focus:started:${session.id}`,
+        at: session.startedAt,
+        kind: "FOCUS",
+        text: `▶ Started: ${templateTitle}`,
+      });
+      if (session.endedAt) {
+        const minutes = session.actualMinutes ?? Math.max(0, Math.round((Date.parse(session.endedAt) - Date.parse(session.startedAt)) / 60000));
+        derivedEvents.push({
+          id: `focus:ended:${session.id}`,
+          at: session.endedAt,
+          kind: "FOCUS",
+          text: `■ Ended: ${templateTitle} (${minutes}m)`,
+        });
+      }
+    });
+
+  return derivedEvents.sort((a, b) => a.at.localeCompare(b.at) || a.kind.localeCompare(b.kind) || a.text.localeCompare(b.text));
 }
 
 // v4: Meeting management functions

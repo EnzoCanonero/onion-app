@@ -30,6 +30,10 @@ import {
   updateMilestone,
   deleteMilestone,
   getAllTasks,
+  getTasksForMilestone,
+  getFrozenTaskIds,
+  applyTaskStatus,
+  deleteTask,
   getTodayDate,
   getCurrentYM,
 } from "../app/storage";
@@ -117,6 +121,7 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
   const [tick, setTick] = useState(0);
   const state = useMemo(() => loadState(), [tick]);
   const grandPlan = state.grandPlan;
+  const frozenTaskIds = useMemo(() => getFrozenTaskIds(state), [state]);
   const shortName = getShortUserName(getUserName());
   const pinnedMilestoneIds = useMemo(() => {
     const ids = new Set<string>();
@@ -269,6 +274,17 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
     setSelectedMilestone(null);
   };
 
+  const handleSetMilestoneTaskStatus = (
+    taskId: string,
+    outcome: "COMPLETED" | "NOT_COMPLETED"
+  ) => {
+    mutate((s) => applyTaskStatus(s, taskId, outcome));
+  };
+
+  const handleDeleteMilestoneTask = (taskId: string) => {
+    mutate((s) => deleteTask(s, taskId));
+  };
+
   const handleCloseGrandPlan = () => {
     mutate((s) => closeGrandPlan(s));
     setShowCloseConfirm(false);
@@ -282,6 +298,16 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
   const sortedCategories = grandPlan?.categories.slice().sort((a, b) => a.order - b.order) ?? [];
   const activeCategory =
     sortedCategories.find((c) => c.id === selectedCategoryId) ?? sortedCategories[0];
+  const selectedMilestoneLive = selectedMilestone
+    ? grandPlan?.milestones.find((m) => m.id === selectedMilestone.id) ?? selectedMilestone
+    : null;
+  const selectedMilestoneTasks = useMemo(
+    () =>
+      selectedMilestoneLive
+        ? [...getTasksForMilestone(state, selectedMilestoneLive.id)].sort((a, b) => a.title.localeCompare(b.title))
+        : [],
+    [state, selectedMilestoneLive]
+  );
 
   useEffect(() => {
     if (!grandPlan) return;
@@ -1536,12 +1562,16 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
       )}
 
       {/* Milestone Detail Modal */}
-      {selectedMilestone && (
+      {selectedMilestoneLive && (
         <MilestoneDetailModal
-          milestone={selectedMilestone}
+          milestone={selectedMilestoneLive}
+          linkedTasks={selectedMilestoneTasks}
+          frozenTaskIds={frozenTaskIds}
           onClose={() => setSelectedMilestone(null)}
           onSave={handleSaveMilestone}
           onDelete={handleDeleteMilestone}
+          onSetTaskStatus={handleSetMilestoneTaskStatus}
+          onDeleteTask={handleDeleteMilestoneTask}
         />
       )}
 

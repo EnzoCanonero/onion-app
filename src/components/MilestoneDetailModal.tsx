@@ -1,29 +1,31 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import type { MilestoneNode, MilestoneStatus, TaskNode } from "../app/types";
-import { getTasksForMilestone, loadState } from "../app/storage";
 
 interface MilestoneDetailModalProps {
   milestone: MilestoneNode;
+  linkedTasks: TaskNode[];
+  frozenTaskIds: Set<string>;
   onClose: () => void;
   onSave: (milestoneId: string, updates: Partial<Pick<MilestoneNode, "title" | "description" | "status">>) => void;
   onDelete: (milestoneId: string) => void;
+  onSetTaskStatus: (taskId: string, outcome: "COMPLETED" | "NOT_COMPLETED") => void;
+  onDeleteTask: (taskId: string) => void;
 }
 
 export default function MilestoneDetailModal({
   milestone,
+  linkedTasks,
+  frozenTaskIds,
   onClose,
   onSave,
   onDelete,
+  onSetTaskStatus,
+  onDeleteTask,
 }: MilestoneDetailModalProps) {
   const [title, setTitle] = useState(milestone.title);
   const [description, setDescription] = useState(milestone.description ?? "");
   const [status, setStatus] = useState<MilestoneStatus>(milestone.status);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-
-  const linkedTasks = useMemo(() => {
-    const state = loadState();
-    return [...getTasksForMilestone(state, milestone.id)].sort((a, b) => a.title.localeCompare(b.title));
-  }, [milestone.id]);
 
   const totalLinkedTasks = linkedTasks.length;
 
@@ -63,6 +65,21 @@ export default function MilestoneDetailModal({
   const handleDelete = () => {
     onDelete(milestone.id);
     onClose();
+  };
+
+  const handleSetLinkedTaskStatus = (
+    taskId: string,
+    outcome: "COMPLETED" | "NOT_COMPLETED"
+  ) => {
+    onSetTaskStatus(taskId, outcome);
+    if (status === "NOT_STARTED") {
+      setStatus("IN_PROGRESS");
+    }
+  };
+
+  const handleDeleteLinkedTask = (task: TaskNode) => {
+    if (!window.confirm(`Delete task "${task.title}"?`)) return;
+    onDeleteTask(task.id);
   };
 
   return (
@@ -189,32 +206,115 @@ export default function MilestoneDetailModal({
               </div>
 
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {linkedTasks.map((task) => (
-                  <div
-                    key={task.id}
-                    style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 6,
-                      padding: "8px 10px",
-                      backgroundColor: "white",
-                      borderRadius: 6,
-                      border: "1px solid #e0e0e0",
-                    }}
-                  >
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span
-                        style={{
-                          width: 20,
-                          textAlign: "center",
-                          fontWeight: 800,
-                          color: getTaskStatusColor(task),
-                        }}
-                        title={task.status}
-                      >
-                        {getTaskStatusIcon(task)}
-                      </span>
-                      <span style={{ fontSize: 13, color: "#333", fontWeight: 600 }}>{task.title}</span>
+                {linkedTasks.map((task) => {
+                  const isTaskFrozen = frozenTaskIds.has(task.id);
+                  return (
+                    <div
+                      key={task.id}
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 6,
+                        padding: "10px 12px",
+                        backgroundColor: "white",
+                        borderRadius: 10,
+                        border: "1px solid #e0e0e0",
+                        boxShadow: "0 2px 8px rgba(0,0,0,0.04)",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                        <span
+                          style={{
+                            width: 20,
+                            textAlign: "center",
+                            fontWeight: 800,
+                            color: getTaskStatusColor(task),
+                            flexShrink: 0,
+                          }}
+                          title={task.status}
+                        >
+                          {getTaskStatusIcon(task)}
+                        </span>
+                        <span
+                          style={{
+                            fontSize: 13,
+                            color: "#333",
+                            fontWeight: 600,
+                            minWidth: 0,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {task.title}
+                        </span>
+                      </div>
+
+                      {!isTaskFrozen ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                          <button
+                            onClick={() => handleSetLinkedTaskStatus(task.id, "COMPLETED")}
+                            style={{
+                              width: 28,
+                              height: 28,
+                              borderRadius: 7,
+                              border: "1px solid #10b981",
+                              backgroundColor: task.status === "GREEN" ? "#10b981" : "#ffffff",
+                              color: task.status === "GREEN" ? "#ffffff" : "#10b981",
+                              cursor: "pointer",
+                              fontSize: 13,
+                              fontWeight: 800,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                            }}
+                            title={task.status === "GREEN" ? "Clear completed status" : "Mark task as completed"}
+                          >
+                            ✓
+                          </button>
+                          <button
+                            onClick={() => handleSetLinkedTaskStatus(task.id, "NOT_COMPLETED")}
+                            style={{
+                              width: 28,
+                              height: 28,
+                              borderRadius: 7,
+                              border: "1px solid #f59e0b",
+                              backgroundColor: task.status === "YELLOW" ? "#f59e0b" : "#ffffff",
+                              color: task.status === "YELLOW" ? "#ffffff" : "#f59e0b",
+                              cursor: "pointer",
+                              fontSize: 13,
+                              fontWeight: 800,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                            }}
+                            title={task.status === "YELLOW" ? "Clear work in progress status" : "Mark task as work in progress"}
+                          >
+                            ◐
+                          </button>
+                          <button
+                            onClick={() => handleDeleteLinkedTask(task)}
+                            style={{
+                              width: 28,
+                              height: 28,
+                              borderRadius: 7,
+                              border: "1px solid #fecaca",
+                              backgroundColor: "#ffffff",
+                              color: "#ef4444",
+                              cursor: "pointer",
+                              fontSize: 13,
+                              fontWeight: 800,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                            }}
+                            title="Delete task"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ) : null}
                     </div>
                     {task.notes ? (
                       <div style={{ fontSize: 12, color: "#555", lineHeight: 1.5, paddingLeft: 28 }}>
@@ -235,8 +335,9 @@ export default function MilestoneDetailModal({
                         )}
                       </div>
                     )}
-                  </div>
-                ))}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

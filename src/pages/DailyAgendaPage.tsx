@@ -5,6 +5,7 @@ import {
   saveState,
   getMonth,
   getAllTasks,
+  getTaskById,
   getTasksForMonth,
   getOrCreateDay,
   ymFromDate,
@@ -20,7 +21,6 @@ import {
   activateWorkingDay,
   closeDay,
   autoCloseDay,
-  preparePastDayForEditing,
   reopenDay,
   addMeetingWithRecurrence,
   updateMeeting,
@@ -39,6 +39,10 @@ import {
   toggleFocusTemplateSkippedForDay,
   formatTime,
   appendDayEvent,
+  upsertDayEvent,
+  removeDayEvent,
+  buildDayHistory,
+  getFrozenTaskIds,
   getTodayDate,
 } from "../app/storage";
 import { checkDateAccess } from "../app/dateAccess";
@@ -181,7 +185,6 @@ function DailyAgendaPageContent({
   const [showStartWizard, setShowStartWizard] = useState(false);
   const [wizardStep, setWizardStep] = useState(0);
   const [showCloseModal, setShowCloseModal] = useState(false);
-  const [isEditingPastClosedDay, setIsEditingPastClosedDay] = useState(false);
   const [wizardTaskDraft, setWizardTaskDraft] = useState<{
     primaryId?: string;
     secondaryIds: string[];
@@ -212,7 +215,7 @@ function DailyAgendaPageContent({
   const [leftColumnHeightPx, setLeftColumnHeightPx] = useState<number | undefined>(undefined);
 
   useLayoutEffect(() => {
-    if (!day.isWorkingDay || (day.isClosed && !isEditingPastClosedDay)) {
+    if (!day.isWorkingDay || day.isClosed) {
       setLeftColumnHeightPx(undefined);
       return;
     }
@@ -231,7 +234,7 @@ function DailyAgendaPageContent({
     const ro = new ResizeObserver(() => update());
     ro.observe(el);
     return () => ro.disconnect();
-  }, [day.isWorkingDay, day.isClosed, dateSafe, isEditingPastClosedDay]);
+  }, [day.isWorkingDay, day.isClosed, dateSafe]);
 
   // Persist newly created day entry (only once)
   if (withDay !== rawState && !shouldAutoClose) {
@@ -245,10 +248,6 @@ function DailyAgendaPageContent({
     saveState(next);
     setTick((x) => x + 1);
   }, [shouldAutoClose, dateSafe]);
-
-  useEffect(() => {
-    setIsEditingPastClosedDay(false);
-  }, [dateSafe]);
 
   const mutate = (fn: (s: typeof withDay) => typeof withDay) => {
     const current = loadState();
@@ -322,6 +321,7 @@ function DailyAgendaPageContent({
   const allTasks = useMemo(() => getAllTasks(state), [state]);
   const monthTasks = useMemo(() => getTasksForMonth(state, ym), [state, ym]);
   const tasksById = useMemo(() => new Map(allTasks.map((t) => [t.id, t] as const)), [allTasks]);
+  const frozenTaskIds = useMemo(() => getFrozenTaskIds(state), [state]);
 
   const completedMilestoneIds = useMemo(() => {
     return new Set(
@@ -595,17 +595,19 @@ function DailyAgendaPageContent({
 
   const setOutcome = (taskId: string, outcome: "COMPLETED" | "NOT_COMPLETED" | undefined) => {
     mutate((s0) => {
-      const { state: withDay0, day: day0 } = getOrCreateDay(s0, dateSafe, ym);
-      const prev = day0.outcomeByTaskId?.[taskId];
-      let next = setTaskOutcome(withDay0, dateSafe, taskId, outcome);
-      if (outcome === "COMPLETED" && prev !== outcome) {
-        const title = tasksById.get(taskId)?.title ?? "Task";
-        next = appendDayEvent(next, dateSafe, {
-          id: makeId("evt"),
+      let next = setTaskOutcome(s0, dateSafe, taskId, outcome);
+      const { day: nextDay } = getOrCreateDay(next, dateSafe, ym);
+      const finalOutcome = nextDay.outcomeByTaskId?.[taskId];
+      if (finalOutcome === "COMPLETED") {
+        const title = getTaskById(next, taskId)?.title ?? tasksById.get(taskId)?.title ?? "Task";
+        next = upsertDayEvent(next, dateSafe, {
+          id: `task:completed:${taskId}`,
           at: getVirtualTimestamp(),
           kind: "TASK",
           text: `✓ Completed: ${title}`,
         });
+      } else {
+        next = removeDayEvent(next, dateSafe, `task:completed:${taskId}`);
       }
       return next;
     });
@@ -617,15 +619,15 @@ function DailyAgendaPageContent({
       const wasChecked = day0.reminderCheckedById?.[reminder.id] ?? false;
       const willBeChecked = !wasChecked;
       let next = toggleReminderChecked(s0, dateSafe, reminder.id);
-      const isInitialActivity =
-        reminder.id === "rem_email" || reminder.id === "rem_bureaucratic";
-      if (willBeChecked && isInitialActivity) {
-        next = appendDayEvent(next, dateSafe, {
-          id: makeId("evt"),
+      if (willBeChecked) {
+        next = upsertDayEvent(next, dateSafe, {
+          id: `reminder:checked:${reminder.id}`,
           at: getVirtualTimestamp(),
           kind: "REMINDER",
           text: reminder.text,
         });
+      } else {
+        next = removeDayEvent(next, dateSafe, `reminder:checked:${reminder.id}`);
       }
       return next;
     });
@@ -646,21 +648,7 @@ function DailyAgendaPageContent({
   };
 
   const handleReopenDay = () => {
-    if (isPastDate) {
-      mutate((s0) => preparePastDayForEditing(s0, dateSafe));
-      setIsEditingPastClosedDay(true);
-      return;
-    }
     mutate((s0) => reopenDay(s0, dateSafe));
-  };
-
-  const handleOpenPastDayForEditing = () => {
-    mutate((s0) => preparePastDayForEditing(s0, dateSafe));
-    setIsEditingPastClosedDay(true);
-  };
-
-  const handleDoneEditingPastDay = () => {
-    setIsEditingPastClosedDay(false);
   };
 
   // v4: Meeting handlers
@@ -741,12 +729,14 @@ function DailyAgendaPageContent({
       const willBeAttended = !(meeting0?.attended ?? false);
       let next = toggleMeetingAttended(s0, meetingId);
       if (willBeAttended && meeting0) {
-        next = appendDayEvent(next, dateSafe, {
-          id: makeId("evt"),
+        next = upsertDayEvent(next, dateSafe, {
+          id: `meeting:attended:${meetingId}`,
           at: getVirtualTimestamp(),
           kind: "MEETING",
           text: `✓ Attended: ${meeting0.title}`,
         });
+      } else {
+        next = removeDayEvent(next, dateSafe, `meeting:attended:${meetingId}`);
       }
       return next;
     });
@@ -952,7 +942,7 @@ function DailyAgendaPageContent({
   };
 
   // v4: If day is closed, show journal-style read-only view
-  if (day.isClosed && day.isWorkingDay && !isEditingPastClosedDay) {
+  if (day.isClosed && day.isWorkingDay) {
     const startedAtTime = day.startedAt ? formatTime(day.startedAt) : "—";
     const endedAtTime = day.endedAt ? formatTime(day.endedAt) : "—";
     const endedAtDate = day.endedAt ? day.endedAt.slice(0, 10) : undefined;
@@ -966,57 +956,7 @@ function DailyAgendaPageContent({
       .filter((t) => day.outcomeByTaskId[t.id] === "COMPLETED");
 
     const completedSessions = state.sessions.filter((s) => s.date === dateSafe && s.endedAt);
-
-    const baseEvents = Array.isArray(day.events) ? day.events : [];
-    const logEvents = [
-      ...baseEvents,
-      ...(day.startedAt && !baseEvents.some((e) => e.kind === "SYSTEM" && e.text === "Day started")
-        ? [
-            {
-              id: `evt_start_${day.startedAt}`,
-              at: day.startedAt,
-              kind: "SYSTEM" as const,
-              text: "Day started",
-            },
-          ]
-        : []),
-      ...(day.endedAt && !baseEvents.some((e) => e.kind === "SYSTEM" && e.text === "Day ended")
-        ? [
-            {
-              id: `evt_end_${day.endedAt}`,
-              at: day.endedAt,
-              kind: "SYSTEM" as const,
-              text: "Day ended",
-            },
-          ]
-        : []),
-    ]
-      .filter((e) => {
-        switch (e.kind) {
-          case "SYSTEM":
-            return e.text === "Day started" || e.text === "Day ended";
-          case "REMINDER":
-            return (
-              e.text.toLowerCase().includes("email") ||
-              e.text.toLowerCase().includes("bureaucr") ||
-              e.text.toLowerCase().includes("burocr")
-            );
-          case "TASK":
-            return e.text.startsWith("✓ Completed:");
-          case "MEETING":
-            return e.text.startsWith("✓ Attended:");
-          case "FOCUS":
-            return (
-              e.text.startsWith("▶ Started:") ||
-              e.text.startsWith("■ Ended:") ||
-              e.text.startsWith("✓ Ended:")
-            );
-          default:
-            return false;
-        }
-      })
-      .slice()
-      .sort((a, b) => a.at.localeCompare(b.at));
+    const logEvents = buildDayHistory(state, dateSafe, plan);
 
     const kindToColor: Record<string, string> = {
       SYSTEM: REPORT_THEME.textMuted,
@@ -1068,22 +1008,24 @@ function DailyAgendaPageContent({
               </div>
             </div>
 
-            <button
-              onClick={handleReopenDay}
-              style={{
-                padding: "12px 18px",
-                fontSize: 14,
-                fontWeight: 900,
-                backgroundColor: APP_MAIN_COLOR,
-                color: "white",
-                border: "none",
-                borderRadius: 12,
-                cursor: "pointer",
-                boxShadow: "0 12px 26px rgba(0,0,0,0.14)",
-              }}
-            >
-              Reopen for Editing
-            </button>
+            {!isPastDate ? (
+              <button
+                onClick={handleReopenDay}
+                style={{
+                  padding: "12px 18px",
+                  fontSize: 14,
+                  fontWeight: 900,
+                  backgroundColor: APP_MAIN_COLOR,
+                  color: "white",
+                  border: "none",
+                  borderRadius: 12,
+                  cursor: "pointer",
+                  boxShadow: "0 12px 26px rgba(0,0,0,0.14)",
+                }}
+              >
+                Reopen for Editing
+              </button>
+            ) : null}
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 16, marginBottom: 16 }}>
@@ -1370,7 +1312,7 @@ function DailyAgendaPageContent({
         {!day.isWorkingDay ? (
           isPastDate ? (
             /* Past date without activation → nothing to see */
-            <PastUnactivatedDayPanel date={dateSafe} onOpenForEditing={handleOpenPastDayForEditing} />
+            <PastUnactivatedDayPanel date={dateSafe} />
           ) : (
             /* Current date → show activation button */
             <div
@@ -1410,43 +1352,6 @@ function DailyAgendaPageContent({
         ) : (
 	          <>
 	          {/* All sections below only show when day is activated */}
-
-	          {isEditingPastClosedDay && (
-	            <div
-	              style={{
-	                display: "flex",
-	                alignItems: "center",
-	                justifyContent: "space-between",
-	                gap: 12,
-	                flexWrap: "wrap",
-	                marginBottom: 20,
-	                padding: "12px 14px",
-	                border: "1px solid #e9d5ff",
-	                borderRadius: 12,
-	                backgroundColor: "#faf5ff",
-	              }}
-	            >
-	              <div style={{ fontSize: 13, fontWeight: 700, color: "#5b21b6" }}>
-	                Editing a closed past day
-	              </div>
-	              <button
-	                type="button"
-	                onClick={handleDoneEditingPastDay}
-	                style={{
-	                  padding: "8px 12px",
-	                  fontSize: 12,
-	                  fontWeight: 800,
-	                  backgroundColor: "white",
-	                  color: "#5b21b6",
-	                  border: "1px solid #d8b4fe",
-	                  borderRadius: 10,
-	                  cursor: "pointer",
-	                }}
-	              >
-	                Done Editing
-	              </button>
-	            </div>
-	          )}
 	
 	          <div style={{ display: "flex", gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
 	            <div
@@ -1830,6 +1735,7 @@ function DailyAgendaPageContent({
                           const isCompleted = item.task.status === "GREEN";
                           const isInProgress = item.task.status === "YELLOW";
                           const isPrimary = item.role === "primary";
+                          const isTaskFrozen = frozenTaskIds.has(item.taskId);
                           return (
                             <div
                               key={item.taskId}
@@ -1868,38 +1774,40 @@ function DailyAgendaPageContent({
                                 </div>
                               </div>
 
-                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                                <button
-                                  onClick={() => setOutcome(item.taskId, "COMPLETED")}
-                                  style={{
-                                    padding: isPrimary ? "6px 12px" : "4px 10px",
-                                    fontSize: isPrimary ? 13 : 12,
-                                    fontWeight: 600,
-                                    backgroundColor: isCompleted ? "#4caf50" : "white",
-                                    color: isCompleted ? "white" : "#4caf50",
-                                    border: `${isPrimary ? 2 : 1.5}px solid #4caf50`,
-                                    borderRadius: isPrimary ? 6 : 4,
-                                    cursor: "pointer",
-                                  }}
-                                >
-                                  ✓ Completed
-                                </button>
-                                <button
-                                  onClick={() => setOutcome(item.taskId, "NOT_COMPLETED")}
-                                  style={{
-                                    padding: isPrimary ? "6px 12px" : "4px 10px",
-                                    fontSize: isPrimary ? 13 : 12,
-                                    fontWeight: 600,
-                                    backgroundColor: isInProgress ? "#ff9800" : "white",
-                                    color: isInProgress ? "white" : "#ff9800",
-                                    border: `${isPrimary ? 2 : 1.5}px solid #ff9800`,
-                                    borderRadius: isPrimary ? 6 : 4,
-                                    cursor: "pointer",
-                                  }}
-                                >
-                                  ⏳ {isPrimary ? "Work in Progress" : "In Progress"}
-                                </button>
-                              </div>
+                              {!isTaskFrozen ? (
+                                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                  <button
+                                    onClick={() => setOutcome(item.taskId, "COMPLETED")}
+                                    style={{
+                                      padding: isPrimary ? "6px 12px" : "4px 10px",
+                                      fontSize: isPrimary ? 13 : 12,
+                                      fontWeight: 600,
+                                      backgroundColor: isCompleted ? "#4caf50" : "white",
+                                      color: isCompleted ? "white" : "#4caf50",
+                                      border: `${isPrimary ? 2 : 1.5}px solid #4caf50`,
+                                      borderRadius: isPrimary ? 6 : 4,
+                                      cursor: "pointer",
+                                    }}
+                                  >
+                                    ✓ Completed
+                                  </button>
+                                  <button
+                                    onClick={() => setOutcome(item.taskId, "NOT_COMPLETED")}
+                                    style={{
+                                      padding: isPrimary ? "6px 12px" : "4px 10px",
+                                      fontSize: isPrimary ? 13 : 12,
+                                      fontWeight: 600,
+                                      backgroundColor: isInProgress ? "#ff9800" : "white",
+                                      color: isInProgress ? "white" : "#ff9800",
+                                      border: `${isPrimary ? 2 : 1.5}px solid #ff9800`,
+                                      borderRadius: isPrimary ? 6 : 4,
+                                      cursor: "pointer",
+                                    }}
+                                  >
+                                    ⏳ {isPrimary ? "Work in Progress" : "In Progress"}
+                                  </button>
+                                </div>
+                              ) : null}
                             </div>
                           );
                         })}
@@ -2100,7 +2008,7 @@ function DailyAgendaPageContent({
 	              }}
 	            />
 
-          {!tutorialMode && !isEditingPastClosedDay && (
+          {!tutorialMode && (
             <>
               {/* v4: Close Day Button */}
               <div style={{ marginTop: 28, textAlign: "center" }}>
@@ -2155,7 +2063,7 @@ function DailyAgendaPageContent({
                     <h3 style={{ marginTop: 0, marginBottom: 16 }}>🔒 Close Working Day</h3>
                     <p style={{ marginBottom: 24, lineHeight: 1.6 }}>
                       This will close <strong>{dateSafe}</strong> and convert the page into a read-only journal view.
-                      Any active sessions will be ended. You can reopen the day later if you need to make changes.
+                      Any active sessions will be ended. You can reopen it again today if you still need to make changes.
                     </p>
                     <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
                       <button
