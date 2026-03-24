@@ -2,13 +2,12 @@ import type { DateISO } from "../app/types";
 
 interface PastUnactivatedDayPanelProps {
   date: DateISO;
-  onOpenForEditing?: () => void;
 }
 
 /**
  * Panel shown when navigating to a past date that was never activated as a working day.
  */
-export default function PastUnactivatedDayPanel({ date, onOpenForEditing }: PastUnactivatedDayPanelProps) {
+export default function PastUnactivatedDayPanel({ date }: PastUnactivatedDayPanelProps) {
   const formattedDate = new Date(date).toLocaleDateString("en-US", {
     weekday: "long",
     month: "long",
@@ -33,26 +32,6 @@ export default function PastUnactivatedDayPanel({ date, onOpenForEditing }: Past
       <p style={{ color: "#888", fontSize: 13 }}>
         This day was not activated as a working day. ✨
       </p>
-      {onOpenForEditing ? (
-        <button
-          type="button"
-          onClick={onOpenForEditing}
-          style={{
-            marginTop: 18,
-            padding: "10px 16px",
-            fontSize: 13,
-            fontWeight: 800,
-            backgroundColor: "#673ab7",
-            color: "white",
-            border: "none",
-            borderRadius: 10,
-            cursor: "pointer",
-            boxShadow: "0 10px 22px rgba(0,0,0,0.10)",
-          }}
-        >
-          Open for Editing
-        </button>
-      ) : null}
     </div>
   );
 }
