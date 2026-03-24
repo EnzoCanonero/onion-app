@@ -11,6 +11,7 @@ import {
   deleteMeeting,
   updateMeetingThisAndFuture,
   deleteMeetingThisAndFuture,
+  setDailyJournal,
   formatDateDisplay,
 } from "../app/storage";
 import { checkDateAccess } from "../app/dateAccess";
@@ -32,6 +33,7 @@ export default function DatePickerModal({ currentDate, onSelectDate, onClose }: 
   const [activeTab, setActiveTab] = useState<"meetings" | "diary">("meetings");
   const [meetingFormDate, setMeetingFormDate] = useState<DateISO | null>(null);
   const [editingMeeting, setEditingMeeting] = useState<MeetingEntry | undefined>();
+  const [diaryDraft, setDiaryDraft] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const calendarSurfaceRef = useRef<HTMLDivElement | null>(null);
   const [calendarSurfaceHeight, setCalendarSurfaceHeight] = useState<number | null>(null);
@@ -80,9 +82,13 @@ export default function DatePickerModal({ currentDate, onSelectDate, onClose }: 
     return meetingsByDate[inspectedDate] ?? [];
   }, [inspectedDate, meetingsByDate]);
   const inspectedDiary = inspectedDate ? journalEntriesByDate[inspectedDate] : undefined;
+  const inspectedIsPastDate = Boolean(inspectedDate && inspectedDate < getTodayDate());
+  const canEditDiary = Boolean(inspectedDate && inspectedIsPastDate);
+  const diaryIsDirty = canEditDiary && diaryDraft !== (inspectedDiary ?? "");
   const canGoToInspectedDate = inspectedDateAccess?.allowed ?? false;
-  const canAddMeetingForInspectedDate = Boolean(
+  const canManageMeetingsForInspectedDate = Boolean(
     inspectedDate &&
+      inspectedDate >= getTodayDate() &&
       (inspectedDateAccess?.allowed ||
         (inspectedDateAccess && "meetingsAllowed" in inspectedDateAccess && inspectedDateAccess.meetingsAllowed))
   );
@@ -129,7 +135,7 @@ export default function DatePickerModal({ currentDate, onSelectDate, onClose }: 
   };
 
   const handleAddMeeting = () => {
-    if (!inspectedDate || !canAddMeetingForInspectedDate) return;
+    if (!inspectedDate || !canManageMeetingsForInspectedDate) return;
     setEditingMeeting(undefined);
     setMeetingFormDate(inspectedDate);
   };
@@ -153,8 +159,15 @@ export default function DatePickerModal({ currentDate, onSelectDate, onClose }: 
     setEditingMeeting(undefined);
   };
 
+  const handleSaveDiary = () => {
+    if (!inspectedDate || !canEditDiary) return;
+    const nextState = setDailyJournal(loadState(), inspectedDate, diaryDraft.trim() || undefined);
+    saveState(nextState);
+    setStateTick((t) => t + 1);
+  };
+
   const handleEditMeeting = (meeting: MeetingEntry) => {
-    if (!canAddMeetingForInspectedDate) return;
+    if (!canManageMeetingsForInspectedDate) return;
     setEditingMeeting(meeting);
     setMeetingFormDate(meeting.date);
   };
@@ -269,6 +282,10 @@ export default function DatePickerModal({ currentDate, onSelectDate, onClose }: 
       window.removeEventListener("resize", updateHeight);
     };
   }, [viewMonth, inspectedDate]);
+
+  useEffect(() => {
+    setDiaryDraft(inspectedDiary ?? "");
+  }, [inspectedDate, inspectedDiary]);
 
   return (
     <>
@@ -599,7 +616,7 @@ export default function DatePickerModal({ currentDate, onSelectDate, onClose }: 
                                   </div>
                                 ) : null}
                               </div>
-                              {canAddMeetingForInspectedDate ? (
+                              {canManageMeetingsForInspectedDate ? (
                                 <button
                                   type="button"
                                   onClick={() => handleEditMeeting(meeting)}
@@ -644,7 +661,49 @@ export default function DatePickerModal({ currentDate, onSelectDate, onClose }: 
                     <div style={{ padding: "12px 14px", borderBottom: "1px solid #eee" }}>
                       <div style={{ fontWeight: 800, fontSize: 14, color: "#333" }}>Diary</div>
                     </div>
-                    {inspectedDiary ? (
+                    {canEditDiary ? (
+                      <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", padding: 12, gap: 10 }}>
+                        <textarea
+                          value={diaryDraft}
+                          onChange={(e) => setDiaryDraft(e.target.value)}
+                          placeholder="Write here..."
+                          style={{
+                            flex: 1,
+                            minHeight: 0,
+                            width: "100%",
+                            boxSizing: "border-box",
+                            resize: "none",
+                            padding: 14,
+                            borderRadius: 12,
+                            border: "1px solid #e7dcc5",
+                            backgroundColor: "#fffdf8",
+                            color: "#2f2a1f",
+                            fontSize: 14,
+                            lineHeight: 1.7,
+                            fontFamily: "inherit",
+                            outline: "none",
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={handleSaveDiary}
+                          disabled={!diaryIsDirty}
+                          style={{
+                            alignSelf: "flex-end",
+                            padding: "9px 14px",
+                            fontSize: 12,
+                            fontWeight: 800,
+                            backgroundColor: diaryIsDirty ? APP_MAIN_COLOR : "#e5e7eb",
+                            color: diaryIsDirty ? "white" : "#9ca3af",
+                            border: "none",
+                            borderRadius: 10,
+                            cursor: diaryIsDirty ? "pointer" : "default",
+                          }}
+                        >
+                          Save
+                        </button>
+                      </div>
+                    ) : inspectedDiary ? (
                       <div
                         style={{
                           flex: 1,
@@ -710,18 +769,18 @@ export default function DatePickerModal({ currentDate, onSelectDate, onClose }: 
                 </button>
                 <button
                   onClick={handleAddMeeting}
-                  disabled={!canAddMeetingForInspectedDate}
+                  disabled={!canManageMeetingsForInspectedDate}
                   style={{
                     flex: 1,
                     minWidth: 132,
                     padding: "10px 12px",
                     fontSize: 13,
                     fontWeight: 800,
-                    backgroundColor: canAddMeetingForInspectedDate ? "white" : "#f3f4f6",
-                    color: canAddMeetingForInspectedDate ? "#444" : "#9ca3af",
+                    backgroundColor: canManageMeetingsForInspectedDate ? "white" : "#f3f4f6",
+                    color: canManageMeetingsForInspectedDate ? "#444" : "#9ca3af",
                     border: "1px solid #ddd",
                     borderRadius: 12,
-                    cursor: canAddMeetingForInspectedDate ? "pointer" : "not-allowed",
+                    cursor: canManageMeetingsForInspectedDate ? "pointer" : "not-allowed",
                   }}
                 >
                   ➕ Add meeting

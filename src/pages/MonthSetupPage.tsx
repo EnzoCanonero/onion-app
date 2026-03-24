@@ -18,6 +18,7 @@ import {
   getStandaloneTasks,
   getTasksForMilestone,
   getTasksForMonth,
+  getFrozenTaskIds,
   getTaskBoardForScope,
   getTaskLinksForScope,
   updateTaskBoardForScope,
@@ -123,6 +124,7 @@ function TaskGroup({
   tasks,
   milestoneId,
   milestoneStatus,
+  frozenTaskIds,
   boardSize,
   onUpdateBoardSize,
   links,
@@ -146,6 +148,7 @@ function TaskGroup({
   tasks: TaskNode[];
   milestoneId: string | null;
   milestoneStatus?: MilestoneStatus;
+  frozenTaskIds: Set<string>;
   boardSize: { width: number; height: number };
   onUpdateBoardSize: (next: { width: number; height: number }) => void;
   links: { from: string; to: string }[];
@@ -354,6 +357,11 @@ function TaskGroup({
   const handleLinkTaskClick = (taskId: string) => {
     if (!canEditBoard) return;
     if (!isLinkMode) return;
+    if (frozenTaskIds.has(taskId)) return;
+    if (linkFromTaskId && frozenTaskIds.has(linkFromTaskId)) {
+      setLinkFromTaskId(null);
+      return;
+    }
 
     if (!linkFromTaskId) {
       setLinkFromTaskId(taskId);
@@ -399,7 +407,7 @@ function TaskGroup({
 
   const saveTaskModal = () => {
     if (!taskModalTaskId) return;
-    if (isCompleted) {
+    if (isCompleted || frozenTaskIds.has(taskModalTaskId)) {
       closeTaskModal();
       return;
     }
@@ -420,6 +428,7 @@ function TaskGroup({
 	    if (e.button !== 0) return;
 	    const rect = taskRectsById.get(taskId);
 	    if (!rect) return;
+      const isTaskFrozen = frozenTaskIds.has(taskId);
 
 	    taskPointerRef.current = {
 	      taskId,
@@ -431,7 +440,7 @@ function TaskGroup({
 	      originY: rect.y,
 	      w: rect.w,
       h: rect.h,
-      canDrag: canEditBoard && !isLinkMode,
+      canDrag: canEditBoard && !isLinkMode && !isTaskFrozen,
       moved: false,
     };
 
@@ -441,7 +450,7 @@ function TaskGroup({
       // ignore
     }
 
-    if (canEditBoard && !isLinkMode) {
+    if (canEditBoard && !isLinkMode && !isTaskFrozen) {
       e.preventDefault();
     }
   };
@@ -507,6 +516,7 @@ function TaskGroup({
 	  const handleResizePointerDown = (e: ReactPointerEvent<HTMLDivElement>, taskId: string) => {
 	    if (!canEditBoard) return;
 	    if (isLinkMode) return;
+      if (frozenTaskIds.has(taskId)) return;
 	    const rect = taskRectsById.get(taskId);
     if (!rect) return;
 
@@ -1527,6 +1537,7 @@ function TaskGroup({
 	                {tasks.map((task) => {
 	                const rect = taskRectsById.get(task.id);
 	                if (!rect) return null;
+                  const isTaskFrozen = frozenTaskIds.has(task.id);
 
                 const statusGlyph = task.status === "GREEN" ? "✓" : task.status === "YELLOW" ? "◐" : "○";
                 const statusLabel = task.status === "GREEN" ? "Completed" : task.status === "YELLOW" ? "In Progress" : "Not Started";
@@ -1565,7 +1576,7 @@ function TaskGroup({
                       boxShadow: isDragging
                         ? "0 20px 40px rgba(0,0,0,0.15), 0 0 0 2px rgba(59,130,246,0.5)"
                         : "0 1px 3px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04)",
-                      cursor: isLinkMode ? "crosshair" : canEditBoard ? "grab" : "pointer",
+                      cursor: isLinkMode && !isTaskFrozen ? "crosshair" : canEditBoard && !isTaskFrozen ? "grab" : "pointer",
                       userSelect: "none",
                       overflow: "hidden",
                       zIndex: isDragging ? 5 : 2,
@@ -1589,39 +1600,85 @@ function TaskGroup({
                         {task.title}
                       </div>
 
-                      {!isCompleted && (
-                        <button
-                          onPointerDown={(e) => e.stopPropagation()}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (!window.confirm(`Delete task "${task.title}"?`)) return;
-                            const nextLinks = links.filter((l) => l.from !== task.id && l.to !== task.id);
-                            if (nextLinks.length !== links.length) onUpdateLinks(nextLinks);
-                            onDeleteTask(task.id);
-                          }}
-                          style={{
-                            padding: "2px 6px",
-                            fontSize: 11,
-                            backgroundColor: "transparent",
-                            color: "#9ca3af",
-                            border: "none",
-                            cursor: "pointer",
-                            lineHeight: 1,
-                            borderRadius: 4,
-                            transition: "color 0.15s, background-color 0.15s",
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.color = "#ef4444";
-                            e.currentTarget.style.backgroundColor = "#fef2f2";
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.color = "#9ca3af";
-                            e.currentTarget.style.backgroundColor = "transparent";
-                          }}
-                          title="Delete task"
-                        >
-                          ✕
-                        </button>
+                      {!isCompleted && !isTaskFrozen && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                          <button
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onSetTaskStatus(task.id, "COMPLETED");
+                            }}
+                            style={{
+                              width: 18,
+                              height: 18,
+                              borderRadius: 5,
+                              border: "1px solid #10b981",
+                              backgroundColor: task.status === "GREEN" ? "#10b981" : "#ffffff",
+                              color: task.status === "GREEN" ? "#ffffff" : "#10b981",
+                              cursor: "pointer",
+                              fontSize: 10,
+                              fontWeight: 800,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                            }}
+                            title={task.status === "GREEN" ? "Clear completed status" : "Mark task as completed"}
+                          >
+                            ✓
+                          </button>
+                          <button
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onSetTaskStatus(task.id, "NOT_COMPLETED");
+                            }}
+                            style={{
+                              width: 18,
+                              height: 18,
+                              borderRadius: 5,
+                              border: "1px solid #f59e0b",
+                              backgroundColor: task.status === "YELLOW" ? "#f59e0b" : "#ffffff",
+                              color: task.status === "YELLOW" ? "#ffffff" : "#f59e0b",
+                              cursor: "pointer",
+                              fontSize: 10,
+                              fontWeight: 800,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                            }}
+                            title={task.status === "YELLOW" ? "Clear work in progress status" : "Mark task as work in progress"}
+                          >
+                            ◐
+                          </button>
+                          <button
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (!window.confirm(`Delete task "${task.title}"?`)) return;
+                              const nextLinks = links.filter((l) => l.from !== task.id && l.to !== task.id);
+                              if (nextLinks.length !== links.length) onUpdateLinks(nextLinks);
+                              onDeleteTask(task.id);
+                            }}
+                            style={{
+                              width: 18,
+                              height: 18,
+                              borderRadius: 5,
+                              border: "1px solid #fecaca",
+                              backgroundColor: "#ffffff",
+                              color: "#ef4444",
+                              cursor: "pointer",
+                              fontSize: 10,
+                              fontWeight: 800,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              flexShrink: 0,
+                            }}
+                            title="Delete task"
+                          >
+                            ✕
+                          </button>
+                        </div>
                       )}
                     </div>
 
@@ -1681,61 +1738,9 @@ function TaskGroup({
                         </span>
                       </div>
 
-                      {!isCompleted && (
-                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                          <button
-                            onPointerDown={(e) => e.stopPropagation()}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onSetTaskStatus(task.id, "COMPLETED");
-                            }}
-                            style={{
-                              width: 26,
-                              height: 26,
-                              borderRadius: 6,
-                              border: "1px solid #10b981",
-                              backgroundColor: task.status === "GREEN" ? "#10b981" : "#ffffff",
-                              color: task.status === "GREEN" ? "#ffffff" : "#10b981",
-                              cursor: "pointer",
-                              fontSize: 13,
-                              fontWeight: 800,
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                            }}
-                            title={task.status === "GREEN" ? "Clear completed status" : "Mark task as completed"}
-                          >
-                            ✓
-                          </button>
-                          <button
-                            onPointerDown={(e) => e.stopPropagation()}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onSetTaskStatus(task.id, "NOT_COMPLETED");
-                            }}
-                            style={{
-                              width: 26,
-                              height: 26,
-                              borderRadius: 6,
-                              border: "1px solid #f59e0b",
-                              backgroundColor: task.status === "YELLOW" ? "#f59e0b" : "#ffffff",
-                              color: task.status === "YELLOW" ? "#ffffff" : "#f59e0b",
-                              cursor: "pointer",
-                              fontSize: 13,
-                              fontWeight: 800,
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                            }}
-                            title={task.status === "YELLOW" ? "Clear work in progress status" : "Mark task as work in progress"}
-                          >
-                            ◐
-                          </button>
-                        </div>
-                      )}
                     </div>
 
-                    {!isCompleted && !isLinkMode && (
+                    {!isCompleted && !isLinkMode && !isTaskFrozen && (
                       <div
                         onPointerDown={(e) => handleResizePointerDown(e, task.id)}
                         onPointerMove={handleResizePointerMove}
@@ -1824,18 +1829,18 @@ function TaskGroup({
 	                type="text"
 	                value={taskModalTitle}
 	                onChange={(e) => setTaskModalTitle(e.target.value)}
-	                readOnly={isCompleted}
+	                readOnly={isCompleted || frozenTaskIds.has(taskModalTaskId)}
 	                autoFocus
 	                style={{
 	                  width: "100%",
 	                  padding: 10,
 	                  fontSize: 14,
-	                  backgroundColor: isCompleted ? "rgba(255,255,255,0.55)" : "white",
+	                  backgroundColor: isCompleted || frozenTaskIds.has(taskModalTaskId) ? "rgba(255,255,255,0.55)" : "white",
 	                  border: `1px solid ${noteBorderColor}`,
 	                  borderRadius: 6,
 	                  boxSizing: "border-box",
 	                  outline: "none",
-	                  cursor: isCompleted ? "default" : "text",
+	                  cursor: isCompleted || frozenTaskIds.has(taskModalTaskId) ? "default" : "text",
 	                }}
 	              />
 	            </div>
@@ -1847,20 +1852,20 @@ function TaskGroup({
 	              <textarea
 	                value={taskModalNotes}
 	                onChange={(e) => setTaskModalNotes(e.target.value)}
-	                readOnly={isCompleted}
+	                readOnly={isCompleted || frozenTaskIds.has(taskModalTaskId)}
 	                rows={14}
 	                style={{
 	                  width: "100%",
 	                  padding: 10,
 	                  fontSize: 13,
-	                  backgroundColor: isCompleted ? "rgba(255,255,255,0.55)" : "white",
+	                  backgroundColor: isCompleted || frozenTaskIds.has(taskModalTaskId) ? "rgba(255,255,255,0.55)" : "white",
 	                  border: `1px solid ${noteBorderColor}`,
 	                  borderRadius: 6,
 	                  boxSizing: "border-box",
 	                  outline: "none",
 	                  resize: "vertical",
 	                  fontFamily: "inherit",
-	                  cursor: isCompleted ? "default" : "text",
+	                  cursor: isCompleted || frozenTaskIds.has(taskModalTaskId) ? "default" : "text",
 	                }}
 	              />
 	            </div>
@@ -1885,9 +1890,9 @@ function TaskGroup({
 	                  cursor: "pointer",
 	                }}
 	              >
-	                {isCompleted ? "Close" : "Cancel"}
+	                {isCompleted || frozenTaskIds.has(taskModalTaskId) ? "Close" : "Cancel"}
 	              </button>
-	              {!isCompleted && (
+	              {!isCompleted && !frozenTaskIds.has(taskModalTaskId) && (
 	                <button
 	                  onClick={saveTaskModal}
 	                  style={{
@@ -2405,6 +2410,7 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
     return { state: next, didAutoClose: changed };
   }, [rawState, currentYM]);
   const plan = getMonth(state, ymSafe);
+  const frozenTaskIds = useMemo(() => getFrozenTaskIds(state), [state]);
   const shortName = getShortUserName(getUserName());
   const selectableMilestoneIds = state.grandPlan
     ? getSelectableMilestoneIds(state.grandPlan.milestones)
@@ -3451,6 +3457,7 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
 		                    tasks={tasks}
 		                    milestoneId={milestone ? milestone.id : null}
 		                    milestoneStatus={milestone?.status}
+                        frozenTaskIds={frozenTaskIds}
                         isObjective={Boolean(milestone && primaryMilestoneId === milestone.id)}
                         onSetObjective={milestone ? handleSetObjectiveMilestone : undefined}
 		                    boardSize={boardSize}
