@@ -20,7 +20,7 @@ import { normalizeWeekdays } from "./weekdays";
 import { getVirtualTodayDate, getVirtualCurrentYM, getVirtualTimestamp } from "../contexts/VirtualClockContext";
 import { getStorageBackend } from "./storageBackend";
 
-export const STATE_KEY = "focustree.state";
+export const STATE_KEY = "onion-app.state";
 const KEY = STATE_KEY;
 
 const DEFAULT_DAILY_REMINDER_TEMPLATES: DailyReminderTemplate[] = [

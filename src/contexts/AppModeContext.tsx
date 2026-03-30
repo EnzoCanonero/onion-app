@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useEffect, type ReactNode } from "react";
 import { getStorageBackend } from "../app/storageBackend";
 
-const STORAGE_KEY = "focustree.developerMode";
+const STORAGE_KEY = "onion-app.developerMode";
 
 interface AppModeContextValue {
   isDeveloper: boolean;

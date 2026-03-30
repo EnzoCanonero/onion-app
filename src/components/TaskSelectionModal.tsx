@@ -20,6 +20,9 @@ type TaskSelectionModalProps = {
   surface?: "card" | "none";
   onDraftChange?: (primaryId: string | undefined, secondaryIds: string[]) => void;
   primaryButtonTutorialTarget?: string;
+  showPrimarySelection?: boolean;
+  title?: string;
+  description?: string;
 };
 
 export default function TaskSelectionModal({
@@ -39,6 +42,9 @@ export default function TaskSelectionModal({
   surface = "card",
   onDraftChange,
   primaryButtonTutorialTarget,
+  showPrimarySelection = true,
+  title = "Daily task selection",
+  description = "Choose a primary task and optional secondary tasks.",
 }: TaskSelectionModalProps) {
   const lastDraftRef = useRef<{ primaryId?: string; secondaryIds: string[] }>({
     primaryId: currentPrimaryId ?? undefined,
@@ -311,9 +317,9 @@ export default function TaskSelectionModal({
     >
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
         <div>
-          <div style={{ fontSize: 16, fontWeight: 900, color: "#111" }}>Daily task selection</div>
+          <div style={{ fontSize: 16, fontWeight: 900, color: "#111" }}>{title}</div>
           <div style={{ marginTop: 6, fontSize: 13, color: "#666", lineHeight: 1.4 }}>
-            Choose a primary task and optional secondary tasks.
+            {description}
           </div>
         </div>
         <button
@@ -417,6 +423,7 @@ export default function TaskSelectionModal({
             </div>
           ) : (
             <>
+              {showPrimarySelection ? (
               <div ref={primaryMenuRef} style={{ position: "relative" }}>
                 <label style={{ display: "block", fontSize: 12, fontWeight: 800, color: "#555", marginBottom: 6 }}>
                   Primary task
@@ -530,6 +537,7 @@ export default function TaskSelectionModal({
                   </div>
                 )}
               </div>
+              ) : null}
 
               <div ref={secondaryMenuRef} style={{ position: "relative" }}>
                 <label style={{ display: "block", fontSize: 12, fontWeight: 800, color: "#555", marginBottom: 6 }}>
@@ -567,7 +575,7 @@ export default function TaskSelectionModal({
                   </span>
                 </button>
 
-                {!selectedPrimaryId && (
+                {!showPrimarySelection && !selectedPrimaryId ? null : !selectedPrimaryId && (
                   <div style={{ marginTop: 8, fontSize: 12, color: "#888" }}>
                     Select a primary task to enable secondary tasks.
                   </div>
