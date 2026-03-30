@@ -2,8 +2,8 @@ import { createContext, useContext, useState, useEffect, useCallback, type React
 import type { DateISO, YM } from "../app/types";
 import { getStorageBackend } from "../app/storageBackend";
 
-const STORAGE_KEY = "focustree.virtualClock";
-const DEV_MODE_KEY = "focustree.developerMode";
+const STORAGE_KEY = "onion-app.virtualClock";
+const DEV_MODE_KEY = "onion-app.developerMode";
 
 interface VirtualClockState {
   enabled: boolean;

@@ -5,7 +5,7 @@ export class StorageHandler {
   private dir: string;
 
   constructor(userDataPath: string) {
-    this.dir = path.join(userDataPath, "focustree-data");
+    this.dir = path.join(userDataPath, "onion-app-data");
     if (!fs.existsSync(this.dir)) {
       fs.mkdirSync(this.dir, { recursive: true });
     }

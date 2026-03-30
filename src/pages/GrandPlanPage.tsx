@@ -29,6 +29,11 @@ import {
   addMilestone,
   updateMilestone,
   deleteMilestone,
+  getAllTasks,
+  getTasksForMilestone,
+  getFrozenTaskIds,
+  applyTaskStatus,
+  deleteTask,
   getTodayDate,
   getCurrentYM,
 } from "../app/storage";
@@ -39,7 +44,7 @@ import MilestoneDetailModal from "../components/MilestoneDetailModal";
 import TitleDescriptionModal from "../components/TitleDescriptionModal";
 
 const DEFAULT_COLORS = ["#4caf50", "#2196f3", "#ff9800", "#e91e63", APP_MAIN_COLOR, "#00bcd4"];
-const SELECTED_CATEGORY_STORAGE_KEY = "focustree:grand-plan:selected-category";
+const SELECTED_CATEGORY_STORAGE_KEY = "onion-app:grand-plan:selected-category";
 
 function dateISOToDate(date: DateISO): Date | null {
   const parts = date.split("-").map((x) => Number(x));
@@ -116,6 +121,7 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
   const [tick, setTick] = useState(0);
   const state = useMemo(() => loadState(), [tick]);
   const grandPlan = state.grandPlan;
+  const frozenTaskIds = useMemo(() => getFrozenTaskIds(state), [state]);
   const shortName = getShortUserName(getUserName());
   const pinnedMilestoneIds = useMemo(() => {
     const ids = new Set<string>();
@@ -268,6 +274,17 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
     setSelectedMilestone(null);
   };
 
+  const handleSetMilestoneTaskStatus = (
+    taskId: string,
+    outcome: "COMPLETED" | "NOT_COMPLETED"
+  ) => {
+    mutate((s) => applyTaskStatus(s, taskId, outcome));
+  };
+
+  const handleDeleteMilestoneTask = (taskId: string) => {
+    mutate((s) => deleteTask(s, taskId));
+  };
+
   const handleCloseGrandPlan = () => {
     mutate((s) => closeGrandPlan(s));
     setShowCloseConfirm(false);
@@ -281,6 +298,16 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
   const sortedCategories = grandPlan?.categories.slice().sort((a, b) => a.order - b.order) ?? [];
   const activeCategory =
     sortedCategories.find((c) => c.id === selectedCategoryId) ?? sortedCategories[0];
+  const selectedMilestoneLive = selectedMilestone
+    ? grandPlan?.milestones.find((m) => m.id === selectedMilestone.id) ?? selectedMilestone
+    : null;
+  const selectedMilestoneTasks = useMemo(
+    () =>
+      selectedMilestoneLive
+        ? [...getTasksForMilestone(state, selectedMilestoneLive.id)].sort((a, b) => a.title.localeCompare(b.title))
+        : [],
+    [state, selectedMilestoneLive]
+  );
 
   useEffect(() => {
     if (!grandPlan) return;
@@ -520,7 +547,7 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
     const monthsInPlan = listMonthsInRange(grandPlan.startMonth, actualEndMonth);
     const months = monthsInPlan.length > 0 ? monthsInPlan : ([grandPlan.startMonth] as YM[]);
 
-    const tasksInPlan = months.flatMap((ym) => state.months[ym]?.tasks ?? []);
+    const tasksInPlan = getAllTasks(state);
     const tasksTotalCount = tasksInPlan.length;
     const tasksCompletedCount = tasksInPlan.filter((t) => t.status === "GREEN").length;
     const tasksCompletionRate = tasksTotalCount > 0 ? Math.round((tasksCompletedCount / tasksTotalCount) * 100) : 0;
@@ -561,10 +588,10 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
 
     const taskMilestoneById = new Map<string, string | null | undefined>();
     const templateMilestoneById = new Map<string, string | null | undefined>();
+    tasksInPlan.forEach((t) => {
+      if (!taskMilestoneById.has(t.id)) taskMilestoneById.set(t.id, t.linkedMilestoneId);
+    });
     Object.values(state.months).forEach((mp) => {
-      mp.tasks.forEach((t) => {
-        if (!taskMilestoneById.has(t.id)) taskMilestoneById.set(t.id, t.linkedMilestoneId);
-      });
       mp.templates.forEach((t) => {
         if (!templateMilestoneById.has(t.id)) templateMilestoneById.set(t.id, t.linkedMilestoneId);
       });
@@ -1535,12 +1562,16 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
       )}
 
       {/* Milestone Detail Modal */}
-      {selectedMilestone && (
+      {selectedMilestoneLive && (
         <MilestoneDetailModal
-          milestone={selectedMilestone}
+          milestone={selectedMilestoneLive}
+          linkedTasks={selectedMilestoneTasks}
+          frozenTaskIds={frozenTaskIds}
           onClose={() => setSelectedMilestone(null)}
           onSave={handleSaveMilestone}
           onDelete={handleDeleteMilestone}
+          onSetTaskStatus={handleSetMilestoneTaskStatus}
+          onDeleteTask={handleDeleteMilestoneTask}
         />
       )}
 
@@ -1555,7 +1586,8 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
           }
           accentColor={activeCategory?.color ?? APP_MAIN_COLOR}
           titlePlaceholder={creatingMilestone.parentId ? "Milestone title..." : "Goal title..."}
-          descriptionPlaceholder="Add a description (optional)..."
+          descriptionLabel="Notes"
+          descriptionPlaceholder="Add notes (optional)..."
           confirmLabel={creatingMilestone.parentId ? "Add Milestone" : "Add Goal"}
           onCancel={() => setCreatingMilestone(null)}
           onConfirm={(title, description) => {

@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import MonthSetupPage from "../pages/MonthSetupPage";
 import MonthSetupEnzoOverlay from "./MonthSetupEnzoOverlay";
 import { loadOnboarding, saveOnboarding } from "../app/onboarding";
-import { loadState, getMonth } from "../app/storage";
+import { loadState, getMonth, getTasksForMonth } from "../app/storage";
 import { useDateNavigation } from "../contexts/DateNavigationContext";
 import { APP_MAIN_COLOR } from "../app/theme";
 
@@ -20,7 +20,7 @@ export default function MonthSetupTutorialWrapper() {
   const hasPlan = !!plan;
   const templateCount = plan?.templates?.length ?? 0;
   const hasPinnedMilestones = (plan?.pinnedMilestoneIds?.length ?? 0) > 0;
-  const taskCount = plan?.tasks?.length ?? 0;
+  const taskCount = getTasksForMonth(state, selectedMonth).length;
 
   const handleTutorialTick = useCallback(() => {
     setTick((t) => t + 1);

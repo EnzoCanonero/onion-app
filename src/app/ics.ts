@@ -131,7 +131,7 @@ export function exportMeetingsToICS(meetings: MeetingEntry[]): string {
   const lines: string[] = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
-    "PRODID:-//OnionOps//EN",
+    "PRODID:-//Onion-App//EN",
     "CALSCALE:GREGORIAN",
   ];
 

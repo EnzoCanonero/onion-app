@@ -1,6 +1,6 @@
-import { useRef, useState } from "react";
+import type React from "react";
 import type { DateISO, MeetingEntry, YM } from "../app/types";
-import { formatDateDisplay, getTodayDate } from "../app/storage";
+import { getTodayDate } from "../app/storage";
 import { APP_MAIN_COLOR } from "../app/theme";
 
 interface CalendarGridProps {
@@ -13,6 +13,7 @@ interface CalendarGridProps {
   /** Returns true if the date is future (meetings only, navigation blocked) */
   isDateMeetingsOnly?: (date: DateISO) => boolean;
   meetingsByDate?: Record<DateISO, MeetingEntry[]>;
+  journalDates?: Set<DateISO>;
 }
 
 interface DayCell {
@@ -84,16 +85,10 @@ export default function CalendarGrid({
   isDateRestricted,
   isDateMeetingsOnly,
   meetingsByDate,
+  journalDates,
 }: CalendarGridProps) {
   const cells = generateCalendarGrid(currentMonth, selectedDate);
   const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const gridRef = useRef<HTMLDivElement | null>(null);
-  const [hoverCard, setHoverCard] = useState<{
-    date: DateISO;
-    meetings: MeetingEntry[];
-    x: number;
-    y: number;
-  } | null>(null);
 
   return (
     <div style={{ width: "100%" }}>
@@ -174,7 +169,6 @@ export default function CalendarGrid({
 
       {/* Calendar Grid */}
       <div
-        ref={gridRef}
         style={{
           position: "relative",
           display: "grid",
@@ -188,6 +182,7 @@ export default function CalendarGrid({
           const highlightBg = withHexAlpha(APP_MAIN_COLOR, "12");
           const meetings = meetingsByDate?.[cell.date] ?? [];
           const meetingCount = meetings.length;
+          const hasJournal = journalDates?.has(cell.date) ?? false;
 
           const baseStyle: React.CSSProperties = {
             position: "relative",
@@ -228,6 +223,8 @@ export default function CalendarGrid({
             ? `${cell.date} (restricted)`
             : isMeetingsOnly
             ? `${cell.date} (meetings only)`
+            : hasJournal
+            ? `${cell.date} (has diary)`
             : cell.date;
 
           return (
@@ -239,23 +236,36 @@ export default function CalendarGrid({
                 if (!isRestricted) {
                   Object.assign(e.currentTarget.style, hoverStyle);
                 }
-                if (meetingCount > 0 && gridRef.current) {
-                  const gridRect = gridRef.current.getBoundingClientRect();
-                  const cellRect = e.currentTarget.getBoundingClientRect();
-                  setHoverCard({
-                    date: cell.date,
-                    meetings,
-                    x: cellRect.left - gridRect.left + cellRect.width / 2,
-                    y: cellRect.top - gridRect.top + cellRect.height + 8,
-                  });
-                }
               }}
               onMouseLeave={(e) => {
                 Object.assign(e.currentTarget.style, baseStyle);
-                setHoverCard(null);
               }}
               title={titleText}
             >
+              {hasJournal ? (
+                <div
+                  style={{
+                    position: "absolute",
+                    left: 6,
+                    top: 6,
+                    width: 18,
+                    height: 18,
+                    borderRadius: 6,
+                    backgroundColor: "#fff7dd",
+                    color: "#a16207",
+                    border: "1px solid #f1d58a",
+                    fontSize: 10,
+                    fontWeight: 900,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    boxShadow: "0 4px 10px rgba(0,0,0,0.10)",
+                  }}
+                  aria-hidden
+                >
+                  ✎
+                </div>
+              ) : null}
               <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
                 {cell.dayOfMonth}
               </div>
@@ -285,37 +295,6 @@ export default function CalendarGrid({
             </div>
           );
         })}
-
-        {hoverCard ? (
-          <div
-            style={{
-              position: "absolute",
-              left: hoverCard.x,
-              top: hoverCard.y,
-              transform: "translateX(-50%)",
-              width: 240,
-              backgroundColor: "white",
-              border: "1px solid #e4e4e7",
-              borderRadius: 12,
-              padding: "10px 12px",
-              boxShadow: "0 12px 28px rgba(15, 23, 42, 0.2)",
-              zIndex: 10,
-              pointerEvents: "none",
-            }}
-          >
-            <div style={{ fontSize: 12, fontWeight: 900, color: "#111", marginBottom: 6 }}>
-              {formatDateDisplay(hoverCard.date)}
-            </div>
-            <div style={{ display: "grid", gap: 6, maxHeight: 180, overflowY: "auto" }}>
-              {hoverCard.meetings.map((meeting) => (
-                <div key={meeting.id} style={{ display: "grid", gridTemplateColumns: "64px 1fr", gap: 8 }}>
-                  <div style={{ fontSize: 11, fontWeight: 900, color: "#4b5563" }}>{meeting.time}</div>
-                  <div style={{ fontSize: 12, color: "#111", fontWeight: 600 }}>{meeting.title}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : null}
       </div>
     </div>
   );

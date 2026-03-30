@@ -14,12 +14,13 @@ import type {
   DailyReminderTemplate,
   DayLogEvent,
   MeetingRecurrence,
+  TaskArchive,
 } from "./types";
 import { normalizeWeekdays } from "./weekdays";
 import { getVirtualTodayDate, getVirtualCurrentYM, getVirtualTimestamp } from "../contexts/VirtualClockContext";
 import { getStorageBackend } from "./storageBackend";
 
-export const STATE_KEY = "focustree.state";
+export const STATE_KEY = "onion-app.state";
 const KEY = STATE_KEY;
 
 const DEFAULT_DAILY_REMINDER_TEMPLATES: DailyReminderTemplate[] = [
@@ -27,9 +28,45 @@ const DEFAULT_DAILY_REMINDER_TEMPLATES: DailyReminderTemplate[] = [
   { id: "rem_bureaucratic", text: "Handle those bureaucratic tasks 📋" },
 ];
 
+function createEmptyTaskArchive(): TaskArchive {
+  return {
+    standaloneTasks: [],
+    tasksByMilestoneId: {},
+    boardByScope: {},
+    taskLinksByScope: {},
+  };
+}
+
+function getTaskScopeKey(milestoneId: string | null | undefined) {
+  return milestoneId ? `milestone:${milestoneId}` : "standalone";
+}
+
+function getTaskScopeMilestoneId(scopeKey: string): string | undefined {
+  return scopeKey.startsWith("milestone:") ? scopeKey.slice("milestone:".length) || undefined : undefined;
+}
+
+function getLegacyMeetingSeriesKey(meeting: {
+  createdAt?: string;
+  recurrence?: MeetingRecurrence;
+  title?: string;
+  time?: string;
+  link?: string;
+  description?: string;
+}) {
+  return JSON.stringify([
+    meeting.createdAt ?? "",
+    meeting.recurrence ?? "NONE",
+    meeting.title ?? "",
+    meeting.time ?? "",
+    meeting.link ?? "",
+    meeting.description ?? "",
+  ]);
+}
+
 const emptyState: AppStateV0 = {
   version: 0,
   months: {},
+  taskArchive: createEmptyTaskArchive(),
   days: {},
   sessions: [],
   meetings: [],
@@ -42,11 +79,173 @@ export function loadState(): AppStateV0 {
     if (!raw) return emptyState;
     const parsed = JSON.parse(raw) as AppStateV0;
     if (parsed?.version !== 0) return emptyState;
+    let didNormalizeTaskNotes = false;
+    let didMigrateTaskArchive = false;
+    let didMigrateMeetingSeries = false;
+
+    const validMilestoneIds = new Set<string>(parsed.grandPlan?.milestones?.map((m) => m.id) ?? []);
+    const taskMapsByScope = new Map<string, Map<string, TaskNode>>();
+    const boardByScope: Record<string, { width: number; height: number }> = {};
+    const taskLinksByScope: Record<string, { from: string; to: string }[]> = {};
+
+    const mergeBoardScope = (scopeKey: string, board: any) => {
+      if (!board || typeof board !== "object") return;
+      const width = typeof board.width === "number" && Number.isFinite(board.width) ? board.width : undefined;
+      const height = typeof board.height === "number" && Number.isFinite(board.height) ? board.height : undefined;
+      if (!width || !height) return;
+      const milestoneId = getTaskScopeMilestoneId(scopeKey);
+      if (milestoneId && validMilestoneIds.size > 0 && !validMilestoneIds.has(milestoneId)) {
+        didMigrateTaskArchive = true;
+        return;
+      }
+      boardByScope[scopeKey] = { width, height };
+    };
+
+    const mergeTaskLinksScope = (scopeKey: string, links: any) => {
+      if (!Array.isArray(links)) return;
+      const milestoneId = getTaskScopeMilestoneId(scopeKey);
+      if (milestoneId && validMilestoneIds.size > 0 && !validMilestoneIds.has(milestoneId)) {
+        didMigrateTaskArchive = true;
+        return;
+      }
+      taskLinksByScope[scopeKey] = links
+        .filter((link) => link && typeof link.from === "string" && typeof link.to === "string")
+        .map((link) => ({ from: link.from, to: link.to }));
+    };
+
+    const normalizeTask = (
+      task: any,
+      fallbackMilestoneId: string | undefined,
+      fallbackCreatedAt: string | undefined
+    ): TaskNode | null => {
+      if (!task || typeof task !== "object") return null;
+      const title = typeof task.title === "string" ? task.title.trim() : "";
+      if (!title) return null;
+      const prevDescription = task.description;
+      const prevNotes = task.notes;
+      const legacyDescription = typeof task.description === "string" ? task.description.trim() : "";
+      const currentNotes = typeof task.notes === "string" ? task.notes.trim() : "";
+      const nextNotes = legacyDescription || currentNotes;
+      let linkedMilestoneId =
+        typeof task.linkedMilestoneId === "string" && task.linkedMilestoneId
+          ? task.linkedMilestoneId
+          : fallbackMilestoneId;
+      if (linkedMilestoneId && validMilestoneIds.size > 0 && !validMilestoneIds.has(linkedMilestoneId)) {
+        linkedMilestoneId = undefined;
+        didMigrateTaskArchive = true;
+      }
+      const status = task.status === "GREEN" || task.status === "YELLOW" ? task.status : "NONE";
+      const createdAt =
+        typeof task.createdAt === "string" && task.createdAt
+          ? task.createdAt
+          : fallbackCreatedAt;
+      const completedAt =
+        status === "GREEN" && typeof task.completedAt === "string" && task.completedAt
+          ? task.completedAt
+          : undefined;
+      if (prevDescription !== undefined || prevNotes !== nextNotes) {
+        didNormalizeTaskNotes = true;
+      }
+      return {
+        id: typeof task.id === "string" && task.id ? task.id : makeId("task"),
+        title,
+        notes: nextNotes || undefined,
+        boardX: typeof task.boardX === "number" && Number.isFinite(task.boardX) ? task.boardX : undefined,
+        boardY: typeof task.boardY === "number" && Number.isFinite(task.boardY) ? task.boardY : undefined,
+        boardW: typeof task.boardW === "number" && Number.isFinite(task.boardW) ? task.boardW : undefined,
+        boardH: typeof task.boardH === "number" && Number.isFinite(task.boardH) ? task.boardH : undefined,
+        parentId: typeof task.parentId === "string" && task.parentId ? task.parentId : null,
+        status,
+        linkedMilestoneId,
+        createdAt,
+        completedAt,
+      };
+    };
+
+    const mergeTaskList = (
+      tasks: any,
+      fallbackMilestoneId: string | undefined,
+      fallbackCreatedAt: string | undefined
+    ) => {
+      if (!Array.isArray(tasks)) return;
+      tasks.forEach((task) => {
+        const normalized = normalizeTask(task, fallbackMilestoneId, fallbackCreatedAt);
+        if (!normalized) return;
+        const scopeKey = getTaskScopeKey(normalized.linkedMilestoneId);
+        const byId = taskMapsByScope.get(scopeKey) ?? new Map<string, TaskNode>();
+        const existing = byId.get(normalized.id);
+        byId.set(normalized.id, {
+          ...existing,
+          ...normalized,
+          createdAt: existing?.createdAt ?? normalized.createdAt,
+          completedAt:
+            normalized.status === "GREEN"
+              ? normalized.completedAt ?? existing?.completedAt
+              : undefined,
+        });
+        taskMapsByScope.set(scopeKey, byId);
+      });
+    };
 
     // v4 migration: Add meetings array if not present
     if (!parsed.meetings) {
       parsed.meetings = [];
     }
+    const legacyRecurringMeetingsByKey = new Map<string, MeetingEntry[]>();
+    parsed.meetings = parsed.meetings
+      .filter((meeting: any) => meeting && typeof meeting === "object")
+      .map((meeting: any) => {
+        const recurrence =
+          meeting.recurrence === "WEEKLY" ||
+          meeting.recurrence === "BIWEEKLY" ||
+          meeting.recurrence === "MONTHLY"
+            ? (meeting.recurrence as MeetingRecurrence)
+            : undefined;
+        const normalizedMeeting: MeetingEntry = {
+          id: typeof meeting.id === "string" && meeting.id ? meeting.id : makeId("meeting"),
+          date: meeting.date as DateISO,
+          ym:
+            typeof meeting.ym === "string" && meeting.ym
+              ? meeting.ym
+              : ymFromDate(meeting.date as DateISO),
+          title: typeof meeting.title === "string" ? meeting.title : "Meeting",
+          time: typeof meeting.time === "string" ? meeting.time : "09:00-10:00",
+          link: typeof meeting.link === "string" && meeting.link ? meeting.link : undefined,
+          description:
+            typeof meeting.description === "string" && meeting.description
+              ? meeting.description
+              : undefined,
+          attended: typeof meeting.attended === "boolean" ? meeting.attended : undefined,
+          skipped: typeof meeting.skipped === "boolean" ? meeting.skipped : undefined,
+          createdAt: typeof meeting.createdAt === "string" && meeting.createdAt ? meeting.createdAt : getVirtualTimestamp(),
+          recurrence,
+          seriesId:
+            recurrence && typeof meeting.seriesId === "string" && meeting.seriesId
+              ? meeting.seriesId
+              : undefined,
+        };
+
+        if (!recurrence && meeting.seriesId) {
+          didMigrateMeetingSeries = true;
+        }
+
+        if (recurrence && !normalizedMeeting.seriesId) {
+          const groupKey = getLegacyMeetingSeriesKey(normalizedMeeting);
+          const existing = legacyRecurringMeetingsByKey.get(groupKey) ?? [];
+          existing.push(normalizedMeeting);
+          legacyRecurringMeetingsByKey.set(groupKey, existing);
+        }
+
+        return normalizedMeeting;
+      });
+
+    legacyRecurringMeetingsByKey.forEach((meetings) => {
+      const nextSeriesId = makeId("meeting_series");
+      meetings.forEach((meeting) => {
+        meeting.seriesId = nextSeriesId;
+      });
+      didMigrateMeetingSeries = true;
+    });
 
     // v7 migration: Add editable daily reminder templates + migrate old booleans
     if (!Array.isArray(parsed.dailyReminderTemplates)) {
@@ -80,8 +279,24 @@ export function loadState(): AppStateV0 {
       }
     }
 
+    if (!parsed.taskArchive || typeof parsed.taskArchive !== "object") {
+      parsed.taskArchive = createEmptyTaskArchive();
+      didMigrateTaskArchive = true;
+    }
+
+    const existingArchive = parsed.taskArchive ?? createEmptyTaskArchive();
+    mergeTaskList(existingArchive.standaloneTasks, undefined, undefined);
+    Object.entries(existingArchive.tasksByMilestoneId ?? {}).forEach(([milestoneId, tasks]) => {
+      mergeTaskList(tasks, milestoneId, undefined);
+    });
+    Object.entries(existingArchive.boardByScope ?? {}).forEach(([scopeKey, board]) => {
+      mergeBoardScope(scopeKey, board);
+    });
+    Object.entries(existingArchive.taskLinksByScope ?? {}).forEach(([scopeKey, links]) => {
+      mergeTaskLinksScope(scopeKey, links);
+    });
+
     // v8 migration: Remove legacy snapshot fields + add explicit month pins
-    const validMilestoneIds = new Set<string>(parsed.grandPlan?.milestones?.map((m) => m.id) ?? []);
     for (const plan of Object.values(parsed.months ?? {})) {
       if (!plan || typeof plan !== "object") continue;
 
@@ -110,6 +325,15 @@ export function loadState(): AppStateV0 {
       (plan as any).pinnedMilestoneIds =
         validMilestoneIds.size > 0 ? pinsToUse.filter((id: string) => validMilestoneIds.has(id)) : pinsToUse;
 
+      // v8.1: Clean up linkedMilestoneId on tasks pointing to non-existent milestones
+      if (validMilestoneIds.size > 0 && Array.isArray((plan as any).tasks)) {
+        (plan as any).tasks.forEach((t: any) => {
+          if (t?.linkedMilestoneId && !validMilestoneIds.has(t.linkedMilestoneId)) {
+            delete t.linkedMilestoneId;
+          }
+        });
+      }
+
       if (typeof (plan as any).primaryMilestoneId !== "string") {
         const nextPrimary = (plan as any).pinnedMilestoneIds?.[0];
         if (typeof nextPrimary === "string" && nextPrimary) {
@@ -129,7 +353,61 @@ export function loadState(): AppStateV0 {
           }
         });
       }
+
+      if (Array.isArray((plan as any).tasks) && (plan as any).tasks.length > 0) {
+        mergeTaskList((plan as any).tasks, undefined, plan.createdAt);
+        didMigrateTaskArchive = true;
+      }
+
+      Object.entries((plan as any).boardByScope ?? {}).forEach(([scopeKey, board]) => {
+        mergeBoardScope(scopeKey, board);
+        didMigrateTaskArchive = true;
+      });
+
+      Object.entries((plan as any).taskLinksByScope ?? {}).forEach(([scopeKey, links]) => {
+        mergeTaskLinksScope(scopeKey, links);
+        didMigrateTaskArchive = true;
+      });
+
+      if ((plan as any).stashedByMilestone && typeof (plan as any).stashedByMilestone === "object") {
+        Object.entries((plan as any).stashedByMilestone).forEach(([milestoneId, bucket]: [string, any]) => {
+          mergeTaskList(bucket?.tasks, milestoneId, plan.createdAt);
+          mergeBoardScope(getTaskScopeKey(milestoneId), bucket?.board);
+          mergeTaskLinksScope(getTaskScopeKey(milestoneId), bucket?.links);
+          didMigrateTaskArchive = true;
+        });
+      }
+
+      if ("tasks" in (plan as any)) {
+        delete (plan as any).tasks;
+        didMigrateTaskArchive = true;
+      }
+      if ("boardByScope" in (plan as any)) {
+        delete (plan as any).boardByScope;
+        didMigrateTaskArchive = true;
+      }
+      if ("taskLinksByScope" in (plan as any)) {
+        delete (plan as any).taskLinksByScope;
+        didMigrateTaskArchive = true;
+      }
+      if ("stashedByMilestone" in (plan as any)) {
+        delete (plan as any).stashedByMilestone;
+        didMigrateTaskArchive = true;
+      }
     }
+
+    const nextTasksByMilestoneId: Record<string, TaskNode[]> = {};
+    taskMapsByScope.forEach((tasksById, scopeKey) => {
+      const tasks = Array.from(tasksById.values());
+      const milestoneId = getTaskScopeMilestoneId(scopeKey);
+      if (milestoneId) nextTasksByMilestoneId[milestoneId] = tasks;
+    });
+    parsed.taskArchive = {
+      standaloneTasks: Array.from(taskMapsByScope.get("standalone")?.values() ?? []),
+      tasksByMilestoneId: nextTasksByMilestoneId,
+      boardByScope,
+      taskLinksByScope,
+    };
 
     if (parsed.grandPlan?.milestones) {
       parsed.grandPlan.milestones.forEach((m) => {
@@ -137,6 +415,10 @@ export function loadState(): AppStateV0 {
           m.completedAt = m.createdAt;
         }
       });
+    }
+
+    if (didNormalizeTaskNotes || didMigrateTaskArchive || didMigrateMeetingSeries) {
+      saveState(parsed);
     }
 
     return parsed;
@@ -186,6 +468,27 @@ export function appendDayEvent(state: AppStateV0, date: DateISO, event: DayLogEv
   return updateDay(withDay, { ...day, events: [...events, event] });
 }
 
+export function upsertDayEvent(state: AppStateV0, date: DateISO, event: DayLogEvent): AppStateV0 {
+  const ym = ymFromDate(date);
+  const { state: withDay, day } = getOrCreateDay(state, date, ym);
+  const events = Array.isArray(day.events) ? day.events : [];
+  const existingIndex = events.findIndex((candidate) => candidate.id === event.id);
+  const nextEvents =
+    existingIndex === -1
+      ? [...events, event]
+      : events.map((candidate, index) => (index === existingIndex ? event : candidate));
+  return updateDay(withDay, { ...day, events: nextEvents });
+}
+
+export function removeDayEvent(state: AppStateV0, date: DateISO, eventId: string): AppStateV0 {
+  const ym = ymFromDate(date);
+  const { state: withDay, day } = getOrCreateDay(state, date, ym);
+  const events = Array.isArray(day.events) ? day.events : [];
+  const nextEvents = events.filter((event) => event.id !== eventId);
+  if (nextEvents.length === events.length) return withDay;
+  return updateDay(withDay, { ...day, events: nextEvents });
+}
+
 export function updateSession(state: AppStateV0, sessionId: string, patch: Partial<ProductivitySession>): AppStateV0 {
   return {
     ...state,
@@ -201,24 +504,202 @@ export function ymFromDate(date: DateISO): YM {
   return date.slice(0, 7) as YM;
 }
 
-export function addTaskToMonth(
-  state: AppStateV0,
-  ym: YM,
-  title: string,
-  parentId: string | null
-): { state: AppStateV0; task: TaskNode } | { state: AppStateV0; task: undefined } {
-  const plan = getMonth(state, ym);
-  if (!plan) return { state, task: undefined };
+export function getTaskArchive(state: AppStateV0): TaskArchive {
+  return state.taskArchive ?? createEmptyTaskArchive();
+}
 
+function setTaskBucket(
+  archive: TaskArchive,
+  milestoneId: string | undefined,
+  tasks: TaskNode[]
+): TaskArchive {
+  const normalized = tasks.map((task) => ({
+    ...task,
+    linkedMilestoneId: milestoneId,
+  }));
+
+  if (milestoneId) {
+    const nextByMilestoneId = { ...archive.tasksByMilestoneId };
+    if (normalized.length > 0) nextByMilestoneId[milestoneId] = normalized;
+    else delete nextByMilestoneId[milestoneId];
+    return { ...archive, tasksByMilestoneId: nextByMilestoneId };
+  }
+
+  return {
+    ...archive,
+    standaloneTasks: normalized.map((task) => ({ ...task, linkedMilestoneId: undefined })),
+  };
+}
+
+function updateTaskArchive(
+  state: AppStateV0,
+  updater: (archive: TaskArchive) => TaskArchive
+): AppStateV0 {
+  return {
+    ...state,
+    taskArchive: updater(getTaskArchive(state)),
+  };
+}
+
+function findTaskBucketById(
+  archive: TaskArchive,
+  taskId: string
+): { milestoneId: string | undefined; tasks: TaskNode[]; task: TaskNode } | undefined {
+  const standaloneTask = archive.standaloneTasks.find((task) => task.id === taskId);
+  if (standaloneTask) {
+    return { milestoneId: undefined, tasks: archive.standaloneTasks, task: standaloneTask };
+  }
+
+  for (const [milestoneId, tasks] of Object.entries(archive.tasksByMilestoneId)) {
+    const task = tasks.find((candidate) => candidate.id === taskId);
+    if (task) return { milestoneId, tasks, task };
+  }
+
+  return undefined;
+}
+
+export function getAllTasks(state: AppStateV0): TaskNode[] {
+  const archive = getTaskArchive(state);
+  return [
+    ...archive.standaloneTasks,
+    ...Object.values(archive.tasksByMilestoneId).flat(),
+  ];
+}
+
+export function getTaskById(state: AppStateV0, taskId: string): TaskNode | undefined {
+  const archive = getTaskArchive(state);
+  return findTaskBucketById(archive, taskId)?.task;
+}
+
+export function getFrozenTaskIds(state: AppStateV0): Set<string> {
+  const frozenTaskIds = new Set<string>();
+  Object.values(state.days).forEach((day) => {
+    if (!day.isClosed) return;
+    Object.entries(day.outcomeByTaskId ?? {}).forEach(([taskId, outcome]) => {
+      if (outcome === "COMPLETED") frozenTaskIds.add(taskId);
+    });
+  });
+  return frozenTaskIds;
+}
+
+export function isTaskFrozen(state: AppStateV0, taskId: string): boolean {
+  return getFrozenTaskIds(state).has(taskId);
+}
+
+export function getTasksForMilestone(state: AppStateV0, milestoneId: string): TaskNode[] {
+  return getTaskArchive(state).tasksByMilestoneId[milestoneId] ?? [];
+}
+
+export function getStandaloneTasks(state: AppStateV0): TaskNode[] {
+  return getTaskArchive(state).standaloneTasks;
+}
+
+export function getTasksForMonth(state: AppStateV0, ym: YM): TaskNode[] {
+  const plan = getMonth(state, ym);
+  if (!plan) return [];
+
+  const archive = getTaskArchive(state);
+  const ordered: TaskNode[] = [];
+  const seen = new Set<string>();
+  const push = (task: TaskNode) => {
+    if (seen.has(task.id)) return;
+    seen.add(task.id);
+    ordered.push(task);
+  };
+
+  archive.standaloneTasks.forEach(push);
+  (plan.pinnedMilestoneIds ?? []).forEach((milestoneId) => {
+    (archive.tasksByMilestoneId[milestoneId] ?? []).forEach(push);
+  });
+
+  return ordered;
+}
+
+export function getTaskBoardForScope(
+  state: AppStateV0,
+  scopeKey: string
+): { width: number; height: number } | undefined {
+  return getTaskArchive(state).boardByScope[scopeKey];
+}
+
+export function getTaskLinksForScope(
+  state: AppStateV0,
+  scopeKey: string
+): { from: string; to: string }[] {
+  return getTaskArchive(state).taskLinksByScope[scopeKey] ?? [];
+}
+
+export function updateTaskBoardForScope(
+  state: AppStateV0,
+  scopeKey: string,
+  board: { width: number; height: number }
+): AppStateV0 {
+  return updateTaskArchive(state, (archive) => ({
+    ...archive,
+    boardByScope: { ...archive.boardByScope, [scopeKey]: board },
+  }));
+}
+
+export function updateTaskLinksForScope(
+  state: AppStateV0,
+  scopeKey: string,
+  links: { from: string; to: string }[]
+): AppStateV0 {
+  return updateTaskArchive(state, (archive) => ({
+    ...archive,
+    taskLinksByScope: { ...archive.taskLinksByScope, [scopeKey]: links },
+  }));
+}
+
+export function addStandaloneTask(
+  state: AppStateV0,
+  title: string,
+  parentId: string | null = null,
+  notes?: string
+): { state: AppStateV0; task: TaskNode } {
   const task: TaskNode = {
     id: makeId("task"),
     title,
+    notes: notes?.trim() || undefined,
     parentId,
     status: "NONE",
+    createdAt: getVirtualTimestamp(),
   };
 
-  const nextPlan: MonthPlan = { ...plan, tasks: [...plan.tasks, task] };
-  return { state: upsertMonth(state, nextPlan), task };
+  return {
+    state: updateTaskArchive(state, (archive) => ({
+      ...archive,
+      standaloneTasks: [...archive.standaloneTasks, task],
+    })),
+    task,
+  };
+}
+
+export function addTaskWithMilestone(
+  state: AppStateV0,
+  title: string,
+  milestoneId: string,
+  parentId: string | null = null,
+  notes?: string
+): { state: AppStateV0; task: TaskNode } {
+  const archive = getTaskArchive(state);
+  const existingTasks = archive.tasksByMilestoneId[milestoneId] ?? [];
+  const task: TaskNode = {
+    id: makeId("task"),
+    title,
+    notes: notes?.trim() || undefined,
+    parentId,
+    status: "NONE",
+    linkedMilestoneId: milestoneId,
+    createdAt: getVirtualTimestamp(),
+  };
+
+  return {
+    state: updateTaskArchive(state, (current) =>
+      setTaskBucket(current, milestoneId, [...existingTasks, task])
+    ),
+    task,
+  };
 }
 
 export function setDayTasks(
@@ -236,17 +717,16 @@ export function setDayTasks(
   return updateDay(withDay, { ...day, primaryTaskId: primary, secondaryTaskIds: secondary });
 }
 
-export function applyStatusToMonth(
+export function applyTaskStatus(
   state: AppStateV0,
-  ym: YM,
   taskId: string,
   outcome: "COMPLETED" | "NOT_COMPLETED" | undefined
 ): AppStateV0 {
-  const plan = getMonth(state, ym);
-  if (!plan) return state;
-
-  const existing = plan.tasks.find((t) => t.id === taskId);
-  if (!existing) return state;
+  if (isTaskFrozen(state, taskId)) return state;
+  const archive = getTaskArchive(state);
+  const existingBucket = findTaskBucketById(archive, taskId);
+  if (!existingBucket) return state;
+  const existing = existingBucket.task;
 
   // v2: Toggle behavior - clicking the same outcome reverts to NONE
   const nextStatus =
@@ -258,12 +738,19 @@ export function applyStatusToMonth(
 
   if (nextStatus === existing.status) return state;
 
-  const nextPlan: MonthPlan = {
-    ...plan,
-    tasks: plan.tasks.map((t) => (t.id === taskId ? { ...t, status: nextStatus } : t)),
-  };
-
-  let nextState = upsertMonth(state, nextPlan);
+  const now = getVirtualTimestamp();
+  const nextTasks = existingBucket.tasks.map((task) =>
+    task.id === taskId
+      ? {
+          ...task,
+          status: nextStatus,
+          completedAt: nextStatus === "GREEN" ? task.completedAt ?? now : undefined,
+        }
+      : task
+  );
+  let nextState = updateTaskArchive(state, (current) =>
+    setTaskBucket(current, existingBucket.milestoneId, nextTasks)
+  );
 
   // v6.2: Auto-progress milestone to IN_PROGRESS when a task is marked
   if (existing.linkedMilestoneId && nextState.grandPlan && (nextStatus === "GREEN" || nextStatus === "YELLOW")) {
@@ -291,15 +778,68 @@ export function setTaskOutcome(
   taskId: string,
   outcome: "COMPLETED" | "NOT_COMPLETED" | undefined
 ): AppStateV0 {
+  if (isTaskFrozen(state, taskId)) return state;
   const ym = ymFromDate(date);
   const { state: withDay, day } = getOrCreateDay(state, date, ym);
-
+  const currentOutcome = day.outcomeByTaskId?.[taskId];
+  const nextOutcome = outcome && currentOutcome === outcome ? undefined : outcome;
   const nextMap = { ...day.outcomeByTaskId };
-  if (outcome) nextMap[taskId] = outcome;
+  if (nextOutcome) nextMap[taskId] = nextOutcome;
   else delete nextMap[taskId];
 
+  const archive = getTaskArchive(withDay);
+  const existingBucket = findTaskBucketById(archive, taskId);
+  if (!existingBucket) {
+    return updateDay(withDay, { ...day, outcomeByTaskId: nextMap });
+  }
+
+  const existing = existingBucket.task;
+  const nextStatus =
+    nextOutcome === "COMPLETED"
+      ? "GREEN"
+      : nextOutcome === "NOT_COMPLETED"
+        ? "YELLOW"
+        : "NONE";
+  const completedAt =
+    nextStatus === "GREEN"
+      ? existing.completedAt && existing.completedAt.slice(0, 10) === date
+        ? existing.completedAt
+        : date < getTodayDate()
+          ? localTimestampForDate(date, 23, 59, 59)
+          : getVirtualTimestamp()
+      : undefined;
+
+  const nextTasks = existingBucket.tasks.map((task) =>
+    task.id === taskId
+      ? {
+          ...task,
+          status: nextStatus,
+          completedAt,
+        }
+      : task
+  );
+
   let next = updateDay(withDay, { ...day, outcomeByTaskId: nextMap });
-  next = applyStatusToMonth(next, ym, taskId, outcome);
+  next = updateTaskArchive(next, (current) =>
+    setTaskBucket(current, existingBucket.milestoneId, nextTasks)
+  );
+
+  if (existing.linkedMilestoneId && next.grandPlan && nextStatus !== "NONE") {
+    const milestone = next.grandPlan.milestones.find((m) => m.id === existing.linkedMilestoneId);
+    if (milestone && milestone.status === "NOT_STARTED") {
+      next = {
+        ...next,
+        grandPlan: {
+          ...next.grandPlan,
+          milestones: next.grandPlan.milestones.map((m) =>
+            m.id === existing.linkedMilestoneId ? { ...m, status: "IN_PROGRESS" } : m
+          ),
+          updatedAt: getVirtualTimestamp(),
+        },
+      };
+    }
+  }
+
   return next;
 }
 
@@ -351,34 +891,38 @@ export function setFocusTemplateMilestoneForDay(
 
 // v2: Task tree editing functions
 
-export function updateTaskInMonth(
+export function updateTask(
   state: AppStateV0,
-  ym: YM,
   taskId: string,
-  updates: Partial<Pick<TaskNode, "title" | "description" | "notes" | "boardX" | "boardY" | "boardW" | "boardH" | "parentId" | "status">>
+  updates: Partial<Pick<TaskNode, "title" | "notes" | "boardX" | "boardY" | "boardW" | "boardH" | "parentId" | "status">>
 ): AppStateV0 {
-  const plan = getMonth(state, ym);
-  if (!plan) return state;
+  if (isTaskFrozen(state, taskId)) return state;
+  const archive = getTaskArchive(state);
+  const existingBucket = findTaskBucketById(archive, taskId);
+  if (!existingBucket) return state;
 
-  const nextTasks = plan.tasks.map((t) => (t.id === taskId ? { ...t, ...updates } : t));
-  return upsertMonth(state, { ...plan, tasks: nextTasks });
+  const nextTasks = existingBucket.tasks.map((task) => (task.id === taskId ? { ...task, ...updates } : task));
+  return updateTaskArchive(state, (current) =>
+    setTaskBucket(current, existingBucket.milestoneId, nextTasks)
+  );
 }
 
-export function deleteTaskFromMonth(
+export function deleteTask(
   state: AppStateV0,
-  ym: YM,
   taskId: string,
   cascadeChildren: boolean = true
 ): AppStateV0 {
-  const plan = getMonth(state, ym);
-  if (!plan) return state;
+  if (isTaskFrozen(state, taskId)) return state;
+  const archive = getTaskArchive(state);
+  const existingBucket = findTaskBucketById(archive, taskId);
+  if (!existingBucket) return state;
 
   let toDelete = new Set([taskId]);
 
   if (cascadeChildren) {
     // Find all descendants recursively
     const findChildren = (parentId: string) => {
-      plan.tasks.forEach((t) => {
+      existingBucket.tasks.forEach((t) => {
         if (t.parentId === parentId && !toDelete.has(t.id)) {
           toDelete.add(t.id);
           findChildren(t.id);
@@ -388,24 +932,40 @@ export function deleteTaskFromMonth(
     findChildren(taskId);
   }
 
-  const nextTasks = plan.tasks.filter((t) => !toDelete.has(t.id));
-  return upsertMonth(state, { ...plan, tasks: nextTasks });
+  if (Array.from(toDelete).some((id) => isTaskFrozen(state, id))) return state;
+
+  const nextTasks = existingBucket.tasks.filter((t) => !toDelete.has(t.id));
+  const nextLinks = (archive.taskLinksByScope[getTaskScopeKey(existingBucket.milestoneId)] ?? []).filter(
+    (link) => !toDelete.has(link.from) && !toDelete.has(link.to)
+  );
+
+  return updateTaskArchive(state, (current) => {
+    const nextArchive = setTaskBucket(current, existingBucket.milestoneId, nextTasks);
+    return {
+      ...nextArchive,
+      taskLinksByScope: {
+        ...nextArchive.taskLinksByScope,
+        [getTaskScopeKey(existingBucket.milestoneId)]: nextLinks,
+      },
+    };
+  });
 }
 
-export function reorderTaskInMonth(
+export function reorderTask(
   state: AppStateV0,
-  ym: YM,
   taskId: string,
   direction: "up" | "down"
 ): AppStateV0 {
-  const plan = getMonth(state, ym);
-  if (!plan) return state;
+  if (isTaskFrozen(state, taskId)) return state;
+  const archive = getTaskArchive(state);
+  const existingBucket = findTaskBucketById(archive, taskId);
+  if (!existingBucket) return state;
 
-  const task = plan.tasks.find((t) => t.id === taskId);
+  const task = existingBucket.tasks.find((candidate) => candidate.id === taskId);
   if (!task) return state;
 
   // Get siblings (tasks with same parentId)
-  const siblings = plan.tasks.filter((t) => t.parentId === task.parentId);
+  const siblings = existingBucket.tasks.filter((t) => t.parentId === task.parentId);
   const currentIndex = siblings.findIndex((t) => t.id === taskId);
 
   if (currentIndex === -1) return state;
@@ -416,7 +976,7 @@ export function reorderTaskInMonth(
   const swapTask = siblings[newIndex];
 
   // Swap positions by reordering the entire tasks array
-  const nextTasks = plan.tasks.map((t) => {
+  const nextTasks = existingBucket.tasks.map((t) => {
     if (t.id === taskId) return { ...t };
     if (t.id === swapTask.id) return { ...t };
     return t;
@@ -428,29 +988,32 @@ export function reorderTaskInMonth(
 
   [nextTasks[taskFullIndex], nextTasks[swapFullIndex]] = [nextTasks[swapFullIndex], nextTasks[taskFullIndex]];
 
-  return upsertMonth(state, { ...plan, tasks: nextTasks });
+  return updateTaskArchive(state, (current) =>
+    setTaskBucket(current, existingBucket.milestoneId, nextTasks)
+  );
 }
 
-export function moveTaskInMonth(
+export function moveTask(
   state: AppStateV0,
-  ym: YM,
   taskId: string,
   newParentId: string | null
 ): AppStateV0 {
-  const plan = getMonth(state, ym);
-  if (!plan) return state;
+  if (isTaskFrozen(state, taskId)) return state;
+  const archive = getTaskArchive(state);
+  const existingBucket = findTaskBucketById(archive, taskId);
+  if (!existingBucket) return state;
 
   // Prevent moving a task to be a child of itself or its descendants
   if (newParentId) {
     let checkParent: string | null = newParentId;
     while (checkParent) {
       if (checkParent === taskId) return state; // Circular reference detected
-      const parent = plan.tasks.find((t) => t.id === checkParent);
+      const parent = existingBucket.tasks.find((t) => t.id === checkParent);
       checkParent = parent?.parentId ?? null;
     }
   }
 
-  return updateTaskInMonth(state, ym, taskId, { parentId: newParentId });
+  return updateTask(state, taskId, { parentId: newParentId });
 }
 
 // v2: Utility functions
@@ -477,11 +1040,18 @@ export function activateWorkingDay(state: AppStateV0, date: DateISO): AppStateV0
 }
 
 // v4: Close/Reopen day functionality
-function endOfDayTimestamp(date: DateISO): string {
+function localTimestampForDate(date: DateISO, hours: number, minutes: number, seconds = 0): string {
   const [y, m, d] = date.split("-").map((part) => Number(part));
   if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return getVirtualTimestamp();
-  const end = new Date(y, m - 1, d, 23, 59, 59, 0);
-  return end.toISOString();
+  return new Date(y, m - 1, d, hours, minutes, seconds, 0).toISOString();
+}
+
+function endOfDayTimestamp(date: DateISO): string {
+  return localTimestampForDate(date, 23, 59, 59);
+}
+
+function defaultStartedAtTimestamp(date: DateISO): string {
+  return localTimestampForDate(date, 9, 0, 0);
 }
 
 export function closeDay(state: AppStateV0, date: DateISO): AppStateV0 {
@@ -490,7 +1060,9 @@ export function closeDay(state: AppStateV0, date: DateISO): AppStateV0 {
 
   if (day.isClosed) return withDay;
 
-  const endedAt = getVirtualTimestamp();
+  const isPastDate = date < getTodayDate();
+  const endedAt = isPastDate ? endOfDayTimestamp(date) : getVirtualTimestamp();
+  const autoClosed = isPastDate;
 
   // End any active session before closing
   let next = withDay;
@@ -503,7 +1075,13 @@ export function closeDay(state: AppStateV0, date: DateISO): AppStateV0 {
     }
   }
 
-  const updated = updateDay(next, { ...day, isClosed: true, activeSessionId: undefined, endedAt, autoClosed: false });
+  const updated = updateDay(next, {
+    ...day,
+    isClosed: true,
+    activeSessionId: undefined,
+    endedAt,
+    autoClosed,
+  });
   const hasEndedEvent = Array.isArray(day.events)
     ? day.events.some((e) => e.kind === "SYSTEM" && e.text === "Day ended")
     : false;
@@ -534,7 +1112,13 @@ export function autoCloseDay(state: AppStateV0, date: DateISO): AppStateV0 {
     }
   }
 
-  const updated = updateDay(next, { ...day, isClosed: true, activeSessionId: undefined, endedAt, autoClosed: true });
+  const updated = updateDay(next, {
+    ...day,
+    isClosed: true,
+    activeSessionId: undefined,
+    endedAt,
+    autoClosed: true,
+  });
   const hasEndedEvent = Array.isArray(day.events)
     ? day.events.some((e) => e.kind === "SYSTEM" && e.text === "Day ended")
     : false;
@@ -548,13 +1132,20 @@ export function autoCloseDay(state: AppStateV0, date: DateISO): AppStateV0 {
 }
 
 export function reopenDay(state: AppStateV0, date: DateISO): AppStateV0 {
+  if (date < getTodayDate()) return state;
   const ym = ymFromDate(date);
   const reopened = reopenMonth(state, ym);
   const { state: withDay, day } = getOrCreateDay(reopened, date, ym);
   const cleanedEvents = Array.isArray(day.events)
     ? day.events.filter((e) => !(e.kind === "SYSTEM" && e.text === "Day ended"))
     : day.events;
-  return updateDay(withDay, { ...day, isClosed: false, endedAt: undefined, autoClosed: false, events: cleanedEvents });
+  return updateDay(withDay, {
+    ...day,
+    isClosed: false,
+    endedAt: undefined,
+    autoClosed: false,
+    events: cleanedEvents,
+  });
 }
 
 // v5: Close/Reopen month functionality
@@ -649,6 +1240,131 @@ export function formatDateDisplay(date: DateISO): string {
   }
 }
 
+function meetingStartTimestamp(date: DateISO, time: string): string | undefined {
+  const start = time.split("-")[0]?.trim();
+  const parts = start?.split(":").map((part) => Number(part));
+  if (!parts || parts.length !== 2) return undefined;
+  const [hours, minutes] = parts;
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return undefined;
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return undefined;
+  return localTimestampForDate(date, hours, minutes, 0);
+}
+
+function getEventTimestamp(
+  day: DayEntry,
+  eventId: string,
+  kind: DayLogEvent["kind"],
+  legacyText: string | undefined,
+  fallbackAt: string
+): string {
+  const events = Array.isArray(day.events) ? day.events : [];
+  const exactMatch = events.find((event) => event.id === eventId);
+  if (exactMatch?.at) return exactMatch.at;
+  if (legacyText) {
+    const legacyMatch = events.find((event) => event.kind === kind && event.text === legacyText);
+    if (legacyMatch?.at) return legacyMatch.at;
+  }
+  return fallbackAt;
+}
+
+export function buildDayHistory(
+  state: AppStateV0,
+  date: DateISO,
+  plan?: MonthPlan
+): DayLogEvent[] {
+  const day = state.days[date];
+  if (!day) return [];
+
+  const activePlan = plan ?? getMonth(state, day.ym);
+  const tasksById = new Map(getAllTasks(state).map((task) => [task.id, task] as const));
+  const remindersById = new Map(state.dailyReminderTemplates.map((reminder) => [reminder.id, reminder] as const));
+  const templateTitleById = new Map((activePlan?.templates ?? []).map((template) => [template.id, template.title] as const));
+  const derivedEvents: DayLogEvent[] = [];
+
+  if (day.startedAt) {
+    derivedEvents.push({
+      id: `system:day-started:${date}`,
+      at: day.startedAt,
+      kind: "SYSTEM",
+      text: "Day started",
+    });
+  }
+
+  if (day.endedAt) {
+    derivedEvents.push({
+      id: `system:day-ended:${date}`,
+      at: day.endedAt,
+      kind: "SYSTEM",
+      text: "Day ended",
+    });
+  }
+
+  Object.entries(day.reminderCheckedById ?? {}).forEach(([reminderId, checked]) => {
+    if (!checked) return;
+    const reminderText = remindersById.get(reminderId)?.text ?? reminderId;
+    const fallbackAt = day.startedAt ?? localTimestampForDate(date, 9, 0, 0);
+    derivedEvents.push({
+      id: `reminder:checked:${reminderId}`,
+      at: getEventTimestamp(day, `reminder:checked:${reminderId}`, "REMINDER", reminderText, fallbackAt),
+      kind: "REMINDER",
+      text: reminderText,
+    });
+  });
+
+  Object.entries(day.outcomeByTaskId ?? {}).forEach(([taskId, outcome]) => {
+    if (outcome !== "COMPLETED") return;
+    const task = tasksById.get(taskId);
+    const title = task?.title ?? "Unknown task";
+    const text = `✓ Completed: ${title}`;
+    const fallbackAt =
+      task?.completedAt && task.completedAt.slice(0, 10) === date
+        ? task.completedAt
+        : day.endedAt ?? localTimestampForDate(date, 23, 59, 59);
+    derivedEvents.push({
+      id: `task:completed:${taskId}`,
+      at: getEventTimestamp(day, `task:completed:${taskId}`, "TASK", text, fallbackAt),
+      kind: "TASK",
+      text,
+    });
+  });
+
+  state.meetings
+    .filter((meeting) => meeting.date === date && meeting.attended && !meeting.skipped)
+    .forEach((meeting) => {
+      const text = `✓ Attended: ${meeting.title}`;
+      const fallbackAt = meetingStartTimestamp(date, meeting.time) ?? day.startedAt ?? localTimestampForDate(date, 12, 0, 0);
+      derivedEvents.push({
+        id: `meeting:attended:${meeting.id}`,
+        at: getEventTimestamp(day, `meeting:attended:${meeting.id}`, "MEETING", text, fallbackAt),
+        kind: "MEETING",
+        text,
+      });
+    });
+
+  state.sessions
+    .filter((session) => session.date === date && !!session.startedAt)
+    .forEach((session) => {
+      const templateTitle = templateTitleById.get(session.templateId) ?? "Focus session";
+      derivedEvents.push({
+        id: `focus:started:${session.id}`,
+        at: session.startedAt,
+        kind: "FOCUS",
+        text: `▶ Started: ${templateTitle}`,
+      });
+      if (session.endedAt) {
+        const minutes = session.actualMinutes ?? Math.max(0, Math.round((Date.parse(session.endedAt) - Date.parse(session.startedAt)) / 60000));
+        derivedEvents.push({
+          id: `focus:ended:${session.id}`,
+          at: session.endedAt,
+          kind: "FOCUS",
+          text: `■ Ended: ${templateTitle} (${minutes}m)`,
+        });
+      }
+    });
+
+  return derivedEvents.sort((a, b) => a.at.localeCompare(b.at) || a.kind.localeCompare(b.kind) || a.text.localeCompare(b.text));
+}
+
 // v4: Meeting management functions
 
 function parseDateParts(date: DateISO): { year: number; month: number; day: number } {
@@ -696,6 +1412,47 @@ function listRecurringDates(startDate: DateISO, recurrence: MeetingRecurrence, h
   return dates;
 }
 
+function normalizeMeetingRecurrence(recurrence: MeetingEntry["recurrence"]): MeetingRecurrence {
+  return recurrence ?? "NONE";
+}
+
+function buildRecurringMeetings(
+  meeting: MeetingEntry,
+  horizonMonths: number,
+  existingByDate?: Map<DateISO, MeetingEntry>
+): MeetingEntry[] {
+  const recurrence = normalizeMeetingRecurrence(meeting.recurrence);
+
+  if (recurrence === "NONE") {
+    return [
+      {
+        ...meeting,
+        ym: ymFromDate(meeting.date),
+        recurrence: undefined,
+        seriesId: undefined,
+      },
+    ];
+  }
+
+  const seriesId = meeting.seriesId ?? makeId("meeting_series");
+  const dates = listRecurringDates(meeting.date, recurrence, horizonMonths);
+
+  return dates.map((date, index) => {
+    const existing = existingByDate?.get(date);
+    return {
+      ...meeting,
+      id: existing?.id ?? (index === 0 ? meeting.id : makeId("meeting")),
+      date,
+      ym: ymFromDate(date),
+      createdAt: existing?.createdAt ?? meeting.createdAt,
+      recurrence,
+      seriesId,
+      attended: existing?.attended,
+      skipped: existing?.skipped,
+    };
+  });
+}
+
 export function addMeeting(state: AppStateV0, meeting: MeetingEntry): AppStateV0 {
   return { ...state, meetings: [meeting, ...state.meetings] };
 }
@@ -705,17 +1462,23 @@ export function addMeetingWithRecurrence(
   meeting: MeetingEntry,
   horizonMonths = 12
 ): AppStateV0 {
-  const recurrence = meeting.recurrence ?? "NONE";
-  if (recurrence === "NONE") return addMeeting(state, meeting);
-  const dates = listRecurringDates(meeting.date, recurrence, horizonMonths);
-  const createdAt = meeting.createdAt;
-  const meetings = dates.map((date, index) => ({
-    ...meeting,
-    id: index === 0 ? meeting.id : makeId("meeting"),
-    date,
-    ym: ymFromDate(date),
-    createdAt,
-  }));
+  const recurrence = normalizeMeetingRecurrence(meeting.recurrence);
+  if (recurrence === "NONE") {
+    return addMeeting(state, {
+      ...meeting,
+      ym: ymFromDate(meeting.date),
+      recurrence: undefined,
+      seriesId: undefined,
+    });
+  }
+  const meetings = buildRecurringMeetings(
+    {
+      ...meeting,
+      recurrence,
+      seriesId: meeting.seriesId ?? makeId("meeting_series"),
+    },
+    horizonMonths
+  );
   return { ...state, meetings: [...meetings, ...state.meetings] };
 }
 
@@ -736,6 +1499,79 @@ export function deleteMeeting(state: AppStateV0, meetingId: string): AppStateV0 
   return {
     ...state,
     meetings: state.meetings.filter((m) => m.id !== meetingId),
+  };
+}
+
+export function updateMeetingThisAndFuture(
+  state: AppStateV0,
+  meetingId: string,
+  updates: Partial<Omit<MeetingEntry, "id" | "createdAt">>,
+  horizonMonths = 12
+): AppStateV0 {
+  const targetMeeting = state.meetings.find((m) => m.id === meetingId);
+  if (!targetMeeting?.seriesId) {
+    return updateMeeting(state, meetingId, updates);
+  }
+
+  const seriesId = targetMeeting.seriesId;
+  const remainingMeetings = state.meetings.filter(
+    (m) => !(m.seriesId === seriesId && m.date >= targetMeeting.date)
+  );
+  const preservedFutureByDate = new Map<DateISO, MeetingEntry>(
+    state.meetings
+      .filter((m) => m.seriesId === seriesId && m.date >= targetMeeting.date)
+      .map((m) => [m.date, m])
+  );
+
+  const mergedMeeting: MeetingEntry = {
+    ...targetMeeting,
+    ...updates,
+    ym: ymFromDate((updates.date ?? targetMeeting.date) as DateISO),
+    seriesId,
+  };
+  const recurrence = normalizeMeetingRecurrence(mergedMeeting.recurrence);
+
+  if (recurrence === "NONE") {
+    return {
+      ...state,
+      meetings: [
+        {
+          ...mergedMeeting,
+          recurrence: undefined,
+          seriesId: undefined,
+        },
+        ...remainingMeetings,
+      ],
+    };
+  }
+
+  const regeneratedMeetings = buildRecurringMeetings(
+    {
+      ...mergedMeeting,
+      recurrence,
+      seriesId,
+    },
+    horizonMonths,
+    preservedFutureByDate
+  );
+
+  return {
+    ...state,
+    meetings: [...regeneratedMeetings, ...remainingMeetings],
+  };
+}
+
+export function deleteMeetingThisAndFuture(state: AppStateV0, meetingId: string): AppStateV0 {
+  const targetMeeting = state.meetings.find((m) => m.id === meetingId);
+  if (!targetMeeting?.seriesId) {
+    return deleteMeeting(state, meetingId);
+  }
+
+  return {
+    ...state,
+    meetings: state.meetings.filter(
+      (m) => !(m.seriesId === targetMeeting.seriesId && m.date >= targetMeeting.date)
+    ),
   };
 }
 
@@ -1054,14 +1890,15 @@ export function updateGrandPlan(
 }
 
 export function deleteGrandPlan(state: AppStateV0): AppStateV0 {
-  // v6.1: Clean up linkedMilestoneId from all tasks in all months
+  const milestoneIds = new Set(state.grandPlan?.milestones.map((milestone) => milestone.id) ?? []);
   const cleanedMonths: Record<string, MonthPlan> = {};
   for (const [ym, plan] of Object.entries(state.months)) {
-    const cleanedTasks = plan.tasks.map((t) => {
-      const { linkedMilestoneId, ...rest } = t;
-      return rest as TaskNode;
-    });
-    cleanedMonths[ym] = { ...plan, tasks: cleanedTasks, pinnedMilestoneIds: [], primaryMilestoneId: undefined };
+    cleanedMonths[ym] = {
+      ...plan,
+      templates: plan.templates.map((template) => ({ ...template, linkedMilestoneId: null })),
+      pinnedMilestoneIds: [],
+      primaryMilestoneId: undefined,
+    };
   }
 
   const cleanedDays: Record<string, DayEntry> = {};
@@ -1073,7 +1910,39 @@ export function deleteGrandPlan(state: AppStateV0): AppStateV0 {
     cleanedDays[date] = { ...day, focusMilestoneByTemplateId: undefined };
   }
 
-  return { ...state, grandPlan: undefined, months: cleanedMonths, days: cleanedDays };
+  return {
+    ...state,
+    grandPlan: undefined,
+    months: cleanedMonths,
+    taskArchive: moveMilestoneTasksToStandalone(getTaskArchive(state), milestoneIds),
+    days: cleanedDays,
+  };
+}
+
+function moveMilestoneTasksToStandalone(archive: TaskArchive, milestoneIds: Set<string>): TaskArchive {
+  if (milestoneIds.size === 0) return archive;
+
+  const nextStandaloneById = new Map(archive.standaloneTasks.map((task) => [task.id, task] as const));
+  const nextTasksByMilestoneId = { ...archive.tasksByMilestoneId };
+  const nextBoardByScope = { ...archive.boardByScope };
+  const nextTaskLinksByScope = { ...archive.taskLinksByScope };
+
+  milestoneIds.forEach((milestoneId) => {
+    (archive.tasksByMilestoneId[milestoneId] ?? []).forEach((task) => {
+      nextStandaloneById.set(task.id, { ...task, linkedMilestoneId: undefined });
+    });
+    delete nextTasksByMilestoneId[milestoneId];
+    delete nextBoardByScope[getTaskScopeKey(milestoneId)];
+    delete nextTaskLinksByScope[getTaskScopeKey(milestoneId)];
+  });
+
+  return {
+    ...archive,
+    standaloneTasks: Array.from(nextStandaloneById.values()),
+    tasksByMilestoneId: nextTasksByMilestoneId,
+    boardByScope: nextBoardByScope,
+    taskLinksByScope: nextTaskLinksByScope,
+  };
 }
 
 // Category CRUD
@@ -1124,17 +1993,8 @@ export function deleteCategory(state: AppStateV0, categoryId: string): AppStateV
     state.grandPlan.milestones.filter((m) => m.categoryId === categoryId).map((m) => m.id)
   );
 
-  // v6.1: Clean up linkedMilestoneId from tasks linked to deleted milestones
-  // v6.3: Also unlink templates (set to null = standalone)
   const cleanedMonths: Record<string, MonthPlan> = {};
   for (const [ym, plan] of Object.entries(state.months)) {
-    const cleanedTasks = plan.tasks.map((t) => {
-      if (t.linkedMilestoneId && milestoneIds.has(t.linkedMilestoneId)) {
-        const { linkedMilestoneId, ...rest } = t;
-        return rest as TaskNode;
-      }
-      return t;
-    });
     const cleanedTemplates = plan.templates.map((t) => {
       if (t.linkedMilestoneId && milestoneIds.has(t.linkedMilestoneId)) {
         return { ...t, linkedMilestoneId: null };
@@ -1147,7 +2007,6 @@ export function deleteCategory(state: AppStateV0, categoryId: string): AppStateV
       : nextPinned[0];
     cleanedMonths[ym] = {
       ...plan,
-      tasks: cleanedTasks,
       templates: cleanedTemplates,
       pinnedMilestoneIds: nextPinned,
       primaryMilestoneId: nextPrimary,
@@ -1171,6 +2030,7 @@ export function deleteCategory(state: AppStateV0, categoryId: string): AppStateV
   return {
     ...state,
     months: cleanedMonths,
+    taskArchive: moveMilestoneTasksToStandalone(getTaskArchive(state), milestoneIds),
     days: cleanedDays,
     grandPlan: {
       ...state.grandPlan,
@@ -1311,17 +2171,8 @@ export function deleteMilestone(state: AppStateV0, milestoneId: string, cascadeC
         .sort((a, b) => a.order - b.order);
   const promotedId = children.length > 0 ? children[0].id : null;
 
-  // v6.1: Clean up linkedMilestoneId from tasks linked to deleted milestones
-  // v6.3: Also unlink templates (set to null = standalone)
   const cleanedMonths: Record<string, MonthPlan> = {};
   for (const [ym, plan] of Object.entries(state.months)) {
-    const cleanedTasks = plan.tasks.map((t) => {
-      if (t.linkedMilestoneId && toDelete.has(t.linkedMilestoneId)) {
-        const { linkedMilestoneId, ...rest } = t;
-        return rest as TaskNode;
-      }
-      return t;
-    });
     const cleanedTemplates = plan.templates.map((t) => {
       if (t.linkedMilestoneId && toDelete.has(t.linkedMilestoneId)) {
         return { ...t, linkedMilestoneId: null };
@@ -1334,7 +2185,6 @@ export function deleteMilestone(state: AppStateV0, milestoneId: string, cascadeC
       : nextPinned[0];
     cleanedMonths[ym] = {
       ...plan,
-      tasks: cleanedTasks,
       templates: cleanedTemplates,
       pinnedMilestoneIds: nextPinned,
       primaryMilestoneId: nextPrimary,
@@ -1358,6 +2208,7 @@ export function deleteMilestone(state: AppStateV0, milestoneId: string, cascadeC
   return {
     ...state,
     months: cleanedMonths,
+    taskArchive: moveMilestoneTasksToStandalone(getTaskArchive(state), toDelete),
     days: cleanedDays,
     grandPlan: {
       ...state.grandPlan,
@@ -1410,34 +2261,6 @@ export function reorderMilestone(state: AppStateV0, milestoneId: string, directi
   };
 }
 
-// v6.1: Task with milestone linking
-
-export function addTaskWithMilestone(
-  state: AppStateV0,
-  ym: YM,
-  title: string,
-  milestoneId: string,
-  parentId: string | null = null,
-  description?: string
-): { state: AppStateV0; task: TaskNode } | { state: AppStateV0; task: undefined } {
-  const plan = getMonth(state, ym);
-  if (!plan) return { state, task: undefined };
-
-  const task: TaskNode = {
-    id: makeId("task"),
-    title,
-    description: description?.trim() || undefined,
-    parentId,
-    status: "NONE",
-    linkedMilestoneId: milestoneId,
-  };
-
-  const pinned = Array.isArray(plan.pinnedMilestoneIds) ? plan.pinnedMilestoneIds : [];
-  const nextPinned = pinned.includes(milestoneId) ? pinned : [...pinned, milestoneId];
-  const nextPlan: MonthPlan = { ...plan, tasks: [...plan.tasks, task], pinnedMilestoneIds: nextPinned };
-  return { state: upsertMonth(state, nextPlan), task };
-}
-
 export function getMilestonesInMonth(state: AppStateV0, ym: YM): MilestoneNode[] {
   const plan = getMonth(state, ym);
   if (!plan || !state.grandPlan) return [];
@@ -1458,22 +2281,7 @@ export function getMilestonesInMonth(state: AppStateV0, ym: YM): MilestoneNode[]
   // Prefer explicit month pins first (in user order)
   (plan.pinnedMilestoneIds ?? []).forEach((id) => push(id));
 
-  // Also include any milestones referenced by tasks (legacy / safety)
-  plan.tasks.forEach((t) => push(t.linkedMilestoneId));
-
   return orderedIds.map((id) => byId.get(id)!).filter(Boolean);
-}
-
-export function getTasksForMilestone(state: AppStateV0, ym: YM, milestoneId: string): TaskNode[] {
-  const plan = getMonth(state, ym);
-  if (!plan) return [];
-  return plan.tasks.filter((t) => t.linkedMilestoneId === milestoneId);
-}
-
-export function getStandaloneTasks(state: AppStateV0, ym: YM): TaskNode[] {
-  const plan = getMonth(state, ym);
-  if (!plan) return [];
-  return plan.tasks.filter((t) => !t.linkedMilestoneId);
 }
 
 // Validation

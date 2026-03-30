@@ -1,7 +1,8 @@
 {
-  "name": "focustree",
+  "name": "onion-app",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
   "main": "out/main/main.js",
   "scripts": {
@@ -12,10 +13,11 @@
     "build:web": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "package": "electron-vite build && electron-builder",
-    "package:mac": "electron-vite build && electron-builder --mac",
-    "package:win": "electron-vite build && electron-builder --win",
-    "package:linux": "electron-vite build && electron-builder --linux"
+    "third-party-notices": "node scripts/generate-third-party-notices.mjs",
+    "package": "electron-vite build && npm run third-party-notices && electron-builder",
+    "package:mac": "electron-vite build && npm run third-party-notices && electron-builder --mac",
+    "package:win": "electron-vite build && npm run third-party-notices && electron-builder --win",
+    "package:linux": "electron-vite build && npm run third-party-notices && electron-builder --linux"
   },
   "dependencies": {
     "react": "^19.2.0",

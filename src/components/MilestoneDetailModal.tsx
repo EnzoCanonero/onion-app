@@ -1,41 +1,33 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import type { MilestoneNode, MilestoneStatus, TaskNode } from "../app/types";
-import { loadState } from "../app/storage";
 
 interface MilestoneDetailModalProps {
   milestone: MilestoneNode;
+  linkedTasks: TaskNode[];
+  frozenTaskIds: Set<string>;
   onClose: () => void;
   onSave: (milestoneId: string, updates: Partial<Pick<MilestoneNode, "title" | "description" | "status">>) => void;
   onDelete: (milestoneId: string) => void;
+  onSetTaskStatus: (taskId: string, outcome: "COMPLETED" | "NOT_COMPLETED") => void;
+  onDeleteTask: (taskId: string) => void;
 }
 
 export default function MilestoneDetailModal({
   milestone,
+  linkedTasks,
+  frozenTaskIds,
   onClose,
   onSave,
   onDelete,
+  onSetTaskStatus,
+  onDeleteTask,
 }: MilestoneDetailModalProps) {
   const [title, setTitle] = useState(milestone.title);
   const [description, setDescription] = useState(milestone.description ?? "");
   const [status, setStatus] = useState<MilestoneStatus>(milestone.status);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
-  const linkedTasksByMonth = useMemo(() => {
-    const state = loadState();
-    const months = Object.values(state.months ?? {});
-    return months
-      .map((plan) => ({
-        ym: plan.ym,
-        tasks: plan.tasks.filter((t) => t.linkedMilestoneId === milestone.id),
-      }))
-      .filter((x) => x.tasks.length > 0)
-      .sort((a, b) => a.ym.localeCompare(b.ym));
-  }, [milestone.id]);
-
-  const totalLinkedTasks = useMemo(
-    () => linkedTasksByMonth.reduce((sum, x) => sum + x.tasks.length, 0),
-    [linkedTasksByMonth]
-  );
+  const totalLinkedTasks = linkedTasks.length;
 
   const getTaskStatusIcon = (task: TaskNode) => {
     switch (task.status) {
@@ -73,6 +65,21 @@ export default function MilestoneDetailModal({
   const handleDelete = () => {
     onDelete(milestone.id);
     onClose();
+  };
+
+  const handleSetLinkedTaskStatus = (
+    taskId: string,
+    outcome: "COMPLETED" | "NOT_COMPLETED"
+  ) => {
+    onSetTaskStatus(taskId, outcome);
+    if (status === "NOT_STARTED") {
+      setStatus("IN_PROGRESS");
+    }
+  };
+
+  const handleDeleteLinkedTask = (task: TaskNode) => {
+    if (!window.confirm(`Delete task "${task.title}"?`)) return;
+    onDeleteTask(task.id);
   };
 
   return (
@@ -158,22 +165,24 @@ export default function MilestoneDetailModal({
           </select>
         </div>
 
-        {/* Description */}
+        {/* Notes */}
         <div style={{ marginBottom: 24 }}>
-          <label style={{ display: "block", marginBottom: 6, fontWeight: 500 }}>Description</label>
+          <label style={{ display: "block", marginBottom: 6, fontWeight: 500 }}>Notes</label>
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder="Add notes about this milestone..."
-            rows={3}
+            rows={12}
             style={{
               width: "100%",
-              padding: 10,
+              padding: 12,
               fontSize: 14,
               border: "1px solid #ddd",
               borderRadius: 6,
               boxSizing: "border-box",
               resize: "vertical",
+              lineHeight: 1.6,
+              minHeight: 300,
             }}
           />
         </div>
@@ -184,55 +193,151 @@ export default function MilestoneDetailModal({
             Linked Tasks
           </div>
 
-          {linkedTasksByMonth.length === 0 ? (
+          {linkedTasks.length === 0 ? (
             <div style={{ padding: 12, backgroundColor: "#f5f5f5", borderRadius: 6 }}>
               <p style={{ fontSize: 13, color: "#666", margin: 0, lineHeight: 1.5 }}>
-                Tasks for this milestone are managed in the Month Setup page. Link this milestone to a month to add tasks that contribute to this goal.
+                This milestone has no tasks yet. Add them from the Month Plan page and they will stay attached to this milestone instead of being split by month.
               </p>
             </div>
           ) : (
             <div style={{ padding: 12, backgroundColor: "#f5f5f5", borderRadius: 6 }}>
               <div style={{ fontSize: 13, color: "#666", marginBottom: 10 }}>
-                {totalLinkedTasks} task{totalLinkedTasks === 1 ? "" : "s"} across {linkedTasksByMonth.length} month{linkedTasksByMonth.length === 1 ? "" : "s"} (managed in Month Setup)
+                {totalLinkedTasks} task{totalLinkedTasks === 1 ? "" : "s"} linked to this milestone
               </div>
 
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {linkedTasksByMonth.map((bucket) => (
-                  <div key={bucket.ym}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: "#333", marginBottom: 6 }}>
-                      {bucket.ym}
-                    </div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                      {bucket.tasks.map((task) => (
-                        <div
-                          key={task.id}
+                {linkedTasks.map((task) => {
+                  const isTaskFrozen = frozenTaskIds.has(task.id);
+                  return (
+                    <div
+                      key={task.id}
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 6,
+                        padding: "10px 12px",
+                        backgroundColor: "white",
+                        borderRadius: 10,
+                        border: "1px solid #e0e0e0",
+                        boxShadow: "0 2px 8px rgba(0,0,0,0.04)",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                        <span
                           style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 8,
-                            padding: "6px 8px",
-                            backgroundColor: "white",
-                            borderRadius: 6,
-                            border: "1px solid #e0e0e0",
+                            width: 20,
+                            textAlign: "center",
+                            fontWeight: 800,
+                            color: getTaskStatusColor(task),
+                            flexShrink: 0,
+                          }}
+                          title={task.status}
+                        >
+                          {getTaskStatusIcon(task)}
+                        </span>
+                        <span
+                          style={{
+                            fontSize: 13,
+                            color: "#333",
+                            fontWeight: 600,
+                            minWidth: 0,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
                           }}
                         >
-                          <span
+                          {task.title}
+                        </span>
+                      </div>
+
+                      {!isTaskFrozen ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                          <button
+                            onClick={() => handleSetLinkedTaskStatus(task.id, "COMPLETED")}
                             style={{
-                              width: 20,
-                              textAlign: "center",
+                              width: 28,
+                              height: 28,
+                              borderRadius: 7,
+                              border: "1px solid #10b981",
+                              backgroundColor: task.status === "GREEN" ? "#10b981" : "#ffffff",
+                              color: task.status === "GREEN" ? "#ffffff" : "#10b981",
+                              cursor: "pointer",
+                              fontSize: 13,
                               fontWeight: 800,
-                              color: getTaskStatusColor(task),
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
                             }}
-                            title={task.status}
+                            title={task.status === "GREEN" ? "Clear completed status" : "Mark task as completed"}
                           >
-                            {getTaskStatusIcon(task)}
-                          </span>
-                          <span style={{ fontSize: 13, color: "#333" }}>{task.title}</span>
+                            ✓
+                          </button>
+                          <button
+                            onClick={() => handleSetLinkedTaskStatus(task.id, "NOT_COMPLETED")}
+                            style={{
+                              width: 28,
+                              height: 28,
+                              borderRadius: 7,
+                              border: "1px solid #f59e0b",
+                              backgroundColor: task.status === "YELLOW" ? "#f59e0b" : "#ffffff",
+                              color: task.status === "YELLOW" ? "#ffffff" : "#f59e0b",
+                              cursor: "pointer",
+                              fontSize: 13,
+                              fontWeight: 800,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                            }}
+                            title={task.status === "YELLOW" ? "Clear work in progress status" : "Mark task as work in progress"}
+                          >
+                            ◐
+                          </button>
+                          <button
+                            onClick={() => handleDeleteLinkedTask(task)}
+                            style={{
+                              width: 28,
+                              height: 28,
+                              borderRadius: 7,
+                              border: "1px solid #fecaca",
+                              backgroundColor: "#ffffff",
+                              color: "#ef4444",
+                              cursor: "pointer",
+                              fontSize: 13,
+                              fontWeight: 800,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                            }}
+                            title="Delete task"
+                          >
+                            ✕
+                          </button>
                         </div>
-                      ))}
+                      ) : null}
                     </div>
-                  </div>
-                ))}
+                    {task.notes ? (
+                      <div style={{ fontSize: 12, color: "#555", lineHeight: 1.5, paddingLeft: 28 }}>
+                        {task.notes}
+                      </div>
+                    ) : null}
+                    {(task.createdAt || task.completedAt) && (
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", paddingLeft: 28 }}>
+                        {task.createdAt && (
+                          <span style={{ fontSize: 11, color: "#666" }}>
+                            Created {task.createdAt.slice(0, 10)}
+                          </span>
+                        )}
+                        {task.completedAt && (
+                          <span style={{ fontSize: 11, color: "#666" }}>
+                            Completed {task.completedAt.slice(0, 10)}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
