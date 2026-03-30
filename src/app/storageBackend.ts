@@ -110,11 +110,11 @@ export async function flushStorageKey(key: string): Promise<void> {
 }
 
 const PERSISTENT_KEYS = [
-  "focustree.state",
-  "focustree.userName",
-  "focustree.developerMode",
-  "focustree.virtualClock",
-  "focustree.onboarding",
+  "onion-app.state",
+  "onion-app.userName",
+  "onion-app.developerMode",
+  "onion-app.virtualClock",
+  "onion-app.onboarding",
 ];
 
 export async function initStorageBackend(): Promise<StorageBackend> {

@@ -44,7 +44,7 @@ import MilestoneDetailModal from "../components/MilestoneDetailModal";
 import TitleDescriptionModal from "../components/TitleDescriptionModal";
 
 const DEFAULT_COLORS = ["#4caf50", "#2196f3", "#ff9800", "#e91e63", APP_MAIN_COLOR, "#00bcd4"];
-const SELECTED_CATEGORY_STORAGE_KEY = "focustree:grand-plan:selected-category";
+const SELECTED_CATEGORY_STORAGE_KEY = "onion-app:grand-plan:selected-category";
 
 function dateISOToDate(date: DateISO): Date | null {
   const parts = date.split("-").map((x) => Number(x));

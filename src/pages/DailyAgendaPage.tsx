@@ -15,6 +15,7 @@ import {
   updateSession,
   setDayTasks,
   setTaskOutcome,
+  updateTask,
   setDailyJournal,
   setShutdownNote,
   findLastWorkingDay,
@@ -52,6 +53,8 @@ import { getVirtualTimestamp } from "../contexts/VirtualClockContext";
 import { APP_MAIN_COLOR, REPORT_THEME } from "../app/theme";
 import { compareTaskGroupMeta, getCategoryMeta, getTaskGroupMeta } from "../app/reporting";
 import TaskSelectionModal from "../components/TaskSelectionModal";
+import PrimaryTaskSwitchModal from "../components/PrimaryTaskSwitchModal";
+import AddSecondaryTasksModal from "../components/AddSecondaryTasksModal";
 import FocusTemplateCard from "../components/FocusTemplateCard";
 import DailyTimeline from "../components/DailyTimeline";
 import EmptyMonthPanel from "../components/EmptyMonthPanel";
@@ -181,6 +184,12 @@ function DailyAgendaPageContent({
 
   const [tick, setTick] = useState(0);
   const [showTaskModal, setShowTaskModal] = useState(false);
+  const [showAddSecondaryModal, setShowAddSecondaryModal] = useState(false);
+  const [showPrimarySwitchModal, setShowPrimarySwitchModal] = useState(false);
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [editingTaskTitle, setEditingTaskTitle] = useState("");
+  const [editingTaskNotes, setEditingTaskNotes] = useState("");
+  const [editingTaskError, setEditingTaskError] = useState<string | null>(null);
   const [hideCompletedTasks, setHideCompletedTasks] = useState(false);
   const [showStartWizard, setShowStartWizard] = useState(false);
   const [wizardStep, setWizardStep] = useState(0);
@@ -248,6 +257,21 @@ function DailyAgendaPageContent({
     saveState(next);
     setTick((x) => x + 1);
   }, [shouldAutoClose, dateSafe]);
+
+  useEffect(() => {
+    if (!editingTaskId) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeTaskEditor();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [editingTaskId]);
+
+  useEffect(() => {
+    closeTaskEditor();
+    setShowAddSecondaryModal(false);
+    setShowPrimarySwitchModal(false);
+  }, [dateSafe]);
 
   const mutate = (fn: (s: typeof withDay) => typeof withDay) => {
     const current = loadState();
@@ -338,6 +362,20 @@ function DailyAgendaPageContent({
   }, [monthTasks, completedMilestoneIds, day.outcomeByTaskId]);
 
   const selectableTaskIds = useMemo(() => new Set(selectableTasks.map((t) => t.id)), [selectableTasks]);
+  const primarySwitchTasks = useMemo(() => {
+    return day.secondaryTaskIds
+      .map((taskId) => tasksById.get(taskId))
+      .filter((task): task is TaskNode => Boolean(task))
+      .filter((task) => !frozenTaskIds.has(task.id) && task.status !== "GREEN");
+  }, [day.secondaryTaskIds, tasksById, frozenTaskIds]);
+  const canSwitchPrimaryTask = primarySwitchTasks.length > 0;
+  const addableSecondaryTasks = useMemo(() => {
+    const selectedIds = new Set<string>([
+      ...(day.primaryTaskId ? [day.primaryTaskId] : []),
+      ...day.secondaryTaskIds,
+    ]);
+    return selectableTasks.filter((task) => !selectedIds.has(task.id));
+  }, [day.primaryTaskId, day.secondaryTaskIds, selectableTasks]);
 
   // Tasks completed on this specific day (for green styling in selection modal)
   const completedTodayIds = useMemo(() => {
@@ -531,6 +569,9 @@ function DailyAgendaPageContent({
         return compareTaskGroupMeta(a.meta, b.meta);
       });
   }, [day.primaryTaskId, primaryTask, showPrimaryTask, state.grandPlan, tasksById, visibleSecondaryTaskIds]);
+  const editingTask = editingTaskId ? tasksById.get(editingTaskId) : undefined;
+  const editingTaskAccentColor = getCategoryMeta(state.grandPlan, editingTask?.linkedMilestoneId).color || APP_MAIN_COLOR;
+  const editingTaskReadOnly = editingTaskId ? frozenTaskIds.has(editingTaskId) : false;
 
   const wizardSteps = ["Tasks", "Meetings", "Focus Sessions"] as const;
   const wizardStepTitle = wizardSteps[wizardStep] ?? wizardSteps[0];
@@ -553,6 +594,78 @@ function DailyAgendaPageContent({
       return setDayTasks(withDay0, dateSafe, safePrimaryId, safeSecondaryIds);
     });
     setShowTaskModal(false);
+  };
+
+  const handleAddSecondaryTasksConfirm = (secondaryIds: string[]) => {
+    mutate((s0) => {
+      const { state: withDay0, day: day0 } = getOrCreateDay(s0, dateSafe, ym);
+      const nextSecondaryIds = Array.from(
+        new Set([...(day0.secondaryTaskIds ?? []), ...secondaryIds.filter((id) => id !== day0.primaryTaskId)])
+      );
+      return setDayTasks(withDay0, dateSafe, day0.primaryTaskId, nextSecondaryIds);
+    });
+    setShowAddSecondaryModal(false);
+  };
+
+  const handleChangePrimaryTaskConfirm = (primaryId: string | undefined) => {
+    mutate((s0) => {
+      const { state: withDay0, day: day0 } = getOrCreateDay(s0, dateSafe, ym);
+      if (!primaryId || day0.primaryTaskId === primaryId || !day0.secondaryTaskIds.includes(primaryId)) return withDay0;
+      const nextSecondaryIds = [day0.primaryTaskId, ...day0.secondaryTaskIds.filter((id) => id !== primaryId)].filter(
+        (id): id is string => Boolean(id)
+      );
+      return setDayTasks(withDay0, dateSafe, primaryId, nextSecondaryIds);
+    });
+    setShowPrimarySwitchModal(false);
+  };
+
+  const handleRemoveTaskFromSelection = (taskId: string) => {
+    mutate((s0) => {
+      const { state: withDay0, day: day0 } = getOrCreateDay(s0, dateSafe, ym);
+      if (day0.primaryTaskId === taskId) {
+        const remainingSecondaryIds = day0.secondaryTaskIds.filter((id) => id !== taskId);
+        const [nextPrimaryId, ...nextSecondaryIds] = remainingSecondaryIds;
+        return setDayTasks(withDay0, dateSafe, nextPrimaryId, nextSecondaryIds);
+      }
+      return setDayTasks(
+        withDay0,
+        dateSafe,
+        day0.primaryTaskId,
+        day0.secondaryTaskIds.filter((id) => id !== taskId)
+      );
+    });
+  };
+
+  const openTaskEditor = (task: TaskNode) => {
+    if (frozenTaskIds.has(task.id)) return;
+    setEditingTaskId(task.id);
+    setEditingTaskTitle(task.title);
+    setEditingTaskNotes(task.notes ?? "");
+    setEditingTaskError(null);
+  };
+
+  const closeTaskEditor = () => {
+    setEditingTaskId(null);
+    setEditingTaskTitle("");
+    setEditingTaskNotes("");
+    setEditingTaskError(null);
+  };
+
+  const saveTaskEditor = () => {
+    if (!editingTaskId) return;
+    const nextTitle = editingTaskTitle.trim();
+    if (!nextTitle) {
+      setEditingTaskError("Title is required.");
+      return;
+    }
+    const nextNotes = editingTaskNotes.trim();
+    mutate((s0) =>
+      updateTask(s0, editingTaskId, {
+        title: nextTitle,
+        notes: nextNotes || undefined,
+      })
+    );
+    closeTaskEditor();
   };
 
   const closeStartWizard = () => {
@@ -834,17 +947,22 @@ function DailyAgendaPageContent({
             <button
               onClick={() => handleDeleteMeeting(meeting.id)}
               style={{
-                padding: "6px 10px",
-                fontSize: 12,
-                fontWeight: 800,
+                width: 28,
+                height: 28,
+                borderRadius: 7,
+                border: "1px solid #fecaca",
                 backgroundColor: "white",
-                border: "1px solid #f44336",
-                color: "#f44336",
-                borderRadius: 10,
+                color: "#ef4444",
                 cursor: "pointer",
+                fontSize: 14,
+                fontWeight: 800,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
               }}
+              title="Delete meeting"
             >
-              🗑️
+              ✕
             </button>
           </div>
         </div>
@@ -1037,6 +1155,7 @@ function DailyAgendaPageContent({
                   {completedTasks.map((t) => {
                     const task = tasksById.get(t.id);
                     const title = task?.title ?? "Unknown task";
+                    const notes = (task?.notes ?? "").trim();
                     const categoryColor = getCategoryMeta(state.grandPlan, task?.linkedMilestoneId).color;
                     return (
                       <div
@@ -1053,17 +1172,32 @@ function DailyAgendaPageContent({
                           gap: 10,
                         }}
                       >
-                        <div
-                          style={{
-                            fontSize: 13,
-                            fontWeight: 800,
-                            color: REPORT_THEME.textPrimary,
-                            flex: 1,
-                            minWidth: 0,
-                            wordBreak: "break-word",
-                          }}
-                        >
-                          {title}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div
+                            style={{
+                              fontSize: 13,
+                              fontWeight: 800,
+                              color: REPORT_THEME.textPrimary,
+                              minWidth: 0,
+                              wordBreak: "break-word",
+                            }}
+                          >
+                            {title}
+                          </div>
+                          {notes ? (
+                            <div
+                              style={{
+                                marginTop: 6,
+                                fontSize: 12,
+                                lineHeight: 1.55,
+                                color: REPORT_THEME.textSecondary,
+                                whiteSpace: "pre-wrap",
+                                wordBreak: "break-word",
+                              }}
+                            >
+                              {notes}
+                            </div>
+                          ) : null}
                         </div>
                         <div style={{ display: "flex", alignItems: "center", gap: 8, flex: "0 0 auto" }}>
                           <span style={{ fontSize: 12, fontWeight: 900, color: "#16a34a" }}>
@@ -1626,19 +1760,21 @@ function DailyAgendaPageContent({
                   {hideCompletedTasks ? "Show Completed" : "Hide Completed"}
                 </button>
                 <button
-                  onClick={() => setShowTaskModal(true)}
+                  onClick={() => setShowAddSecondaryModal(true)}
+                  disabled={addableSecondaryTasks.length === 0}
                   style={{
                     padding: "4px 8px",
                     fontSize: 14,
-                    backgroundColor: "white",
+                    backgroundColor: addableSecondaryTasks.length > 0 ? "white" : "#f3f4f6",
+                    color: addableSecondaryTasks.length > 0 ? "#444" : "#9ca3af",
                     border: "1px solid #ddd",
                     borderRadius: 6,
-                    cursor: "pointer",
+                    cursor: addableSecondaryTasks.length > 0 ? "pointer" : "default",
                     opacity: 0.9,
                   }}
-                  title="Edit task selection"
+                  title="Add secondary task"
                 >
-                  ✏️
+                  +
                 </button>
               </div>
             ) : null}
@@ -1656,6 +1792,168 @@ function DailyAgendaPageContent({
               suggestedSecondaryIds={suggestedSecondaryIds}
               completedTodayIds={completedTodayIds}
             />
+          )}
+
+          {showPrimarySwitchModal && day.primaryTaskId && (
+            <PrimaryTaskSwitchModal
+              tasks={primarySwitchTasks}
+              currentPrimaryTitle={primaryTask?.title ?? "Primary task"}
+              onConfirm={handleChangePrimaryTaskConfirm}
+              onCancel={() => setShowPrimarySwitchModal(false)}
+            />
+          )}
+
+          {showAddSecondaryModal && day.primaryTaskId && (
+            <AddSecondaryTasksModal
+              tasks={addableSecondaryTasks}
+              grandPlan={state.grandPlan}
+              currentPrimaryTitle={primaryTask?.title ?? "Primary task"}
+              onConfirm={handleAddSecondaryTasksConfirm}
+              onCancel={() => setShowAddSecondaryModal(false)}
+            />
+          )}
+
+          {editingTaskId && (
+            <div
+              style={{
+                position: "fixed",
+                inset: 0,
+                backgroundColor: "rgba(0, 0, 0, 0.5)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                zIndex: 1200,
+                padding: 16,
+              }}
+              onClick={closeTaskEditor}
+            >
+              <div
+                style={{
+                  backgroundColor: "white",
+                  backgroundImage: "linear-gradient(180deg, rgba(255,255,255,0.65), rgba(0,0,0,0.02))",
+                  borderRadius: 12,
+                  padding: 24,
+                  width: "100%",
+                  maxWidth: 560,
+                  maxHeight: "90vh",
+                  overflow: "auto",
+                  boxShadow: "0 10px 40px rgba(0,0,0,0.30)",
+                  border: `2px solid ${editingTaskAccentColor}`,
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+                  <h3 style={{ margin: 0, fontSize: 16, fontWeight: 900, color: "#111" }}>
+                    Task Details
+                  </h3>
+                  <button
+                    onClick={closeTaskEditor}
+                    style={{
+                      padding: "4px 8px",
+                      fontSize: 18,
+                      backgroundColor: "transparent",
+                      border: "none",
+                      cursor: "pointer",
+                      color: "#666",
+                      lineHeight: 1,
+                    }}
+                    title="Close"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <div style={{ marginBottom: 12 }}>
+                  <label style={{ display: "block", marginBottom: 6, fontWeight: 600, fontSize: 12, color: "#333" }}>
+                    Title
+                  </label>
+                  <input
+                    type="text"
+                    value={editingTaskTitle}
+                    onChange={(e) => setEditingTaskTitle(e.target.value)}
+                    readOnly={editingTaskReadOnly}
+                    autoFocus
+                    style={{
+                      width: "100%",
+                      padding: 10,
+                      fontSize: 14,
+                      backgroundColor: editingTaskReadOnly ? "rgba(255,255,255,0.55)" : "white",
+                      border: `1px solid ${editingTaskAccentColor}`,
+                      borderRadius: 6,
+                      boxSizing: "border-box",
+                      outline: "none",
+                      cursor: editingTaskReadOnly ? "default" : "text",
+                    }}
+                  />
+                </div>
+
+                <div style={{ marginBottom: 12 }}>
+                  <label style={{ display: "block", marginBottom: 6, fontWeight: 600, fontSize: 12, color: "#333" }}>
+                    Notes
+                  </label>
+                  <textarea
+                    value={editingTaskNotes}
+                    onChange={(e) => setEditingTaskNotes(e.target.value)}
+                    readOnly={editingTaskReadOnly}
+                    rows={14}
+                    style={{
+                      width: "100%",
+                      padding: 10,
+                      fontSize: 13,
+                      backgroundColor: editingTaskReadOnly ? "rgba(255,255,255,0.55)" : "white",
+                      border: `1px solid ${editingTaskAccentColor}`,
+                      borderRadius: 6,
+                      boxSizing: "border-box",
+                      outline: "none",
+                      resize: "vertical",
+                      fontFamily: "inherit",
+                      cursor: editingTaskReadOnly ? "default" : "text",
+                    }}
+                  />
+                </div>
+
+                {editingTaskError ? (
+                  <div style={{ marginBottom: 10, color: "#f44336", fontSize: 12, fontWeight: 600 }}>
+                    {editingTaskError}
+                  </div>
+                ) : null}
+
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                  <button
+                    onClick={closeTaskEditor}
+                    style={{
+                      padding: "8px 12px",
+                      fontSize: 13,
+                      fontWeight: 700,
+                      backgroundColor: "white",
+                      color: "#666",
+                      border: "1px solid #ddd",
+                      borderRadius: 8,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {editingTaskReadOnly ? "Close" : "Cancel"}
+                  </button>
+                  {!editingTaskReadOnly && (
+                    <button
+                      onClick={saveTaskEditor}
+                      style={{
+                        padding: "8px 12px",
+                        fontSize: 13,
+                        fontWeight: 800,
+                        backgroundColor: editingTaskAccentColor,
+                        color: "white",
+                        border: "none",
+                        borderRadius: 8,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Save
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
           )}
 
           {/* Selected Tasks Display */}
@@ -1736,9 +2034,22 @@ function DailyAgendaPageContent({
                           const isInProgress = item.task.status === "YELLOW";
                           const isPrimary = item.role === "primary";
                           const isTaskFrozen = frozenTaskIds.has(item.taskId);
+                          const taskNotes = (item.task.notes ?? "").trim();
                           return (
                             <div
                               key={item.taskId}
+                              role={!isTaskFrozen ? "button" : undefined}
+                              tabIndex={!isTaskFrozen ? 0 : undefined}
+                              onClick={!isTaskFrozen ? () => openTaskEditor(item.task) : undefined}
+                              onKeyDown={
+                                !isTaskFrozen
+                                  ? (event) => {
+                                      if (event.key !== "Enter" && event.key !== " ") return;
+                                      event.preventDefault();
+                                      openTaskEditor(item.task);
+                                    }
+                                  : undefined
+                              }
                               style={{
                                 border: "2px solid #eee",
                                 borderLeft: `6px solid ${accentColor}`,
@@ -1746,38 +2057,117 @@ function DailyAgendaPageContent({
                                 padding: 16,
                                 backgroundColor: isPrimary ? "#fff8e1" : "rgba(255,255,255,0.92)",
                                 boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+                                cursor: !isTaskFrozen ? "pointer" : "default",
                               }}
                             >
                               <div style={{ marginBottom: 10 }}>
-                                {isPrimary ? (
-                                  <div
-                                    style={{
-                                      display: "inline-flex",
-                                      alignItems: "center",
-                                      gap: 6,
-                                      marginBottom: 6,
-                                      padding: "3px 8px",
-                                      borderRadius: 999,
-                                      backgroundColor: "rgba(245, 158, 11, 0.14)",
-                                      color: "#9a6700",
-                                      fontSize: 11,
-                                      fontWeight: 800,
-                                      letterSpacing: 0.2,
-                                      textTransform: "uppercase",
-                                    }}
-                                  >
-                                    Primary
+                                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+                                  <div style={{ flex: 1, minWidth: 0 }}>
+                                    {isPrimary ? (
+                                      <div
+                                        style={{
+                                          display: "inline-flex",
+                                          alignItems: "center",
+                                          gap: 6,
+                                          marginBottom: 6,
+                                          padding: "3px 8px",
+                                          borderRadius: 999,
+                                          backgroundColor: "rgba(245, 158, 11, 0.14)",
+                                          color: "#9a6700",
+                                          fontSize: 11,
+                                          fontWeight: 800,
+                                          letterSpacing: 0.2,
+                                          textTransform: "uppercase",
+                                        }}
+                                      >
+                                        Primary
+                                      </div>
+                                    ) : null}
+                                    <div style={{ fontSize: isPrimary ? 18 : 15, fontWeight: isPrimary ? 700 : 600 }}>
+                                      {item.task.title}
+                                    </div>
+                                    {taskNotes ? (
+                                      <div
+                                        style={{
+                                          marginTop: 8,
+                                          fontSize: isPrimary ? 13 : 12,
+                                          lineHeight: 1.6,
+                                          color: "#64748b",
+                                          whiteSpace: "pre-wrap",
+                                          wordBreak: "break-word",
+                                        }}
+                                      >
+                                        {taskNotes}
+                                      </div>
+                                    ) : null}
                                   </div>
-                                ) : null}
-                                <div style={{ fontSize: isPrimary ? 18 : 15, fontWeight: isPrimary ? 700 : 600 }}>
-                                  {item.task.title}
+
+                                  {item.task.status !== "GREEN" ? (
+                                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                                      {isPrimary ? (
+                                        <button
+                                          onClick={(event) => {
+                                            event.stopPropagation();
+                                            if (!canSwitchPrimaryTask) return;
+                                            setShowPrimarySwitchModal(true);
+                                          }}
+                                          disabled={!canSwitchPrimaryTask}
+                                          style={{
+                                            width: 28,
+                                            height: 28,
+                                            borderRadius: 7,
+                                            border: "1px solid #cbd5e1",
+                                            backgroundColor: canSwitchPrimaryTask ? "white" : "#f3f4f6",
+                                            color: canSwitchPrimaryTask ? "#475569" : "#9ca3af",
+                                            cursor: canSwitchPrimaryTask ? "pointer" : "not-allowed",
+                                            fontSize: 14,
+                                            fontWeight: 800,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                          }}
+                                          title={canSwitchPrimaryTask ? "Change primary task" : "No secondary task available to switch"}
+                                        >
+                                          ↻
+                                        </button>
+                                      ) : null}
+                                      {!isPrimary ? (
+                                        <button
+                                          onClick={(event) => {
+                                            event.stopPropagation();
+                                            handleRemoveTaskFromSelection(item.taskId);
+                                          }}
+                                          style={{
+                                            width: 28,
+                                            height: 28,
+                                            borderRadius: 7,
+                                            border: "1px solid #fecaca",
+                                            backgroundColor: "white",
+                                            color: "#ef4444",
+                                            cursor: "pointer",
+                                            fontSize: 14,
+                                            fontWeight: 800,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                          }}
+                                          title="Remove from daily selection"
+                                        >
+                                          ✕
+                                        </button>
+                                      ) : null}
+                                    </div>
+                                  ) : null}
                                 </div>
                               </div>
 
                               {!isTaskFrozen ? (
                                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                                   <button
-                                    onClick={() => setOutcome(item.taskId, "COMPLETED")}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      setOutcome(item.taskId, "COMPLETED");
+                                    }}
                                     style={{
                                       padding: isPrimary ? "6px 12px" : "4px 10px",
                                       fontSize: isPrimary ? 13 : 12,
@@ -1792,7 +2182,10 @@ function DailyAgendaPageContent({
                                     ✓ Completed
                                   </button>
                                   <button
-                                    onClick={() => setOutcome(item.taskId, "NOT_COMPLETED")}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      setOutcome(item.taskId, "NOT_COMPLETED");
+                                    }}
                                     style={{
                                       padding: isPrimary ? "6px 12px" : "4px 10px",
                                       fontSize: isPrimary ? 13 : 12,
@@ -1838,7 +2231,36 @@ function DailyAgendaPageContent({
           )}
 
           {/* v4: Meetings Section */}
-          <h3 style={{ marginTop: 32 }}>📅 Meetings</h3>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              marginTop: 32,
+              marginBottom: 12,
+            }}
+          >
+            <h3 style={{ margin: 0 }}>📅 Meetings</h3>
+            {dayMeetings.length > 0 ? (
+              <button
+                onClick={handleOpenCreateMeeting}
+                style={{
+                  padding: "4px 8px",
+                  fontSize: 14,
+                  backgroundColor: "white",
+                  color: "#444",
+                  border: "1px solid #ddd",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  opacity: 0.9,
+                }}
+                title="Add another meeting"
+              >
+                +
+              </button>
+            ) : null}
+          </div>
           <div style={{ marginBottom: 24 }}>
             {dayMeetings.length === 0 ? (
               <div
@@ -1873,25 +2295,6 @@ function DailyAgendaPageContent({
                 <div style={{ display: "grid", gap: 12 }}>
                   {dayMeetings.map((meeting) => renderMeetingCard(meeting, true))}
                 </div>
-
-		                <button
-		                  onClick={handleOpenCreateMeeting}
-		                  style={{
-		                    padding: "10px 14px",
-		                    fontSize: 13,
-		                    fontWeight: 800,
-		                    backgroundColor: APP_MAIN_COLOR,
-		                    color: "white",
-		                    border: "none",
-		                    borderRadius: 10,
-		                    cursor: "pointer",
-		                    marginTop: 12,
-                        whiteSpace: "nowrap",
-                        boxShadow: "0 10px 22px rgba(0,0,0,0.10)",
-		                  }}
-		                >
-	                  + Add another meeting
-	                </button>
               </>
             )}
           </div>
@@ -2237,27 +2640,37 @@ function DailyAgendaPageContent({
                         </div>
                       ) : (
                         <>
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "space-between",
+                              gap: 12,
+                              marginBottom: 12,
+                            }}
+                          >
+                            <div style={{ fontSize: 15, fontWeight: 800, color: "#111827" }}>Meetings</div>
+                            <button
+                              data-tutorial-target="wizard-meeting-add"
+                              onClick={handleOpenCreateMeeting}
+                              style={{
+                                padding: "4px 8px",
+                                fontSize: 14,
+                                backgroundColor: "white",
+                                color: "#444",
+                                border: "1px solid #ddd",
+                                borderRadius: 6,
+                                cursor: "pointer",
+                                opacity: 0.9,
+                              }}
+                              title="Add another meeting"
+                            >
+                              +
+                            </button>
+                          </div>
                           <div style={{ display: "grid", gap: 12 }}>
                             {dayMeetings.map((meeting) => renderMeetingCard(meeting, false))}
                           </div>
-                          <button
-                            data-tutorial-target="wizard-meeting-add"
-                            onClick={handleOpenCreateMeeting}
-                            style={{
-                              marginTop: 14,
-                              padding: "10px 16px",
-                              fontSize: 13,
-                              fontWeight: 800,
-                              backgroundColor: APP_MAIN_COLOR,
-                              color: "white",
-                              border: "none",
-                              borderRadius: 10,
-                              cursor: "pointer",
-                              boxShadow: "0 10px 22px rgba(0,0,0,0.10)",
-                            }}
-                          >
-                            + Add another meeting
-                          </button>
                         </>
                       )}
                     </div>

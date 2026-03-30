@@ -1,6 +1,6 @@
 import { getStorageBackend } from "./storageBackend";
 
-const ONBOARDING_KEY = "focustree.onboarding";
+const ONBOARDING_KEY = "onion-app.onboarding";
 
 export type OnboardingProgress = {
   grandPlanTutorialComplete: boolean;

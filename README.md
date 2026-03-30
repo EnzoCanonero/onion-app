@@ -1,10 +1,10 @@
-# OnionOps
+# Onion-App
 
-OnionOps is a layered planning and focus app built around the idea that progress comes from organizing work in clear, nested layers (Grand Plan → Month → Daily). It provides guided onboarding, visual planning boards, and daily focus sessions to help users execute consistently.
+Onion-App is a layered planning and focus app built around the idea that progress comes from organizing work in clear, nested layers (Grand Plan → Month → Daily). It provides guided onboarding, visual planning boards, and daily focus sessions to help users execute consistently.
 
 ## License
 
-OnionOps is source-available under the PolyForm Noncommercial License 1.0.0. See
+Onion-App is source-available under the PolyForm Noncommercial License 1.0.0. See
 `LICENSE`. Commercial use requires a separate license. See
 `COMMERCIAL_LICENSE.md`.
 
@@ -36,7 +36,7 @@ Tech stack:
 ```bash
 # Clone the repository
 git clone <repo-url>
-cd focustree
+cd <repo-directory>
 
 # Install dependencies
 npm install
@@ -58,18 +58,18 @@ npm run dev:web
 ```bash
 npm run package:mac
 ```
-Output: `release/OnionOps-<version>-universal.dmg`
+Output: `release/Onion-App-<version>-universal.dmg`
 
 To install:
 1. Open the `.dmg` file in `release/`
-2. Drag the OnionOps app to your Applications folder
+2. Drag the Onion-App app to your Applications folder
 3. Launch from Applications (first launch may require right-click → Open due to Gatekeeper)
 
 #### Windows
 ```bash
 npm run package:win
 ```
-Output: `release/OnionOps Setup <version>.exe`
+Output: `release/Onion-App Setup <version>.exe`
 
 To install:
 1. Run the `.exe` installer in `release/`

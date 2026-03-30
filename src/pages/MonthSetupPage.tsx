@@ -1949,7 +1949,7 @@ function FocusTemplatesPanel({
   const [editTemplateEnd, setEditTemplateEnd] = useState("");
   const [editTemplateDays, setEditTemplateDays] = useState<Weekday[]>([]);
 
-  const suspendInfoStorageKey = "focustree.templateSuspendInfo.dismissed";
+  const suspendInfoStorageKey = "onion-app.templateSuspendInfo.dismissed";
   const [suspendInfoDismissed, setSuspendInfoDismissed] = useState(() => {
     try {
       return window.localStorage.getItem(suspendInfoStorageKey) === "1";
@@ -2493,7 +2493,7 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
   const [creatingTask, setCreatingTask] = useState<{ milestoneId: string | null } | null>(null);
 
   // v8: Pin navigation (null = Standalone)
-  const selectedPinStorageKey = `focustree:month-setup:selected-pin:${ymSafe}`;
+  const selectedPinStorageKey = `onion-app:month-setup:selected-pin:${ymSafe}`;
   const [selectedMilestoneId, setSelectedMilestoneId] = useState<string | null>(() => {
     try {
       const raw = window.localStorage.getItem(selectedPinStorageKey);
@@ -3437,7 +3437,7 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
 		                const tasks = milestone ? getTasksForMilestone(state, milestone.id) : standaloneTasks;
 
 		                const scopeKey = milestone ? `milestone:${milestone.id}` : "standalone";
-		                const zoomStorageKey = `focustree:month-setup:board-zoom:${ymSafe}:${scopeKey}`;
+		                const zoomStorageKey = `onion-app:month-setup:board-zoom:${ymSafe}:${scopeKey}`;
 		                const defaultBoardSize = { width: 2400, height: 1400 };
 		                const boardSize = getTaskBoardForScope(state, scopeKey) ?? defaultBoardSize;
 		                const links = getTaskLinksForScope(state, scopeKey);

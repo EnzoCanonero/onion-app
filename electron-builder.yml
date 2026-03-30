@@ -1,5 +1,5 @@
-appId: com.focustree.app
-productName: OnionOps
+appId: com.onionapp.app
+productName: Onion-App
 directories:
   output: release
   buildResources: build
