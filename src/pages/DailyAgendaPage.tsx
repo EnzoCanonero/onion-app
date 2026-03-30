@@ -1,9 +1,12 @@
 import { useLayoutEffect, useMemo, useRef, useState, useEffect } from "react";
-import type { MeetingEntry, DailyReminderTemplate, DayLogEvent, DateISO, YM, FocusTemplate } from "../app/types";
+import type { MeetingEntry, DailyReminderTemplate, DayLogEvent, DateISO, YM, FocusTemplate, TaskNode, MeetingEditScope } from "../app/types";
 import {
   loadState,
   saveState,
   getMonth,
+  getAllTasks,
+  getTaskById,
+  getTasksForMonth,
   getOrCreateDay,
   ymFromDate,
   makeId,
@@ -12,6 +15,7 @@ import {
   updateSession,
   setDayTasks,
   setTaskOutcome,
+  updateTask,
   setDailyJournal,
   setShutdownNote,
   findLastWorkingDay,
@@ -22,6 +26,8 @@ import {
   addMeetingWithRecurrence,
   updateMeeting,
   deleteMeeting,
+  updateMeetingThisAndFuture,
+  deleteMeetingThisAndFuture,
   getMeetingsForDate,
   toggleMeetingAttended,
   setMeetingSkipped,
@@ -34,6 +40,10 @@ import {
   toggleFocusTemplateSkippedForDay,
   formatTime,
   appendDayEvent,
+  upsertDayEvent,
+  removeDayEvent,
+  buildDayHistory,
+  getFrozenTaskIds,
   getTodayDate,
 } from "../app/storage";
 import { checkDateAccess } from "../app/dateAccess";
@@ -41,8 +51,10 @@ import { dayOfWeekFromDateISO, isTemplateScheduledForWeekday } from "../app/week
 import { useDateNavigation } from "../contexts/DateNavigationContext";
 import { getVirtualTimestamp } from "../contexts/VirtualClockContext";
 import { APP_MAIN_COLOR, REPORT_THEME } from "../app/theme";
-import { getCategoryMeta } from "../app/reporting";
+import { compareTaskGroupMeta, getCategoryMeta, getTaskGroupMeta } from "../app/reporting";
 import TaskSelectionModal from "../components/TaskSelectionModal";
+import PrimaryTaskSwitchModal from "../components/PrimaryTaskSwitchModal";
+import AddSecondaryTasksModal from "../components/AddSecondaryTasksModal";
 import FocusTemplateCard from "../components/FocusTemplateCard";
 import DailyTimeline from "../components/DailyTimeline";
 import EmptyMonthPanel from "../components/EmptyMonthPanel";
@@ -172,6 +184,13 @@ function DailyAgendaPageContent({
 
   const [tick, setTick] = useState(0);
   const [showTaskModal, setShowTaskModal] = useState(false);
+  const [showAddSecondaryModal, setShowAddSecondaryModal] = useState(false);
+  const [showPrimarySwitchModal, setShowPrimarySwitchModal] = useState(false);
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [editingTaskTitle, setEditingTaskTitle] = useState("");
+  const [editingTaskNotes, setEditingTaskNotes] = useState("");
+  const [editingTaskError, setEditingTaskError] = useState<string | null>(null);
+  const [hideCompletedTasks, setHideCompletedTasks] = useState(false);
   const [showStartWizard, setShowStartWizard] = useState(false);
   const [wizardStep, setWizardStep] = useState(0);
   const [showCloseModal, setShowCloseModal] = useState(false);
@@ -238,6 +257,21 @@ function DailyAgendaPageContent({
     saveState(next);
     setTick((x) => x + 1);
   }, [shouldAutoClose, dateSafe]);
+
+  useEffect(() => {
+    if (!editingTaskId) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeTaskEditor();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [editingTaskId]);
+
+  useEffect(() => {
+    closeTaskEditor();
+    setShowAddSecondaryModal(false);
+    setShowPrimarySwitchModal(false);
+  }, [dateSafe]);
 
   const mutate = (fn: (s: typeof withDay) => typeof withDay) => {
     const current = loadState();
@@ -308,7 +342,10 @@ function DailyAgendaPageContent({
     });
   };
 
-  const tasksById = useMemo(() => new Map(plan.tasks.map((t) => [t.id, t] as const)), [plan.tasks]);
+  const allTasks = useMemo(() => getAllTasks(state), [state]);
+  const monthTasks = useMemo(() => getTasksForMonth(state, ym), [state, ym]);
+  const tasksById = useMemo(() => new Map(allTasks.map((t) => [t.id, t] as const)), [allTasks]);
+  const frozenTaskIds = useMemo(() => getFrozenTaskIds(state), [state]);
 
   const completedMilestoneIds = useMemo(() => {
     return new Set(
@@ -317,14 +354,28 @@ function DailyAgendaPageContent({
   }, [state.grandPlan]);
 
   const selectableTasks = useMemo(() => {
-    return plan.tasks.filter(
+    return monthTasks.filter(
       (t) =>
         (t.status !== "GREEN" || day.outcomeByTaskId[t.id] === "COMPLETED") &&
         (!t.linkedMilestoneId || !completedMilestoneIds.has(t.linkedMilestoneId))
     );
-  }, [plan.tasks, completedMilestoneIds, day.outcomeByTaskId]);
+  }, [monthTasks, completedMilestoneIds, day.outcomeByTaskId]);
 
   const selectableTaskIds = useMemo(() => new Set(selectableTasks.map((t) => t.id)), [selectableTasks]);
+  const primarySwitchTasks = useMemo(() => {
+    return day.secondaryTaskIds
+      .map((taskId) => tasksById.get(taskId))
+      .filter((task): task is TaskNode => Boolean(task))
+      .filter((task) => !frozenTaskIds.has(task.id) && task.status !== "GREEN");
+  }, [day.secondaryTaskIds, tasksById, frozenTaskIds]);
+  const canSwitchPrimaryTask = primarySwitchTasks.length > 0;
+  const addableSecondaryTasks = useMemo(() => {
+    const selectedIds = new Set<string>([
+      ...(day.primaryTaskId ? [day.primaryTaskId] : []),
+      ...day.secondaryTaskIds,
+    ]);
+    return selectableTasks.filter((task) => !selectedIds.has(task.id));
+  }, [day.primaryTaskId, day.secondaryTaskIds, selectableTasks]);
 
   // Tasks completed on this specific day (for green styling in selection modal)
   const completedTodayIds = useMemo(() => {
@@ -449,6 +500,79 @@ function DailyAgendaPageContent({
     }));
   }, [state, ym]);
 
+  const primaryTask = day.primaryTaskId ? tasksById.get(day.primaryTaskId) : undefined;
+  const showPrimaryTask = Boolean(day.primaryTaskId) && (!hideCompletedTasks || primaryTask?.status !== "GREEN");
+  const visibleSecondaryTaskIds = useMemo(() => {
+    return day.secondaryTaskIds.filter((id) => {
+      const task = tasksById.get(id);
+      if (!task) return false;
+      if (!hideCompletedTasks) return true;
+      return task.status !== "GREEN";
+    });
+  }, [day.secondaryTaskIds, tasksById, hideCompletedTasks]);
+  const visibleTaskGroups = useMemo(() => {
+    const primaryGroupKey = primaryTask ? getTaskGroupMeta(state.grandPlan, primaryTask).groupKey : null;
+    const selectedItems: Array<{
+      taskId: string;
+      task: TaskNode;
+      role: "primary" | "secondary";
+      selectionIndex: number;
+    }> = [];
+
+    if (showPrimaryTask && day.primaryTaskId && primaryTask) {
+      selectedItems.push({
+        taskId: day.primaryTaskId,
+        task: primaryTask,
+        role: "primary",
+        selectionIndex: -1,
+      });
+    }
+
+    visibleSecondaryTaskIds.forEach((taskId, index) => {
+      const task = tasksById.get(taskId);
+      if (!task) return;
+      selectedItems.push({
+        taskId,
+        task,
+        role: "secondary",
+        selectionIndex: index,
+      });
+    });
+
+    const groupsByKey = new Map<string, {
+      meta: ReturnType<typeof getTaskGroupMeta>;
+      items: typeof selectedItems;
+    }>();
+
+    for (const item of selectedItems) {
+      const meta = getTaskGroupMeta(state.grandPlan, item.task);
+      const existing = groupsByKey.get(meta.groupKey);
+      if (existing) {
+        existing.items.push(item);
+        continue;
+      }
+      groupsByKey.set(meta.groupKey, { meta, items: [item] });
+    }
+
+    return Array.from(groupsByKey.values())
+      .map((group) => ({
+        ...group,
+        items: group.items.slice().sort((a, b) => {
+          if (a.role !== b.role) return a.role === "primary" ? -1 : 1;
+          return a.selectionIndex - b.selectionIndex;
+        }),
+      }))
+      .sort((a, b) => {
+        const aIsPrimaryGroup = a.meta.groupKey === primaryGroupKey;
+        const bIsPrimaryGroup = b.meta.groupKey === primaryGroupKey;
+        if (aIsPrimaryGroup !== bIsPrimaryGroup) return aIsPrimaryGroup ? -1 : 1;
+        return compareTaskGroupMeta(a.meta, b.meta);
+      });
+  }, [day.primaryTaskId, primaryTask, showPrimaryTask, state.grandPlan, tasksById, visibleSecondaryTaskIds]);
+  const editingTask = editingTaskId ? tasksById.get(editingTaskId) : undefined;
+  const editingTaskAccentColor = getCategoryMeta(state.grandPlan, editingTask?.linkedMilestoneId).color || APP_MAIN_COLOR;
+  const editingTaskReadOnly = editingTaskId ? frozenTaskIds.has(editingTaskId) : false;
+
   const wizardSteps = ["Tasks", "Meetings", "Focus Sessions"] as const;
   const wizardStepTitle = wizardSteps[wizardStep] ?? wizardSteps[0];
   const lastWizardStep = wizardSteps.length - 1;
@@ -470,6 +594,78 @@ function DailyAgendaPageContent({
       return setDayTasks(withDay0, dateSafe, safePrimaryId, safeSecondaryIds);
     });
     setShowTaskModal(false);
+  };
+
+  const handleAddSecondaryTasksConfirm = (secondaryIds: string[]) => {
+    mutate((s0) => {
+      const { state: withDay0, day: day0 } = getOrCreateDay(s0, dateSafe, ym);
+      const nextSecondaryIds = Array.from(
+        new Set([...(day0.secondaryTaskIds ?? []), ...secondaryIds.filter((id) => id !== day0.primaryTaskId)])
+      );
+      return setDayTasks(withDay0, dateSafe, day0.primaryTaskId, nextSecondaryIds);
+    });
+    setShowAddSecondaryModal(false);
+  };
+
+  const handleChangePrimaryTaskConfirm = (primaryId: string | undefined) => {
+    mutate((s0) => {
+      const { state: withDay0, day: day0 } = getOrCreateDay(s0, dateSafe, ym);
+      if (!primaryId || day0.primaryTaskId === primaryId || !day0.secondaryTaskIds.includes(primaryId)) return withDay0;
+      const nextSecondaryIds = [day0.primaryTaskId, ...day0.secondaryTaskIds.filter((id) => id !== primaryId)].filter(
+        (id): id is string => Boolean(id)
+      );
+      return setDayTasks(withDay0, dateSafe, primaryId, nextSecondaryIds);
+    });
+    setShowPrimarySwitchModal(false);
+  };
+
+  const handleRemoveTaskFromSelection = (taskId: string) => {
+    mutate((s0) => {
+      const { state: withDay0, day: day0 } = getOrCreateDay(s0, dateSafe, ym);
+      if (day0.primaryTaskId === taskId) {
+        const remainingSecondaryIds = day0.secondaryTaskIds.filter((id) => id !== taskId);
+        const [nextPrimaryId, ...nextSecondaryIds] = remainingSecondaryIds;
+        return setDayTasks(withDay0, dateSafe, nextPrimaryId, nextSecondaryIds);
+      }
+      return setDayTasks(
+        withDay0,
+        dateSafe,
+        day0.primaryTaskId,
+        day0.secondaryTaskIds.filter((id) => id !== taskId)
+      );
+    });
+  };
+
+  const openTaskEditor = (task: TaskNode) => {
+    if (frozenTaskIds.has(task.id)) return;
+    setEditingTaskId(task.id);
+    setEditingTaskTitle(task.title);
+    setEditingTaskNotes(task.notes ?? "");
+    setEditingTaskError(null);
+  };
+
+  const closeTaskEditor = () => {
+    setEditingTaskId(null);
+    setEditingTaskTitle("");
+    setEditingTaskNotes("");
+    setEditingTaskError(null);
+  };
+
+  const saveTaskEditor = () => {
+    if (!editingTaskId) return;
+    const nextTitle = editingTaskTitle.trim();
+    if (!nextTitle) {
+      setEditingTaskError("Title is required.");
+      return;
+    }
+    const nextNotes = editingTaskNotes.trim();
+    mutate((s0) =>
+      updateTask(s0, editingTaskId, {
+        title: nextTitle,
+        notes: nextNotes || undefined,
+      })
+    );
+    closeTaskEditor();
   };
 
   const closeStartWizard = () => {
@@ -512,17 +708,39 @@ function DailyAgendaPageContent({
 
   const setOutcome = (taskId: string, outcome: "COMPLETED" | "NOT_COMPLETED" | undefined) => {
     mutate((s0) => {
-      const { state: withDay0, day: day0 } = getOrCreateDay(s0, dateSafe, ym);
-      const prev = day0.outcomeByTaskId?.[taskId];
-      let next = setTaskOutcome(withDay0, dateSafe, taskId, outcome);
-      if (outcome === "COMPLETED" && prev !== outcome) {
-        const title = tasksById.get(taskId)?.title ?? "Task";
-        next = appendDayEvent(next, dateSafe, {
-          id: makeId("evt"),
+      let next = setTaskOutcome(s0, dateSafe, taskId, outcome);
+      const { day: nextDay } = getOrCreateDay(next, dateSafe, ym);
+      const finalOutcome = nextDay.outcomeByTaskId?.[taskId];
+      if (finalOutcome === "COMPLETED") {
+        const title = getTaskById(next, taskId)?.title ?? tasksById.get(taskId)?.title ?? "Task";
+        next = upsertDayEvent(next, dateSafe, {
+          id: `task:completed:${taskId}`,
           at: getVirtualTimestamp(),
           kind: "TASK",
           text: `✓ Completed: ${title}`,
         });
+      } else {
+        next = removeDayEvent(next, dateSafe, `task:completed:${taskId}`);
+      }
+      return next;
+    });
+  };
+
+  const handleToggleReminder = (reminder: DailyReminderTemplate) => {
+    mutate((s0) => {
+      const { day: day0 } = getOrCreateDay(s0, dateSafe, ym);
+      const wasChecked = day0.reminderCheckedById?.[reminder.id] ?? false;
+      const willBeChecked = !wasChecked;
+      let next = toggleReminderChecked(s0, dateSafe, reminder.id);
+      if (willBeChecked) {
+        next = upsertDayEvent(next, dateSafe, {
+          id: `reminder:checked:${reminder.id}`,
+          at: getVirtualTimestamp(),
+          kind: "REMINDER",
+          text: reminder.text,
+        });
+      } else {
+        next = removeDayEvent(next, dateSafe, `reminder:checked:${reminder.id}`);
       }
       return next;
     });
@@ -574,10 +792,15 @@ function DailyAgendaPageContent({
     onWizardStateChange,
   ]);
 
-  const handleSaveMeeting = (meetingData: Omit<MeetingEntry, "id" | "createdAt">) => {
+  const handleSaveMeeting = (
+    meetingData: Omit<MeetingEntry, "id" | "createdAt">,
+    scope: MeetingEditScope
+  ) => {
     mutate((s0) => {
       if (editingMeeting) {
-        return updateMeeting(s0, editingMeeting.id, meetingData);
+        return scope === "THIS_AND_FUTURE"
+          ? updateMeetingThisAndFuture(s0, editingMeeting.id, meetingData)
+          : updateMeeting(s0, editingMeeting.id, meetingData);
       } else {
         const meeting: MeetingEntry = {
           ...meetingData,
@@ -591,10 +814,25 @@ function DailyAgendaPageContent({
     setEditingMeeting(undefined);
   };
 
-  const handleDeleteMeeting = (meetingId: string) => {
-    if (confirm("Delete this meeting?")) {
-      mutate((s0) => deleteMeeting(s0, meetingId));
-    }
+  const handleDeleteMeeting = (meetingId: string, scope: MeetingEditScope = "THIS_EVENT") => {
+    const confirmed = confirm(
+      scope === "THIS_AND_FUTURE"
+        ? "Delete this meeting and all future occurrences?"
+        : "Delete this meeting?"
+    );
+    if (!confirmed) return false;
+
+    mutate((s0) =>
+      scope === "THIS_AND_FUTURE"
+        ? deleteMeetingThisAndFuture(s0, meetingId)
+        : deleteMeeting(s0, meetingId)
+    );
+    return true;
+  };
+
+  const handleOpenCreateMeeting = () => {
+    setEditingMeeting(undefined);
+    setShowMeetingForm(true);
   };
 
   const handleToggleAttended = (meetingId: string) => {
@@ -604,12 +842,14 @@ function DailyAgendaPageContent({
       const willBeAttended = !(meeting0?.attended ?? false);
       let next = toggleMeetingAttended(s0, meetingId);
       if (willBeAttended && meeting0) {
-        next = appendDayEvent(next, dateSafe, {
-          id: makeId("evt"),
+        next = upsertDayEvent(next, dateSafe, {
+          id: `meeting:attended:${meetingId}`,
           at: getVirtualTimestamp(),
           kind: "MEETING",
           text: `✓ Attended: ${meeting0.title}`,
         });
+      } else {
+        next = removeDayEvent(next, dateSafe, `meeting:attended:${meetingId}`);
       }
       return next;
     });
@@ -707,17 +947,22 @@ function DailyAgendaPageContent({
             <button
               onClick={() => handleDeleteMeeting(meeting.id)}
               style={{
-                padding: "6px 10px",
-                fontSize: 12,
-                fontWeight: 800,
+                width: 28,
+                height: 28,
+                borderRadius: 7,
+                border: "1px solid #fecaca",
                 backgroundColor: "white",
-                border: "1px solid #f44336",
-                color: "#f44336",
-                borderRadius: 10,
+                color: "#ef4444",
                 cursor: "pointer",
+                fontSize: 14,
+                fontWeight: 800,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
               }}
+              title="Delete meeting"
             >
-              🗑️
+              ✕
             </button>
           </div>
         </div>
@@ -726,11 +971,7 @@ function DailyAgendaPageContent({
           <div style={{ marginBottom: 8 }}>
             <button
               onClick={() => {
-                const url = meeting.link!;
-                console.log("Join Meeting clicked, URL:", url);
-                console.log("electronAPI available:", !!window.electronAPI);
-                console.log("openExternal available:", !!window.electronAPI?.openExternal);
-                window.electronAPI!.openExternal(url);
+                window.electronAPI!.openExternal(meeting.link!);
               }}
               style={{
                 color: "#1976d2",
@@ -795,6 +1036,18 @@ function DailyAgendaPageContent({
         completedSessions={sessionsForDate}
         onStartSession={showSessionControls ? startSession : undefined}
         onEndSession={showSessionControls ? endSession : undefined}
+        onEditCompletedSession={(sessionId, startedAt, endedAt) =>
+          mutate((s0) => {
+            const ms = Date.parse(endedAt) - Date.parse(startedAt);
+            if (!Number.isFinite(ms) || ms <= 0) return s0;
+            const actualMinutes = Math.max(0, Math.round(ms / 60000));
+            return updateSession(s0, sessionId, {
+              startedAt,
+              endedAt,
+              actualMinutes,
+            });
+          })
+        }
         isSkipped={isSkipped}
         onToggleSkipped={() => mutate((s0) => toggleFocusTemplateSkippedForDay(s0, dateSafe, template.id))}
         onReschedule={(nextOverride) =>
@@ -809,8 +1062,9 @@ function DailyAgendaPageContent({
   // v4: If day is closed, show journal-style read-only view
   if (day.isClosed && day.isWorkingDay) {
     const startedAtTime = day.startedAt ? formatTime(day.startedAt) : "—";
-    const endedAtTime = day.autoClosed ? "Automatically closed" : day.endedAt ? formatTime(day.endedAt) : "—";
-    const endedAtDate = !day.autoClosed && day.endedAt ? day.endedAt.slice(0, 10) : undefined;
+    const endedAtTime = day.endedAt ? formatTime(day.endedAt) : "—";
+    const endedAtDate = day.endedAt ? day.endedAt.slice(0, 10) : undefined;
+    const closeStatusLabel = day.autoClosed ? "Auto-closed" : "Closed manually";
 
     const completedTasks = [
       day.primaryTaskId ? { id: day.primaryTaskId, isPrimary: true } : null,
@@ -820,57 +1074,7 @@ function DailyAgendaPageContent({
       .filter((t) => day.outcomeByTaskId[t.id] === "COMPLETED");
 
     const completedSessions = state.sessions.filter((s) => s.date === dateSafe && s.endedAt);
-
-    const baseEvents = Array.isArray(day.events) ? day.events : [];
-    const logEvents = [
-      ...baseEvents,
-      ...(day.startedAt && !baseEvents.some((e) => e.kind === "SYSTEM" && e.text === "Day started")
-        ? [
-            {
-              id: `evt_start_${day.startedAt}`,
-              at: day.startedAt,
-              kind: "SYSTEM" as const,
-              text: "Day started",
-            },
-          ]
-        : []),
-      ...(day.endedAt && !baseEvents.some((e) => e.kind === "SYSTEM" && e.text === "Day ended")
-        ? [
-            {
-              id: `evt_end_${day.endedAt}`,
-              at: day.endedAt,
-              kind: "SYSTEM" as const,
-              text: "Day ended",
-            },
-          ]
-        : []),
-    ]
-      .filter((e) => {
-        switch (e.kind) {
-          case "SYSTEM":
-            return e.text === "Day started" || e.text === "Day ended";
-          case "REMINDER":
-            return (
-              e.text.toLowerCase().includes("email") ||
-              e.text.toLowerCase().includes("bureaucr") ||
-              e.text.toLowerCase().includes("burocr")
-            );
-          case "TASK":
-            return e.text.startsWith("✓ Completed:");
-          case "MEETING":
-            return e.text.startsWith("✓ Attended:");
-          case "FOCUS":
-            return (
-              e.text.startsWith("▶ Started:") ||
-              e.text.startsWith("■ Ended:") ||
-              e.text.startsWith("✓ Ended:")
-            );
-          default:
-            return false;
-        }
-      })
-      .slice()
-      .sort((a, b) => a.at.localeCompare(b.at));
+    const logEvents = buildDayHistory(state, dateSafe, plan);
 
     const kindToColor: Record<string, string> = {
       SYSTEM: REPORT_THEME.textMuted,
@@ -900,28 +1104,46 @@ function DailyAgendaPageContent({
               </div>
               <div style={{ marginTop: 8, fontSize: 13, color: REPORT_THEME.textSecondary }}>
                 {startedAtTime} — {endedAtTime}
+                {day.endedAt ? (
+                  <span
+                    style={{
+                      marginLeft: 8,
+                      padding: "2px 8px",
+                      borderRadius: 999,
+                      backgroundColor: day.autoClosed ? "#fef3c7" : "#ede9fe",
+                      color: day.autoClosed ? "#92400e" : "#5b21b6",
+                      fontSize: 11,
+                      fontWeight: 800,
+                      letterSpacing: 0.2,
+                    }}
+                  >
+                    {closeStatusLabel}
+                  </span>
+                ) : null}
                 {endedAtDate && endedAtDate !== dateSafe ? (
                   <span style={{ marginLeft: 8, color: REPORT_THEME.textMuted }}>(ended {endedAtDate})</span>
                 ) : null}
               </div>
             </div>
 
-            <button
-              onClick={handleReopenDay}
-              style={{
-                padding: "12px 18px",
-                fontSize: 14,
-                fontWeight: 900,
-                backgroundColor: APP_MAIN_COLOR,
-                color: "white",
-                border: "none",
-                borderRadius: 12,
-                cursor: "pointer",
-                boxShadow: "0 12px 26px rgba(0,0,0,0.14)",
-              }}
-            >
-              Reopen for Editing
-            </button>
+            {!isPastDate ? (
+              <button
+                onClick={handleReopenDay}
+                style={{
+                  padding: "12px 18px",
+                  fontSize: 14,
+                  fontWeight: 900,
+                  backgroundColor: APP_MAIN_COLOR,
+                  color: "white",
+                  border: "none",
+                  borderRadius: 12,
+                  cursor: "pointer",
+                  boxShadow: "0 12px 26px rgba(0,0,0,0.14)",
+                }}
+              >
+                Reopen for Editing
+              </button>
+            ) : null}
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 16, marginBottom: 16 }}>
@@ -933,6 +1155,7 @@ function DailyAgendaPageContent({
                   {completedTasks.map((t) => {
                     const task = tasksById.get(t.id);
                     const title = task?.title ?? "Unknown task";
+                    const notes = (task?.notes ?? "").trim();
                     const categoryColor = getCategoryMeta(state.grandPlan, task?.linkedMilestoneId).color;
                     return (
                       <div
@@ -949,17 +1172,32 @@ function DailyAgendaPageContent({
                           gap: 10,
                         }}
                       >
-                        <div
-                          style={{
-                            fontSize: 13,
-                            fontWeight: 800,
-                            color: REPORT_THEME.textPrimary,
-                            flex: 1,
-                            minWidth: 0,
-                            wordBreak: "break-word",
-                          }}
-                        >
-                          {title}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div
+                            style={{
+                              fontSize: 13,
+                              fontWeight: 800,
+                              color: REPORT_THEME.textPrimary,
+                              minWidth: 0,
+                              wordBreak: "break-word",
+                            }}
+                          >
+                            {title}
+                          </div>
+                          {notes ? (
+                            <div
+                              style={{
+                                marginTop: 6,
+                                fontSize: 12,
+                                lineHeight: 1.55,
+                                color: REPORT_THEME.textSecondary,
+                                whiteSpace: "pre-wrap",
+                                wordBreak: "break-word",
+                              }}
+                            >
+                              {notes}
+                            </div>
+                          ) : null}
                         </div>
                         <div style={{ display: "flex", alignItems: "center", gap: 8, flex: "0 0 auto" }}>
                           <span style={{ fontSize: 12, fontWeight: 900, color: "#16a34a" }}>
@@ -1246,7 +1484,7 @@ function DailyAgendaPageContent({
             </div>
           )
         ) : (
-          <>
+	          <>
 	          {/* All sections below only show when day is activated */}
 	
 	          <div style={{ display: "flex", gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
@@ -1346,48 +1584,70 @@ function DailyAgendaPageContent({
                   No reminders set. Click ✏️ to add some.
                 </p>
               ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 10, marginLeft: 8 }}>
+                <div style={{ display: "grid", gap: 10 }}>
                   {state.dailyReminderTemplates.map((reminder) => (
-                    <label
+                    <button
                       key={reminder.id}
+                      type="button"
+                      role="checkbox"
+                      aria-checked={day.reminderCheckedById?.[reminder.id] ?? false}
+                      onClick={() => handleToggleReminder(reminder)}
                       style={{
                         display: "flex",
                         alignItems: "center",
-                        gap: 10,
+                        gap: 12,
+                        width: "100%",
+                        padding: "12px 14px",
+                        textAlign: "left",
+                        backgroundColor: day.reminderCheckedById?.[reminder.id] ?? false ? "#f4efff" : "rgba(255,255,255,0.96)",
+                        border: `1.5px solid ${
+                          day.reminderCheckedById?.[reminder.id] ?? false ? `${APP_MAIN_COLOR}55` : "#e5e7eb"
+                        }`,
+                        borderRadius: 12,
+                        boxShadow:
+                          day.reminderCheckedById?.[reminder.id] ?? false
+                            ? "0 8px 18px rgba(103,58,183,0.10)"
+                            : "0 2px 8px rgba(15,23,42,0.04)",
                         cursor: "pointer",
                         fontSize: 15,
+                        transition: "background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease",
                       }}
                     >
-	                      <input
-	                        type="checkbox"
-	                        checked={day.reminderCheckedById?.[reminder.id] ?? false}
-	                        onChange={() => {
-	                          mutate((s0) => {
-	                            const { day: day0 } = getOrCreateDay(s0, dateSafe, ym);
-	                            const wasChecked = day0.reminderCheckedById?.[reminder.id] ?? false;
-	                            const willBeChecked = !wasChecked;
-	                            let next = toggleReminderChecked(s0, dateSafe, reminder.id);
-	                            const isInitialActivity =
-	                              reminder.id === "rem_email" || reminder.id === "rem_bureaucratic";
-	                            if (willBeChecked && isInitialActivity) {
-	                              next = appendDayEvent(next, dateSafe, {
-	                                id: makeId("evt"),
-	                                at: getVirtualTimestamp(),
-	                                kind: "REMINDER",
-	                                text: reminder.text,
-	                              });
-	                            }
-	                            return next;
-	                          });
-	                        }}
-	                        style={{
-	                          width: 18,
-	                          height: 18,
-                          cursor: "pointer",
+                      <div
+                        aria-hidden="true"
+                        style={{
+                          width: 22,
+                          height: 22,
+                          flexShrink: 0,
+                          borderRadius: "50%",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          backgroundColor: day.reminderCheckedById?.[reminder.id] ?? false ? APP_MAIN_COLOR : "white",
+                          border: `2px solid ${
+                            day.reminderCheckedById?.[reminder.id] ?? false ? APP_MAIN_COLOR : "#cbd5e1"
+                          }`,
+                          color: "white",
+                          fontSize: 12,
+                          fontWeight: 900,
                         }}
-                      />
-                      <span>{reminder.text}</span>
-                    </label>
+                      >
+                        ✓
+                      </div>
+                      <span
+                        style={{
+                          flex: 1,
+                          fontWeight: day.reminderCheckedById?.[reminder.id] ?? false ? 600 : 500,
+                          color: day.reminderCheckedById?.[reminder.id] ?? false ? "#312e81" : "#334155",
+                          textDecoration: day.reminderCheckedById?.[reminder.id] ?? false ? "line-through" : "none",
+                          textDecorationColor: `${APP_MAIN_COLOR}55`,
+                          textDecorationThickness: 2,
+                          lineHeight: 1.45,
+                        }}
+                      >
+                        {reminder.text}
+                      </span>
+                    </button>
                   ))}
                 </div>
               )
@@ -1480,21 +1740,43 @@ function DailyAgendaPageContent({
           >
             <h3 style={{ margin: 0 }} data-tutorial-target="daily-plan-review">Daily Tasks</h3>
             {day.primaryTaskId ? (
-              <button
-                onClick={() => setShowTaskModal(true)}
-                style={{
-                  padding: "4px 8px",
-                  fontSize: 14,
-                  backgroundColor: "white",
-                  border: "1px solid #ddd",
-                  borderRadius: 6,
-                  cursor: "pointer",
-                  opacity: 0.9,
-                }}
-                title="Edit task selection"
-              >
-                ✏️
-              </button>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => setHideCompletedTasks((v) => !v)}
+                  style={{
+                    padding: "4px 10px",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    backgroundColor: hideCompletedTasks ? "#eef2ff" : "white",
+                    color: hideCompletedTasks ? "#3730a3" : "#444",
+                    border: "1px solid #ddd",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                    opacity: 0.95,
+                  }}
+                  title={hideCompletedTasks ? "Show completed tasks" : "Hide completed tasks"}
+                >
+                  {hideCompletedTasks ? "Show Completed" : "Hide Completed"}
+                </button>
+                <button
+                  onClick={() => setShowAddSecondaryModal(true)}
+                  disabled={addableSecondaryTasks.length === 0}
+                  style={{
+                    padding: "4px 8px",
+                    fontSize: 14,
+                    backgroundColor: addableSecondaryTasks.length > 0 ? "white" : "#f3f4f6",
+                    color: addableSecondaryTasks.length > 0 ? "#444" : "#9ca3af",
+                    border: "1px solid #ddd",
+                    borderRadius: 6,
+                    cursor: addableSecondaryTasks.length > 0 ? "pointer" : "default",
+                    opacity: 0.9,
+                  }}
+                  title="Add secondary task"
+                >
+                  +
+                </button>
+              </div>
             ) : null}
           </div>
 
@@ -1502,6 +1784,7 @@ function DailyAgendaPageContent({
           {showTaskModal && (
             <TaskSelectionModal
               tasks={selectableTasks}
+              grandPlan={state.grandPlan}
               currentPrimaryId={day.primaryTaskId}
               currentSecondaryIds={day.secondaryTaskIds}
               onConfirm={handleTaskSelectionConfirm}
@@ -1509,6 +1792,168 @@ function DailyAgendaPageContent({
               suggestedSecondaryIds={suggestedSecondaryIds}
               completedTodayIds={completedTodayIds}
             />
+          )}
+
+          {showPrimarySwitchModal && day.primaryTaskId && (
+            <PrimaryTaskSwitchModal
+              tasks={primarySwitchTasks}
+              currentPrimaryTitle={primaryTask?.title ?? "Primary task"}
+              onConfirm={handleChangePrimaryTaskConfirm}
+              onCancel={() => setShowPrimarySwitchModal(false)}
+            />
+          )}
+
+          {showAddSecondaryModal && day.primaryTaskId && (
+            <AddSecondaryTasksModal
+              tasks={addableSecondaryTasks}
+              grandPlan={state.grandPlan}
+              currentPrimaryTitle={primaryTask?.title ?? "Primary task"}
+              onConfirm={handleAddSecondaryTasksConfirm}
+              onCancel={() => setShowAddSecondaryModal(false)}
+            />
+          )}
+
+          {editingTaskId && (
+            <div
+              style={{
+                position: "fixed",
+                inset: 0,
+                backgroundColor: "rgba(0, 0, 0, 0.5)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                zIndex: 1200,
+                padding: 16,
+              }}
+              onClick={closeTaskEditor}
+            >
+              <div
+                style={{
+                  backgroundColor: "white",
+                  backgroundImage: "linear-gradient(180deg, rgba(255,255,255,0.65), rgba(0,0,0,0.02))",
+                  borderRadius: 12,
+                  padding: 24,
+                  width: "100%",
+                  maxWidth: 560,
+                  maxHeight: "90vh",
+                  overflow: "auto",
+                  boxShadow: "0 10px 40px rgba(0,0,0,0.30)",
+                  border: `2px solid ${editingTaskAccentColor}`,
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+                  <h3 style={{ margin: 0, fontSize: 16, fontWeight: 900, color: "#111" }}>
+                    Task Details
+                  </h3>
+                  <button
+                    onClick={closeTaskEditor}
+                    style={{
+                      padding: "4px 8px",
+                      fontSize: 18,
+                      backgroundColor: "transparent",
+                      border: "none",
+                      cursor: "pointer",
+                      color: "#666",
+                      lineHeight: 1,
+                    }}
+                    title="Close"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <div style={{ marginBottom: 12 }}>
+                  <label style={{ display: "block", marginBottom: 6, fontWeight: 600, fontSize: 12, color: "#333" }}>
+                    Title
+                  </label>
+                  <input
+                    type="text"
+                    value={editingTaskTitle}
+                    onChange={(e) => setEditingTaskTitle(e.target.value)}
+                    readOnly={editingTaskReadOnly}
+                    autoFocus
+                    style={{
+                      width: "100%",
+                      padding: 10,
+                      fontSize: 14,
+                      backgroundColor: editingTaskReadOnly ? "rgba(255,255,255,0.55)" : "white",
+                      border: `1px solid ${editingTaskAccentColor}`,
+                      borderRadius: 6,
+                      boxSizing: "border-box",
+                      outline: "none",
+                      cursor: editingTaskReadOnly ? "default" : "text",
+                    }}
+                  />
+                </div>
+
+                <div style={{ marginBottom: 12 }}>
+                  <label style={{ display: "block", marginBottom: 6, fontWeight: 600, fontSize: 12, color: "#333" }}>
+                    Notes
+                  </label>
+                  <textarea
+                    value={editingTaskNotes}
+                    onChange={(e) => setEditingTaskNotes(e.target.value)}
+                    readOnly={editingTaskReadOnly}
+                    rows={14}
+                    style={{
+                      width: "100%",
+                      padding: 10,
+                      fontSize: 13,
+                      backgroundColor: editingTaskReadOnly ? "rgba(255,255,255,0.55)" : "white",
+                      border: `1px solid ${editingTaskAccentColor}`,
+                      borderRadius: 6,
+                      boxSizing: "border-box",
+                      outline: "none",
+                      resize: "vertical",
+                      fontFamily: "inherit",
+                      cursor: editingTaskReadOnly ? "default" : "text",
+                    }}
+                  />
+                </div>
+
+                {editingTaskError ? (
+                  <div style={{ marginBottom: 10, color: "#f44336", fontSize: 12, fontWeight: 600 }}>
+                    {editingTaskError}
+                  </div>
+                ) : null}
+
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                  <button
+                    onClick={closeTaskEditor}
+                    style={{
+                      padding: "8px 12px",
+                      fontSize: 13,
+                      fontWeight: 700,
+                      backgroundColor: "white",
+                      color: "#666",
+                      border: "1px solid #ddd",
+                      borderRadius: 8,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {editingTaskReadOnly ? "Close" : "Cancel"}
+                  </button>
+                  {!editingTaskReadOnly && (
+                    <button
+                      onClick={saveTaskEditor}
+                      style={{
+                        padding: "8px 12px",
+                        fontSize: 13,
+                        fontWeight: 800,
+                        backgroundColor: editingTaskAccentColor,
+                        color: "white",
+                        border: "none",
+                        borderRadius: 8,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Save
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
           )}
 
           {/* Selected Tasks Display */}
@@ -1535,140 +1980,287 @@ function DailyAgendaPageContent({
             </div>
           ) : (
             <div>
-	              {/* Primary Task - Gold Rectangle */}
-	              <div
-	            style={{
-	              border: "2px solid #eee",
-	              borderLeft: `6px solid ${getCategoryMeta(state.grandPlan, tasksById.get(day.primaryTaskId)?.linkedMilestoneId).color}`,
-	              borderRadius: 12,
-	              padding: 16,
-	              marginBottom: 16,
-	              backgroundColor: "#fff8e1",
-	              boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
-	            }}
-	          >
-            <div style={{ marginBottom: 12 }}>
-	              <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 4 }}>
-	                {tasksById.get(day.primaryTaskId)?.title ?? "Unknown"}
-	              </div>
-	            </div>
-
-            {/* Outcome Buttons for Primary */}
-            {day.primaryTaskId && (() => {
-              const task = tasksById.get(day.primaryTaskId);
-              const isCompleted = task?.status === "GREEN";
-              const isInProgress = task?.status === "YELLOW";
-              return (
-                <div>
-                  <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6, color: "#666" }}>
-                    Update status:
-                  </div>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    <button
-                      onClick={() => setOutcome(day.primaryTaskId!, "COMPLETED")}
-                      style={{
-                        padding: "6px 12px",
-                        fontSize: 13,
-                        fontWeight: 600,
-                        backgroundColor: isCompleted ? "#4caf50" : "white",
-                        color: isCompleted ? "white" : "#4caf50",
-                        border: `2px solid #4caf50`,
-                        borderRadius: 6,
-                        cursor: "pointer",
-                      }}
-                    >
-                      ✓ Completed
-                    </button>
-                    <button
-                      onClick={() => setOutcome(day.primaryTaskId!, "NOT_COMPLETED")}
-                      style={{
-                        padding: "6px 12px",
-                        fontSize: 13,
-                        fontWeight: 600,
-                        backgroundColor: isInProgress ? "#ff9800" : "white",
-                        color: isInProgress ? "white" : "#ff9800",
-                        border: `2px solid #ff9800`,
-                        borderRadius: 6,
-                        cursor: "pointer",
-                      }}
-                    >
-                      ⏳ Work in Progress
-                    </button>
-                  </div>
-                </div>
-              );
-            })()}
-          </div>
-
-          {/* Secondary Tasks */}
-          {day.secondaryTaskIds.length > 0 && (
-            <div style={{ marginBottom: 16 }}>
-	              <div style={{ display: "grid", gap: 8 }}>
-                {day.secondaryTaskIds.map((id) => {
-                  const task = tasksById.get(id);
-                  if (!task) return null;
-                  const accentColor = getCategoryMeta(state.grandPlan, task.linkedMilestoneId).color;
-                  return (
+              {visibleTaskGroups.length > 0 && (
+                <div style={{ display: "grid", gap: 14, marginBottom: 16 }}>
+                  {visibleTaskGroups.map((group, groupIndex) => (
                     <div
-	                      key={id}
-	                      style={{
-	                        border: "2px solid #eee",
-	                        borderLeft: `6px solid ${accentColor}`,
-	                        borderRadius: 12,
-	                        padding: 16,
-	                        backgroundColor: "rgba(255,255,255,0.92)",
-	                        boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
-	                      }}
-	                    >
-	                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-	                        <div style={{ fontWeight: 500 }}>{task.title}</div>
-	                      </div>
+                      key={group.meta.groupKey}
+                      style={{
+                        borderTop: groupIndex === 0 ? "none" : "1px solid #e7ebf1",
+                        paddingTop: groupIndex === 0 ? 0 : 12,
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          flexWrap: "wrap",
+                          marginBottom: 10,
+                          paddingLeft: 2,
+                        }}
+                      >
+                        <span
+                          style={{
+                            width: 8,
+                            height: 8,
+                            borderRadius: "50%",
+                            backgroundColor: group.meta.categoryColor,
+                            flexShrink: 0,
+                          }}
+                        />
+                        <span
+                          style={{
+                            fontSize: 11,
+                            fontWeight: 800,
+                            color: "#94a3b8",
+                            letterSpacing: 0.3,
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          {group.meta.categoryTitle}
+                        </span>
+                        {!group.meta.isStandalone ? (
+                          <span style={{ fontSize: 13, fontWeight: 700, color: "#334155" }}>
+                            {group.meta.milestoneTitle}
+                          </span>
+                        ) : null}
+                      </div>
 
-                      {/* Outcome Buttons */}
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        <button
-                          onClick={() => setOutcome(id, "COMPLETED")}
-                          style={{
-                            padding: "4px 10px",
-                            fontSize: 12,
-                            fontWeight: 600,
-                            backgroundColor: task.status === "GREEN" ? "#4caf50" : "white",
-                            color: task.status === "GREEN" ? "white" : "#4caf50",
-                            border: `1.5px solid #4caf50`,
-                            borderRadius: 4,
-                            cursor: "pointer",
-                          }}
-                        >
-                          ✓ Completed
-                        </button>
-                        <button
-                          onClick={() => setOutcome(id, "NOT_COMPLETED")}
-                          style={{
-                            padding: "4px 10px",
-                            fontSize: 12,
-                            fontWeight: 600,
-                            backgroundColor: task.status === "YELLOW" ? "#ff9800" : "white",
-                            color: task.status === "YELLOW" ? "white" : "#ff9800",
-                            border: `1.5px solid #ff9800`,
-                            borderRadius: 4,
-                            cursor: "pointer",
-                          }}
-                        >
-                          ⏳ In Progress
-                        </button>
+                      <div style={{ display: "grid", gap: 8 }}>
+                        {group.items.map((item) => {
+                          const accentColor = getCategoryMeta(state.grandPlan, item.task.linkedMilestoneId).color;
+                          const isCompleted = item.task.status === "GREEN";
+                          const isInProgress = item.task.status === "YELLOW";
+                          const isPrimary = item.role === "primary";
+                          const isTaskFrozen = frozenTaskIds.has(item.taskId);
+                          const taskNotes = (item.task.notes ?? "").trim();
+                          return (
+                            <div
+                              key={item.taskId}
+                              role={!isTaskFrozen ? "button" : undefined}
+                              tabIndex={!isTaskFrozen ? 0 : undefined}
+                              onClick={!isTaskFrozen ? () => openTaskEditor(item.task) : undefined}
+                              onKeyDown={
+                                !isTaskFrozen
+                                  ? (event) => {
+                                      if (event.key !== "Enter" && event.key !== " ") return;
+                                      event.preventDefault();
+                                      openTaskEditor(item.task);
+                                    }
+                                  : undefined
+                              }
+                              style={{
+                                border: "2px solid #eee",
+                                borderLeft: `6px solid ${accentColor}`,
+                                borderRadius: 12,
+                                padding: 16,
+                                backgroundColor: isPrimary ? "#fff8e1" : "rgba(255,255,255,0.92)",
+                                boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+                                cursor: !isTaskFrozen ? "pointer" : "default",
+                              }}
+                            >
+                              <div style={{ marginBottom: 10 }}>
+                                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+                                  <div style={{ flex: 1, minWidth: 0 }}>
+                                    {isPrimary ? (
+                                      <div
+                                        style={{
+                                          display: "inline-flex",
+                                          alignItems: "center",
+                                          gap: 6,
+                                          marginBottom: 6,
+                                          padding: "3px 8px",
+                                          borderRadius: 999,
+                                          backgroundColor: "rgba(245, 158, 11, 0.14)",
+                                          color: "#9a6700",
+                                          fontSize: 11,
+                                          fontWeight: 800,
+                                          letterSpacing: 0.2,
+                                          textTransform: "uppercase",
+                                        }}
+                                      >
+                                        Primary
+                                      </div>
+                                    ) : null}
+                                    <div style={{ fontSize: isPrimary ? 18 : 15, fontWeight: isPrimary ? 700 : 600 }}>
+                                      {item.task.title}
+                                    </div>
+                                    {taskNotes ? (
+                                      <div
+                                        style={{
+                                          marginTop: 8,
+                                          fontSize: isPrimary ? 13 : 12,
+                                          lineHeight: 1.6,
+                                          color: "#64748b",
+                                          whiteSpace: "pre-wrap",
+                                          wordBreak: "break-word",
+                                        }}
+                                      >
+                                        {taskNotes}
+                                      </div>
+                                    ) : null}
+                                  </div>
+
+                                  {item.task.status !== "GREEN" ? (
+                                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                                      {isPrimary ? (
+                                        <button
+                                          onClick={(event) => {
+                                            event.stopPropagation();
+                                            if (!canSwitchPrimaryTask) return;
+                                            setShowPrimarySwitchModal(true);
+                                          }}
+                                          disabled={!canSwitchPrimaryTask}
+                                          style={{
+                                            width: 28,
+                                            height: 28,
+                                            borderRadius: 7,
+                                            border: "1px solid #cbd5e1",
+                                            backgroundColor: canSwitchPrimaryTask ? "white" : "#f3f4f6",
+                                            color: canSwitchPrimaryTask ? "#475569" : "#9ca3af",
+                                            cursor: canSwitchPrimaryTask ? "pointer" : "not-allowed",
+                                            fontSize: 14,
+                                            fontWeight: 800,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                          }}
+                                          title={canSwitchPrimaryTask ? "Change primary task" : "No secondary task available to switch"}
+                                        >
+                                          ↻
+                                        </button>
+                                      ) : null}
+                                      {!isPrimary ? (
+                                        <button
+                                          onClick={(event) => {
+                                            event.stopPropagation();
+                                            handleRemoveTaskFromSelection(item.taskId);
+                                          }}
+                                          style={{
+                                            width: 28,
+                                            height: 28,
+                                            borderRadius: 7,
+                                            border: "1px solid #fecaca",
+                                            backgroundColor: "white",
+                                            color: "#ef4444",
+                                            cursor: "pointer",
+                                            fontSize: 14,
+                                            fontWeight: 800,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                          }}
+                                          title="Remove from daily selection"
+                                        >
+                                          ✕
+                                        </button>
+                                      ) : null}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              </div>
+
+                              {!isTaskFrozen ? (
+                                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                  <button
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      setOutcome(item.taskId, "COMPLETED");
+                                    }}
+                                    style={{
+                                      padding: isPrimary ? "6px 12px" : "4px 10px",
+                                      fontSize: isPrimary ? 13 : 12,
+                                      fontWeight: 600,
+                                      backgroundColor: isCompleted ? "#4caf50" : "white",
+                                      color: isCompleted ? "white" : "#4caf50",
+                                      border: `${isPrimary ? 2 : 1.5}px solid #4caf50`,
+                                      borderRadius: isPrimary ? 6 : 4,
+                                      cursor: "pointer",
+                                    }}
+                                  >
+                                    ✓ Completed
+                                  </button>
+                                  <button
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      setOutcome(item.taskId, "NOT_COMPLETED");
+                                    }}
+                                    style={{
+                                      padding: isPrimary ? "6px 12px" : "4px 10px",
+                                      fontSize: isPrimary ? 13 : 12,
+                                      fontWeight: 600,
+                                      backgroundColor: isInProgress ? "#ff9800" : "white",
+                                      color: isInProgress ? "white" : "#ff9800",
+                                      border: `${isPrimary ? 2 : 1.5}px solid #ff9800`,
+                                      borderRadius: isPrimary ? 6 : 4,
+                                      cursor: "pointer",
+                                    }}
+                                  >
+                                    ⏳ {isPrimary ? "Work in Progress" : "In Progress"}
+                                  </button>
+                                </div>
+                              ) : null}
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
+                  ))}
+                </div>
+              )}
+
+              {hideCompletedTasks && !showPrimaryTask && visibleSecondaryTaskIds.length === 0 ? (
+                <div
+                  style={{
+                    textAlign: "center",
+                    padding: 20,
+                    backgroundColor: "white",
+                    border: "1px solid #e5e7eb",
+                    borderRadius: 12,
+                    color: "#6b7280",
+                    fontSize: 13,
+                    marginBottom: 16,
+                  }}
+                >
+                  All selected tasks are completed. Toggle "Show Completed" to view them.
+                </div>
+              ) : null}
 
             </div>
           )}
 
           {/* v4: Meetings Section */}
-          <h3 style={{ marginTop: 32 }}>📅 Meetings</h3>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              marginTop: 32,
+              marginBottom: 12,
+            }}
+          >
+            <h3 style={{ margin: 0 }}>📅 Meetings</h3>
+            {dayMeetings.length > 0 ? (
+              <button
+                onClick={handleOpenCreateMeeting}
+                style={{
+                  padding: "4px 8px",
+                  fontSize: 14,
+                  backgroundColor: "white",
+                  color: "#444",
+                  border: "1px solid #ddd",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  opacity: 0.9,
+                }}
+                title="Add another meeting"
+              >
+                +
+              </button>
+            ) : null}
+          </div>
           <div style={{ marginBottom: 24 }}>
             {dayMeetings.length === 0 ? (
               <div
@@ -1681,7 +2273,7 @@ function DailyAgendaPageContent({
               >
                 <p style={{ opacity: 0.6, marginBottom: 12 }}>No meetings scheduled. ✨</p>
                 <button
-                  onClick={() => setShowMeetingForm(true)}
+                  onClick={handleOpenCreateMeeting}
 		                  style={{
 		                    padding: "10px 14px",
 		                    fontSize: 13,
@@ -1703,25 +2295,6 @@ function DailyAgendaPageContent({
                 <div style={{ display: "grid", gap: 12 }}>
                   {dayMeetings.map((meeting) => renderMeetingCard(meeting, true))}
                 </div>
-
-		                <button
-		                  onClick={() => setShowMeetingForm(true)}
-		                  style={{
-		                    padding: "10px 14px",
-		                    fontSize: 13,
-		                    fontWeight: 800,
-		                    backgroundColor: APP_MAIN_COLOR,
-		                    color: "white",
-		                    border: "none",
-		                    borderRadius: 10,
-		                    cursor: "pointer",
-		                    marginTop: 12,
-                        whiteSpace: "nowrap",
-                        boxShadow: "0 10px 22px rgba(0,0,0,0.10)",
-		                  }}
-		                >
-	                  + Add another meeting
-	                </button>
               </>
             )}
           </div>
@@ -1730,8 +2303,19 @@ function DailyAgendaPageContent({
           {showMeetingForm && (
             <MeetingFormModal
               date={dateSafe}
+              mode={editingMeeting ? "edit" : "create"}
               meeting={editingMeeting}
               onSave={handleSaveMeeting}
+              onDelete={
+                editingMeeting
+                  ? (scope) => {
+                      const didDelete = handleDeleteMeeting(editingMeeting.id, scope);
+                      if (!didDelete) return;
+                      setShowMeetingForm(false);
+                      setEditingMeeting(undefined);
+                    }
+                  : undefined
+              }
               onCancel={() => {
                 setShowMeetingForm(false);
                 setEditingMeeting(undefined);
@@ -1758,7 +2342,7 @@ function DailyAgendaPageContent({
                     No focus templates scheduled for today. Edit templates in Month Setup to assign weekdays.
                   </p>
                 ) : (
-                  focusTemplatesForToday.map((template) => renderFocusTemplateCard(template, true))
+                  focusTemplatesForToday.map((template) => renderFocusTemplateCard(template, !isPastDate))
                 )}
               </div>
             </>
@@ -1882,7 +2466,7 @@ function DailyAgendaPageContent({
                     <h3 style={{ marginTop: 0, marginBottom: 16 }}>🔒 Close Working Day</h3>
                     <p style={{ marginBottom: 24, lineHeight: 1.6 }}>
                       This will close <strong>{dateSafe}</strong> and convert the page into a read-only journal view.
-                      Any active sessions will be ended. You can reopen the day later if you need to make changes.
+                      Any active sessions will be ended. You can reopen it again today if you still need to make changes.
                     </p>
                     <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
                       <button
@@ -2008,6 +2592,7 @@ function DailyAgendaPageContent({
                     <div style={{ display: "flex", justifyContent: "center" }}>
                       <TaskSelectionModal
                         tasks={selectableTasks}
+                        grandPlan={state.grandPlan}
                         currentPrimaryId={wizardTaskDraft.primaryId}
                         currentSecondaryIds={wizardTaskDraft.secondaryIds}
                         onConfirm={handleTaskSelectionConfirm}
@@ -2037,7 +2622,7 @@ function DailyAgendaPageContent({
                           </div>
                           <button
                             data-tutorial-target="wizard-meeting-add"
-                            onClick={() => setShowMeetingForm(true)}
+                            onClick={handleOpenCreateMeeting}
                             style={{
                               padding: "10px 16px",
                               fontSize: 13,
@@ -2055,27 +2640,37 @@ function DailyAgendaPageContent({
                         </div>
                       ) : (
                         <>
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "space-between",
+                              gap: 12,
+                              marginBottom: 12,
+                            }}
+                          >
+                            <div style={{ fontSize: 15, fontWeight: 800, color: "#111827" }}>Meetings</div>
+                            <button
+                              data-tutorial-target="wizard-meeting-add"
+                              onClick={handleOpenCreateMeeting}
+                              style={{
+                                padding: "4px 8px",
+                                fontSize: 14,
+                                backgroundColor: "white",
+                                color: "#444",
+                                border: "1px solid #ddd",
+                                borderRadius: 6,
+                                cursor: "pointer",
+                                opacity: 0.9,
+                              }}
+                              title="Add another meeting"
+                            >
+                              +
+                            </button>
+                          </div>
                           <div style={{ display: "grid", gap: 12 }}>
                             {dayMeetings.map((meeting) => renderMeetingCard(meeting, false))}
                           </div>
-                          <button
-                            data-tutorial-target="wizard-meeting-add"
-                            onClick={() => setShowMeetingForm(true)}
-                            style={{
-                              marginTop: 14,
-                              padding: "10px 16px",
-                              fontSize: 13,
-                              fontWeight: 800,
-                              backgroundColor: APP_MAIN_COLOR,
-                              color: "white",
-                              border: "none",
-                              borderRadius: 10,
-                              cursor: "pointer",
-                              boxShadow: "0 10px 22px rgba(0,0,0,0.10)",
-                            }}
-                          >
-                            + Add another meeting
-                          </button>
                         </>
                       )}
                     </div>

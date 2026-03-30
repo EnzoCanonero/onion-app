@@ -1,4 +1,4 @@
-import type { DateISO, GrandPlan, YM } from "./types";
+import type { DateISO, GrandPlan, TaskNode, YM } from "./types";
 
 export type CategoryMeta = {
   id: string;
@@ -18,6 +18,15 @@ export const UNKNOWN_CATEGORY: CategoryMeta = {
   color: "#94a3b8",
 };
 
+export type TaskGroupMeta = {
+  groupKey: string;
+  milestoneId?: string;
+  milestoneTitle: string;
+  categoryTitle: string;
+  categoryColor: string;
+  isStandalone: boolean;
+};
+
 export function getCategoryMeta(grandPlan: GrandPlan | undefined, milestoneId: string | null | undefined): CategoryMeta {
   if (!milestoneId) return UNCATEGORIZED_CATEGORY;
   if (!grandPlan) return UNCATEGORIZED_CATEGORY;
@@ -29,6 +38,76 @@ export function getCategoryMeta(grandPlan: GrandPlan | undefined, milestoneId: s
   if (!category) return UNKNOWN_CATEGORY;
 
   return { id: category.id, title: category.title, color: category.color };
+}
+
+export function getColorHue(color: string): number {
+  const normalized = color.trim();
+  const match = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.exec(normalized);
+  if (!match) return Number.POSITIVE_INFINITY;
+
+  let hex = match[1];
+  if (hex.length === 3) hex = hex.split("").map((c) => `${c}${c}`).join("");
+  const r = Number.parseInt(hex.slice(0, 2), 16) / 255;
+  const g = Number.parseInt(hex.slice(2, 4), 16) / 255;
+  const b = Number.parseInt(hex.slice(4, 6), 16) / 255;
+
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const delta = max - min;
+  if (delta === 0) return 0;
+
+  let hue = 0;
+  if (max === r) hue = ((g - b) / delta) % 6;
+  else if (max === g) hue = (b - r) / delta + 2;
+  else hue = (r - g) / delta + 4;
+
+  return ((hue * 60) + 360) % 360;
+}
+
+export function getTaskGroupMeta(grandPlan: GrandPlan | undefined, task: TaskNode): TaskGroupMeta {
+  if (!task.linkedMilestoneId) {
+    return {
+      groupKey: "standalone",
+      milestoneTitle: "Standalone tasks",
+      categoryTitle: "Standalone",
+      categoryColor: UNCATEGORIZED_CATEGORY.color,
+      isStandalone: true,
+    };
+  }
+
+  const milestone = grandPlan?.milestones.find((candidate) => candidate.id === task.linkedMilestoneId);
+  if (!milestone) {
+    return {
+      groupKey: task.linkedMilestoneId,
+      milestoneId: task.linkedMilestoneId,
+      milestoneTitle: "Unknown milestone",
+      categoryTitle: UNKNOWN_CATEGORY.title,
+      categoryColor: UNKNOWN_CATEGORY.color,
+      isStandalone: false,
+    };
+  }
+
+  const category = grandPlan?.categories.find((candidate) => candidate.id === milestone.categoryId);
+  return {
+    groupKey: milestone.id,
+    milestoneId: milestone.id,
+    milestoneTitle: milestone.title,
+    categoryTitle: category?.title ?? UNKNOWN_CATEGORY.title,
+    categoryColor: category?.color ?? UNKNOWN_CATEGORY.color,
+    isStandalone: false,
+  };
+}
+
+export function compareTaskGroupMeta(a: TaskGroupMeta, b: TaskGroupMeta): number {
+  if (a.isStandalone !== b.isStandalone) return a.isStandalone ? 1 : -1;
+
+  const hueDiff = getColorHue(a.categoryColor) - getColorHue(b.categoryColor);
+  if (hueDiff !== 0) return hueDiff;
+
+  const categoryTitleDiff = a.categoryTitle.localeCompare(b.categoryTitle);
+  if (categoryTitleDiff !== 0) return categoryTitleDiff;
+
+  return a.milestoneTitle.localeCompare(b.milestoneTitle);
 }
 
 export function listDatesInMonth(ym: YM): DateISO[] {

@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { TaskNode } from "../app/types";
+import type { GrandPlan, TaskNode } from "../app/types";
+import { compareTaskGroupMeta, getTaskGroupMeta } from "../app/reporting";
 import { APP_MAIN_COLOR } from "../app/theme";
 
 type TaskSelectionModalProps = {
   tasks: TaskNode[];
+  grandPlan?: GrandPlan;
   currentPrimaryId?: string;
   currentSecondaryIds: string[];
   onConfirm: (primaryId: string | undefined, secondaryIds: string[]) => void;
@@ -18,10 +20,14 @@ type TaskSelectionModalProps = {
   surface?: "card" | "none";
   onDraftChange?: (primaryId: string | undefined, secondaryIds: string[]) => void;
   primaryButtonTutorialTarget?: string;
+  showPrimarySelection?: boolean;
+  title?: string;
+  description?: string;
 };
 
 export default function TaskSelectionModal({
   tasks,
+  grandPlan,
   currentPrimaryId,
   currentSecondaryIds,
   onConfirm,
@@ -36,6 +42,9 @@ export default function TaskSelectionModal({
   surface = "card",
   onDraftChange,
   primaryButtonTutorialTarget,
+  showPrimarySelection = true,
+  title = "Daily task selection",
+  description = "Choose a primary task and optional secondary tasks.",
 }: TaskSelectionModalProps) {
   const lastDraftRef = useRef<{ primaryId?: string; secondaryIds: string[] }>({
     primaryId: currentPrimaryId ?? undefined,
@@ -152,6 +161,7 @@ export default function TaskSelectionModal({
   }, [secondaryMenuOpen]);
 
   const tasksById = useMemo(() => new Map(tasks.map((t) => [t.id, t] as const)), [tasks]);
+  const selectedPrimaryTask = selectedPrimaryId ? tasksById.get(selectedPrimaryId) : undefined;
 
   const orderedTasks = useMemo(() => {
     const childrenByParentId = new Map<string | null, TaskNode[]>();
@@ -180,34 +190,44 @@ export default function TaskSelectionModal({
     return out;
   }, [tasks]);
 
-  const sortedTasks = useMemo(() => {
-    const weight = (task: TaskNode) => {
-      if (task.status === "YELLOW") return 0; // In progress first
-      if (completedTodayIds.has(task.id)) return 1; // Completed today second
-      return 2; // Others last
-    };
-    return orderedTasks
-      .map((item, index) => ({ ...item, index }))
-      .sort((a, b) => {
-        const wA = weight(a.task);
-        const wB = weight(b.task);
-        if (wA !== wB) return wA - wB;
-        return a.index - b.index;
-      })
-      .map(({ index, ...rest }) => rest);
-  }, [orderedTasks, completedTodayIds]);
+  const groupedTaskOptions = useMemo(() => {
+    const primaryGroupKey = selectedPrimaryTask ? getTaskGroupMeta(grandPlan, selectedPrimaryTask).groupKey : null;
+    const groupsByKey = new Map<string, {
+      meta: ReturnType<typeof getTaskGroupMeta>;
+      items: Array<{ task: TaskNode; depth: number }>;
+    }>();
 
-  const secondaryOptions = useMemo(() => {
-    return sortedTasks
-      .filter(({ task }) => task.id !== selectedPrimaryId)
-      .map(({ task, depth }) => ({
-        id: task.id,
-        title: task.title,
-        depth,
-        status: task.status,
-        isSuggested: suggestedSecondaryIds.includes(task.id),
-      }));
-  }, [sortedTasks, selectedPrimaryId, suggestedSecondaryIds]);
+    for (const item of orderedTasks) {
+      const meta = getTaskGroupMeta(grandPlan, item.task);
+      const existing = groupsByKey.get(meta.groupKey);
+      if (existing) {
+        existing.items.push(item);
+        continue;
+      }
+      groupsByKey.set(meta.groupKey, { meta, items: [item] });
+    }
+
+    return Array.from(groupsByKey.values()).sort((a, b) => {
+      const aIsPrimaryGroup = a.meta.groupKey === primaryGroupKey;
+      const bIsPrimaryGroup = b.meta.groupKey === primaryGroupKey;
+      if (aIsPrimaryGroup !== bIsPrimaryGroup) return aIsPrimaryGroup ? -1 : 1;
+      return compareTaskGroupMeta(a.meta, b.meta);
+    });
+  }, [grandPlan, orderedTasks, selectedPrimaryTask]);
+
+  const secondaryGroups = useMemo(() => {
+    return groupedTaskOptions
+      .map((group) => ({
+        ...group,
+        items: group.items
+          .filter(({ task }) => task.id !== selectedPrimaryId)
+          .map((item) => ({
+            ...item,
+            isSuggested: suggestedSecondaryIds.includes(item.task.id),
+          })),
+      }))
+      .filter((group) => group.items.length > 0);
+  }, [groupedTaskOptions, selectedPrimaryId, suggestedSecondaryIds]);
 
   const toggleSecondary = (taskId: string) => {
     setSelectedSecondaryIds((prev) => {
@@ -226,14 +246,64 @@ export default function TaskSelectionModal({
 
   const selectedPrimaryTitle = selectedPrimaryId ? tasksById.get(selectedPrimaryId)?.title ?? "Primary task" : "";
 
-  const canOpenPrimaryMenu = sortedTasks.length > 0;
-  const canOpenSecondaryMenu = Boolean(selectedPrimaryId) && secondaryOptions.length > 0;
+  const canOpenPrimaryMenu = orderedTasks.length > 0;
+  const canOpenSecondaryMenu = Boolean(selectedPrimaryId) && secondaryGroups.length > 0;
 
   const handleSave = () => {
     const primaryId = selectedPrimaryId || undefined;
     const secondaryIds = primaryId ? selectedSecondaryIds.filter((id) => id !== primaryId) : [];
     onConfirm(primaryId, secondaryIds);
   };
+
+  const renderTaskGroupHeader = (
+    meta: ReturnType<typeof getTaskGroupMeta>,
+    groupIndex: number
+  ) => (
+    <div
+      style={{
+        borderTop: groupIndex === 0 ? "none" : "1px solid #eef2f7",
+        marginTop: groupIndex === 0 ? 0 : 8,
+        paddingTop: groupIndex === 0 ? 0 : 10,
+      }}
+    >
+      <div
+        style={{
+          padding: "2px 10px 8px",
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          flexWrap: "wrap",
+        }}
+      >
+        <span
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: "50%",
+            backgroundColor: meta.categoryColor,
+            flexShrink: 0,
+          }}
+        />
+        <span
+          style={{
+            fontSize: 10,
+            fontWeight: 800,
+            color: "#94a3b8",
+            lineHeight: 1.2,
+            textTransform: "uppercase",
+            letterSpacing: 0.4,
+          }}
+        >
+          {meta.categoryTitle}
+        </span>
+        {!meta.isStandalone ? (
+          <span style={{ fontSize: 12, fontWeight: 700, color: "#334155", lineHeight: 1.2 }}>
+            {meta.milestoneTitle}
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
 
   const header = showHeader ? (
     <div
@@ -247,9 +317,9 @@ export default function TaskSelectionModal({
     >
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
         <div>
-          <div style={{ fontSize: 16, fontWeight: 900, color: "#111" }}>Daily task selection</div>
+          <div style={{ fontSize: 16, fontWeight: 900, color: "#111" }}>{title}</div>
           <div style={{ marginTop: 6, fontSize: 13, color: "#666", lineHeight: 1.4 }}>
-            Choose a primary task and optional secondary tasks.
+            {description}
           </div>
         </div>
         <button
@@ -353,6 +423,7 @@ export default function TaskSelectionModal({
             </div>
           ) : (
             <>
+              {showPrimarySelection ? (
               <div ref={primaryMenuRef} style={{ position: "relative" }}>
                 <label style={{ display: "block", fontSize: 12, fontWeight: 800, color: "#555", marginBottom: 6 }}>
                   Primary task
@@ -405,61 +476,68 @@ export default function TaskSelectionModal({
                     }}
                   >
                     <div style={{ maxHeight: 300, overflowY: "auto", overscrollBehavior: "contain", padding: 6 }}>
-                      {sortedTasks.map(({ task, depth }) => {
-                        const isSelected = selectedPrimaryId === task.id;
-                        const isWip = task.status === "YELLOW";
-                        const isCompletedToday = completedTodayIds.has(task.id);
-                        const backgroundColor = isCompletedToday
-                          ? isSelected
-                            ? "#d1fae5"
-                            : "#dcfce7"
-                          : isWip
-                            ? isSelected
-                              ? "#fff1c2"
-                              : "#fff7d6"
-                            : isSelected
-                            ? "rgba(103,58,183,0.10)"
-                            : "transparent";
-                        const borderColor = isCompletedToday
-                          ? "#86efac"
-                          : isWip
-                          ? "#fde68a"
-                          : "transparent";
+                      {groupedTaskOptions.map((group, groupIndex) => (
+                        <div key={group.meta.groupKey}>
+                          {renderTaskGroupHeader(group.meta, groupIndex)}
+                          {group.items.map(({ task, depth }) => {
+                            const isSelected = selectedPrimaryId === task.id;
+                            const isWip = task.status === "YELLOW";
+                            const isCompletedToday = completedTodayIds.has(task.id);
+                            const backgroundColor = isCompletedToday
+                              ? isSelected
+                                ? "#d1fae5"
+                                : "#dcfce7"
+                              : isWip
+                                ? isSelected
+                                  ? "#fff1c2"
+                                  : "#fff7d6"
+                                : isSelected
+                                ? "rgba(103,58,183,0.10)"
+                                : "transparent";
+                            const borderColor = isCompletedToday
+                              ? "#86efac"
+                              : isWip
+                              ? "#fde68a"
+                              : "transparent";
 
-                        return (
-                          <label
-                            key={task.id}
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 10,
-                              padding: "8px 10px",
-                              borderRadius: 10,
-                              cursor: "pointer",
-                              backgroundColor,
-                              border: `1px solid ${borderColor}`,
-                              marginLeft: depth * 14,
-                            }}
-                          >
-                            <input
-                              type="radio"
-                              checked={isSelected}
-                              onChange={() => {
-                                setSelectedPrimaryId(task.id);
-                                setPrimaryMenuOpen(false);
-                              }}
-                              style={{ cursor: "pointer" }}
-                            />
-                            <span style={{ flex: 1, color: "#111", fontSize: 14, lineHeight: 1.35 }}>
-                              {task.title}
-                            </span>
-                          </label>
-                        );
-                      })}
+                            return (
+                              <label
+                                key={task.id}
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: 10,
+                                  padding: "8px 10px",
+                                  borderRadius: 10,
+                                  cursor: "pointer",
+                                  backgroundColor,
+                                  border: `1px solid ${borderColor}`,
+                                  marginLeft: depth * 14,
+                                }}
+                              >
+                                <input
+                                  type="radio"
+                                  checked={isSelected}
+                                  onChange={() => {
+                                    setSelectedPrimaryId(task.id);
+                                    setPrimaryMenuOpen(false);
+                                  }}
+                                  style={{ cursor: "pointer" }}
+                                />
+                                <span style={{ flex: 1, color: "#111", fontSize: 14, lineHeight: 1.35 }}>
+                                  {task.title}
+                                </span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      ))}
+                      <div aria-hidden="true" style={{ height: 28 }} />
                     </div>
                   </div>
                 )}
               </div>
+              ) : null}
 
               <div ref={secondaryMenuRef} style={{ position: "relative" }}>
                 <label style={{ display: "block", fontSize: 12, fontWeight: 800, color: "#555", marginBottom: 6 }}>
@@ -497,7 +575,7 @@ export default function TaskSelectionModal({
                   </span>
                 </button>
 
-                {!selectedPrimaryId && (
+                {!showPrimarySelection && !selectedPrimaryId ? null : !selectedPrimaryId && (
                   <div style={{ marginTop: 8, fontSize: 12, color: "#888" }}>
                     Select a primary task to enable secondary tasks.
                   </div>
@@ -519,60 +597,66 @@ export default function TaskSelectionModal({
                     }}
                   >
                     <div style={{ maxHeight: 300, overflowY: "auto", overscrollBehavior: "contain", padding: 6 }}>
-                      {secondaryOptions.map((opt) => {
-                        const checked = selectedSecondaryIds.includes(opt.id);
-                        const isWip = opt.status === "YELLOW";
-                        const isCompletedToday = completedTodayIds.has(opt.id);
-                        const showSuggested = opt.isSuggested && !checked;
-                        const backgroundColor = isCompletedToday
-                          ? checked
-                            ? "#d1fae5"
-                            : "#dcfce7"
-                          : isWip
-                            ? checked
-                              ? "#fff1c2"
-                              : "#fff7d6"
-                            : checked
-                            ? "rgba(103,58,183,0.10)"
-                            : "transparent";
-                        const borderColor = isCompletedToday
-                          ? "#86efac"
-                          : isWip
-                          ? "#fde68a"
-                          : "transparent";
+                      {secondaryGroups.map((group, groupIndex) => (
+                        <div key={group.meta.groupKey}>
+                          {renderTaskGroupHeader(group.meta, groupIndex)}
+                          {group.items.map((item) => {
+                            const checked = selectedSecondaryIds.includes(item.task.id);
+                            const isWip = item.task.status === "YELLOW";
+                            const isCompletedToday = completedTodayIds.has(item.task.id);
+                            const showSuggested = item.isSuggested && !checked;
+                            const backgroundColor = isCompletedToday
+                              ? checked
+                                ? "#d1fae5"
+                                : "#dcfce7"
+                              : isWip
+                                ? checked
+                                  ? "#fff1c2"
+                                  : "#fff7d6"
+                                : checked
+                                ? "rgba(103,58,183,0.10)"
+                                : "transparent";
+                            const borderColor = isCompletedToday
+                              ? "#86efac"
+                              : isWip
+                              ? "#fde68a"
+                              : "transparent";
 
-                        return (
-                          <label
-                            key={opt.id}
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 10,
-                              padding: "8px 10px",
-                              borderRadius: 10,
-                              cursor: "pointer",
-                              backgroundColor,
-                              border: `1px solid ${borderColor}`,
-                              marginLeft: opt.depth * 14,
-                            }}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={() => toggleSecondary(opt.id)}
-                              style={{ cursor: "pointer" }}
-                            />
-                            <span style={{ flex: 1, color: "#111", fontSize: 14, lineHeight: 1.35 }}>
-                              {opt.title}
-                              {showSuggested && (
-                                <span style={{ marginLeft: 8, fontSize: 11, color: "#ff9800", fontWeight: 700 }}>
-                                  Suggested
+                            return (
+                              <label
+                                key={item.task.id}
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: 10,
+                                  padding: "8px 10px",
+                                  borderRadius: 10,
+                                  cursor: "pointer",
+                                  backgroundColor,
+                                  border: `1px solid ${borderColor}`,
+                                  marginLeft: item.depth * 14,
+                                }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => toggleSecondary(item.task.id)}
+                                  style={{ cursor: "pointer" }}
+                                />
+                                <span style={{ flex: 1, color: "#111", fontSize: 14, lineHeight: 1.35 }}>
+                                  {item.task.title}
+                                  {showSuggested && (
+                                    <span style={{ marginLeft: 8, fontSize: 11, color: "#ff9800", fontWeight: 700 }}>
+                                      Suggested
+                                    </span>
+                                  )}
                                 </span>
-                              )}
-                            </span>
-                          </label>
-                        );
-                      })}
+                              </label>
+                            );
+                          })}
+                        </div>
+                      ))}
+                      <div aria-hidden="true" style={{ height: 28 }} />
                     </div>
                   </div>
                 )}

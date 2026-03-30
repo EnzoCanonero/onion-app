@@ -96,7 +96,7 @@ function Header() {
         >
           <img
             src={onionGraphic}
-            alt="OnionOps"
+            alt="Onion-App"
             style={{ width: 42, height: 42, objectFit: "contain" }}
           />
         </div>
