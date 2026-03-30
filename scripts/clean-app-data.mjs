@@ -11,35 +11,35 @@ if (platform === "darwin") {
   const support = path.join(home, "Library", "Application Support");
   candidates.push(
     path.join(support, "Onion-App"),
-    path.join(support, "onion-app"),
-    path.join(support, "Electron")
+    path.join(support, "onion-app")
   );
 } else if (platform === "win32") {
   const appData = process.env.APPDATA || path.join(home, "AppData", "Roaming");
   candidates.push(
     path.join(appData, "Onion-App"),
-    path.join(appData, "onion-app"),
-    path.join(appData, "Electron")
+    path.join(appData, "onion-app")
   );
 } else {
   const config = path.join(home, ".config");
   candidates.push(
     path.join(config, "Onion-App"),
-    path.join(config, "onion-app"),
-    path.join(config, "Electron")
+    path.join(config, "onion-app")
   );
 }
 
 const removed = [];
 const attempted = new Set();
+const targetNames = ["onion-app-data"];
 
 for (const base of candidates) {
-  const target = path.join(base, "onion-app-data");
-  if (attempted.has(target)) continue;
-  attempted.add(target);
-  if (!fs.existsSync(target)) continue;
-  fs.rmSync(target, { recursive: true, force: true });
-  removed.push(target);
+  for (const targetName of targetNames) {
+    const target = path.join(base, targetName);
+    if (attempted.has(target)) continue;
+    attempted.add(target);
+    if (!fs.existsSync(target)) continue;
+    fs.rmSync(target, { recursive: true, force: true });
+    removed.push(target);
+  }
 }
 
 if (removed.length === 0) {
