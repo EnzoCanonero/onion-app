@@ -29,6 +29,7 @@ export type MilestoneNode = {
   categoryId: string;
   parentId: string | null;
   title: string;
+  treeName?: string;
   description?: string;
   status: MilestoneStatus;
   order: number;

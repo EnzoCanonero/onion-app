@@ -82,6 +82,7 @@ export function loadState(): AppStateV0 {
     let didNormalizeTaskNotes = false;
     let didMigrateTaskArchive = false;
     let didMigrateMeetingSeries = false;
+    let didNormalizeMilestoneTreeNames = false;
 
     const validMilestoneIds = new Set<string>(parsed.grandPlan?.milestones?.map((m) => m.id) ?? []);
     const taskMapsByScope = new Map<string, Map<string, TaskNode>>();
@@ -411,13 +412,25 @@ export function loadState(): AppStateV0 {
 
     if (parsed.grandPlan?.milestones) {
       parsed.grandPlan.milestones.forEach((m) => {
+        const rawTreeName = m.treeName;
+        const nextTreeName = typeof rawTreeName === "string" ? rawTreeName.trim() : "";
+        if (m.parentId === null && nextTreeName) {
+          if (rawTreeName !== nextTreeName) {
+            didNormalizeMilestoneTreeNames = true;
+          }
+          m.treeName = nextTreeName;
+        } else if (rawTreeName !== undefined) {
+          delete m.treeName;
+          didNormalizeMilestoneTreeNames = true;
+        }
+
         if (m.status === "COMPLETED" && !m.completedAt) {
           m.completedAt = m.createdAt;
         }
       });
     }
 
-    if (didNormalizeTaskNotes || didMigrateTaskArchive || didMigrateMeetingSeries) {
+    if (didNormalizeTaskNotes || didMigrateTaskArchive || didMigrateMeetingSeries || didNormalizeMilestoneTreeNames) {
       saveState(parsed);
     }
 
@@ -2363,7 +2376,7 @@ export function addMilestone(
 export function updateMilestone(
   state: AppStateV0,
   milestoneId: string,
-  updates: Partial<Pick<MilestoneNode, "title" | "description" | "status" | "parentId">>
+  updates: Partial<Pick<MilestoneNode, "title" | "treeName" | "description" | "status" | "parentId">>
 ): AppStateV0 {
   if (!state.grandPlan) return state;
   const now = getVirtualTimestamp();
@@ -2465,7 +2478,12 @@ export function deleteMilestone(state: AppStateV0, milestoneId: string, cascadeC
           if (m.parentId !== milestoneId) return m;
           if (!promotedId) return m;
           if (m.id === promotedId) {
-            return { ...m, parentId: deleted.parentId, order: deleted.order };
+            return {
+              ...m,
+              parentId: deleted.parentId,
+              order: deleted.order,
+              treeName: deleted.parentId === null ? deleted.treeName : m.treeName,
+            };
           }
           return { ...m, parentId: promotedId };
         }),
