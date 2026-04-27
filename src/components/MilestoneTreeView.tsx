@@ -129,6 +129,7 @@ function SingleTree({
 	                ? "linear-gradient(135deg, #16a34a 0%, #eab308 100%)"
 	                : getStatusColor(milestone.status);
 	              const statusBadgeSize = isCompleted ? 30 : 24;
+	              const rootTreeName = milestone.parentId === null ? milestone.treeName?.trim() : undefined;
 
               return (
                 <div key={milestone.id} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
@@ -249,22 +250,26 @@ function SingleTree({
                     {getStatusIcon(milestone.status)}
                   </div>
 
-                  {/* Root indicator (final goal) */}
-                  {milestone.parentId === null && (
+                  {/* Root tree label */}
+                  {rootTreeName && (
                     <div
                       style={{
                         position: "absolute",
                         top: -10,
                         left: -10,
                         padding: "2px 6px",
+                        maxWidth: 150,
                         backgroundColor: categoryColor,
                         color: "white",
                         fontSize: 9,
                         fontWeight: 700,
                         borderRadius: 4,
+                        lineHeight: 1.2,
+                        overflowWrap: "anywhere",
+                        whiteSpace: "normal",
                       }}
                     >
-                      GOAL
+                      {rootTreeName}
                     </div>
                   )}
 

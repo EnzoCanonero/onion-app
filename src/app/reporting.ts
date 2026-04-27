@@ -1,4 +1,5 @@
 import type { DateISO, GrandPlan, TaskNode, YM } from "./types";
+import { formatMilestoneTitle } from "./milestones";
 
 export type CategoryMeta = {
   id: string;
@@ -91,7 +92,7 @@ export function getTaskGroupMeta(grandPlan: GrandPlan | undefined, task: TaskNod
   return {
     groupKey: milestone.id,
     milestoneId: milestone.id,
-    milestoneTitle: milestone.title,
+    milestoneTitle: formatMilestoneTitle(milestone, grandPlan?.milestones ?? []),
     categoryTitle: category?.title ?? UNKNOWN_CATEGORY.title,
     categoryColor: category?.color ?? UNKNOWN_CATEGORY.color,
     isStandalone: false,

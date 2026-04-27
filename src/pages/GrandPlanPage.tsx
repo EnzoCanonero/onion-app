@@ -42,7 +42,7 @@ import {
   getCurrentYM,
 } from "../app/storage";
 import { getShortUserName, getUserName } from "../app/userProfile";
-import { getSelectableMilestoneIds } from "../app/milestones";
+import { formatMilestoneTitle, getSelectableMilestoneIds } from "../app/milestones";
 import MilestoneTreeView from "../components/MilestoneTreeView";
 import MilestoneDetailModal from "../components/MilestoneDetailModal";
 import TaskDetailModal from "../components/TaskDetailModal";
@@ -276,7 +276,7 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
     setCreatingMilestone({ categoryId: selectedCategoryId, parentId });
   };
 
-  const handleSaveMilestone = (milestoneId: string, updates: Partial<Pick<MilestoneNode, "title" | "description" | "status">>) => {
+  const handleSaveMilestone = (milestoneId: string, updates: Partial<Pick<MilestoneNode, "title" | "treeName" | "description" | "status">>) => {
     mutate((s) => updateMilestone(s, milestoneId, updates));
   };
 
@@ -690,7 +690,7 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
           dateISO,
           badge: {
             id: m.id,
-            title: m.title,
+            title: formatMilestoneTitle(m, grandPlan.milestones),
             dateLabel: formatDateLabel(dateISO as DateISO),
             categoryLabel,
             color,
@@ -1684,6 +1684,7 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
           linkedTasks={selectedMilestoneTasks}
           frozenTaskIds={frozenTaskIds}
           deleteLockedTaskIds={deleteLockedTaskIds}
+          showTreeNameField={selectedMilestoneLive.parentId === null}
           onClose={() => {
             setSelectedMilestone(null);
             closeTaskModal();

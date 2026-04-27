@@ -6,8 +6,9 @@ interface MilestoneDetailModalProps {
   linkedTasks: TaskNode[];
   frozenTaskIds: Set<string>;
   deleteLockedTaskIds: Set<string>;
+  showTreeNameField?: boolean;
   onClose: () => void;
-  onSave: (milestoneId: string, updates: Partial<Pick<MilestoneNode, "title" | "description" | "status">>) => void;
+  onSave: (milestoneId: string, updates: Partial<Pick<MilestoneNode, "title" | "treeName" | "description" | "status">>) => void;
   onDelete: (milestoneId: string) => void;
   onSetTaskStatus: (taskId: string, outcome: "COMPLETED" | "NOT_COMPLETED") => void;
   onDeleteTask: (taskId: string) => void;
@@ -19,6 +20,7 @@ export default function MilestoneDetailModal({
   linkedTasks,
   frozenTaskIds,
   deleteLockedTaskIds,
+  showTreeNameField,
   onClose,
   onSave,
   onDelete,
@@ -27,6 +29,7 @@ export default function MilestoneDetailModal({
   onOpenTask,
 }: MilestoneDetailModalProps) {
   const [title, setTitle] = useState(milestone.title);
+  const [treeName, setTreeName] = useState(milestone.treeName ?? "");
   const [description, setDescription] = useState(milestone.description ?? "");
   const [status, setStatus] = useState<MilestoneStatus>(milestone.status);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -85,11 +88,15 @@ export default function MilestoneDetailModal({
   };
 
   const handleSave = () => {
-    onSave(milestone.id, {
+    const updates: Partial<Pick<MilestoneNode, "title" | "treeName" | "description" | "status">> = {
       title: title.trim() || milestone.title,
       description: description.trim() || undefined,
       status,
-    });
+    };
+    if (showTreeNameField) {
+      updates.treeName = treeName.trim() || undefined;
+    }
+    onSave(milestone.id, updates);
     onClose();
   };
 
@@ -175,6 +182,29 @@ export default function MilestoneDetailModal({
             }}
           />
         </div>
+
+        {showTreeNameField ? (
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ display: "block", marginBottom: 6, fontWeight: 500 }}>Tree name</label>
+            <input
+              type="text"
+              value={treeName}
+              onChange={(e) => setTreeName(e.target.value)}
+              placeholder="e.g., PhD, New job, Fitness"
+              style={{
+                width: "100%",
+                padding: 10,
+                fontSize: 14,
+                border: "1px solid #ddd",
+                borderRadius: 6,
+                boxSizing: "border-box",
+              }}
+            />
+            <div style={{ marginTop: 4, fontSize: 12, color: "#666", lineHeight: 1.4 }}>
+              Child milestones from this goal will show this name in parentheses.
+            </div>
+          </div>
+        ) : null}
 
         {/* Status */}
         <div style={{ marginBottom: 16 }}>
@@ -268,7 +298,7 @@ export default function MilestoneDetailModal({
                         cursor: "pointer",
                       }}
                     >
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: 8, minWidth: 0 }}>
                         <span
                           style={{
                             width: 20,
@@ -286,10 +316,12 @@ export default function MilestoneDetailModal({
                             fontSize: 13,
                             color: "#333",
                             fontWeight: 600,
+                            flex: "1 1 auto",
                             minWidth: 0,
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            whiteSpace: "nowrap",
+                            lineHeight: 1.35,
+                            overflowWrap: "anywhere",
+                            wordBreak: "break-word",
+                            whiteSpace: "normal",
                           }}
                         >
                           {task.title}

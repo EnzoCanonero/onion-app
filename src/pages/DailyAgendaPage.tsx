@@ -57,6 +57,7 @@ import { useDateNavigation } from "../contexts/DateNavigationContext";
 import { getVirtualTimestamp } from "../contexts/VirtualClockContext";
 import { APP_MAIN_COLOR, REPORT_THEME } from "../app/theme";
 import { compareTaskGroupMeta, getCategoryMeta, getTaskGroupMeta } from "../app/reporting";
+import { formatMilestoneTitle } from "../app/milestones";
 import TaskSelectionModal from "../components/TaskSelectionModal";
 import PrimaryTaskSwitchModal from "../components/PrimaryTaskSwitchModal";
 import AddSecondaryTasksModal from "../components/AddSecondaryTasksModal";
@@ -525,9 +526,10 @@ function DailyAgendaPageContent({
   const eligibleFocusTemplatesTodayCount = focusTemplatesForToday.length;
 
   const focusMilestoneOptions = useMemo(() => {
+    const milestones = state.grandPlan?.milestones ?? [];
     return getMilestonesInMonth(state, ym).map((m) => ({
       id: m.id,
-      title: m.title,
+      title: formatMilestoneTitle(m, milestones),
       disabled: m.status === "COMPLETED",
     }));
   }, [state, ym]);
@@ -1099,6 +1101,7 @@ function DailyAgendaPageContent({
     const hasOverride = !!override;
     const milestoneId = day.focusMilestoneByTemplateId?.[template.id];
     const milestone = milestoneId ? state.grandPlan?.milestones.find((m) => m.id === milestoneId) : undefined;
+    const milestoneTitle = milestone ? formatMilestoneTitle(milestone, state.grandPlan?.milestones ?? []) : undefined;
     const categoryColor = milestone
       ? state.grandPlan?.categories.find((c) => c.id === milestone.categoryId)?.color
       : undefined;
@@ -1109,7 +1112,7 @@ function DailyAgendaPageContent({
         key={template.id}
         template={displayTemplate}
         accentColor={accentColor}
-        milestoneTitle={milestone?.title}
+        milestoneTitle={milestoneTitle}
         milestoneOptions={focusMilestoneOptions.length > 0 ? focusMilestoneOptions : undefined}
         selectedMilestoneId={milestoneId}
         onChangeMilestoneId={(nextMilestoneId) =>

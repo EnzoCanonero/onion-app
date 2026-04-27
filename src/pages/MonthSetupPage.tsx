@@ -45,7 +45,7 @@ import {
 import { useDateNavigation } from "../contexts/DateNavigationContext";
 import { getVirtualTimestamp } from "../contexts/VirtualClockContext";
 import { getShortUserName, getUserName } from "../app/userProfile";
-import { getSelectableMilestoneIds } from "../app/milestones";
+import { formatMilestoneTitle, getSelectableMilestoneIds } from "../app/milestones";
 import FireworksOverlay from "../components/FireworksOverlay";
 import NoGrandPlanPanel from "../components/NoGrandPlanPanel";
 import PastUnactivatedMonthPanel from "../components/PastUnactivatedMonthPanel";
@@ -119,6 +119,7 @@ type MilestoneNavigationProps = {
   onSelectMilestone: (id: string | null) => void;
   onPinMilestone?: () => void;
   onUnpinMilestone?: (id: string) => void;
+  formatMilestoneTitle?: (milestone: MilestoneNode) => string;
 };
 
 // Component for editing tasks under a milestone group
@@ -1054,7 +1055,12 @@ function TaskGroup({
 	                    />
 	                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
 	                      {milestoneNavigation.currentMilestoneId
-	                        ? milestoneNavigation.pinnedMilestones.find((m) => m.id === milestoneNavigation.currentMilestoneId)?.title ?? "Milestone"
+	                        ? (() => {
+	                            const milestone = milestoneNavigation.pinnedMilestones.find((m) => m.id === milestoneNavigation.currentMilestoneId);
+	                            return milestone
+	                              ? milestoneNavigation.formatMilestoneTitle?.(milestone) ?? milestone.title
+	                              : "Milestone";
+	                          })()
 	                        : "Standalone"}
 	                    </span>
 	                    <span style={{ fontSize: 10, color: "#9ca3af", marginLeft: 2 }}>▼</span>
@@ -1148,7 +1154,7 @@ function TaskGroup({
 	                                  border: "none",
 	                                  cursor: "pointer",
 	                                  display: "flex",
-	                                  alignItems: "center",
+	                                  alignItems: "flex-start",
 	                                  gap: 10,
 	                                  textAlign: "left",
 	                                }}
@@ -1164,16 +1170,25 @@ function TaskGroup({
 	                                    flexShrink: 0,
 	                                  }}
 	                                />
-	                                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
-	                                  {m.title}
+	                                <span
+	                                  style={{
+	                                    flex: "1 1 auto",
+	                                    minWidth: 0,
+	                                    lineHeight: 1.35,
+	                                    overflowWrap: "anywhere",
+	                                    wordBreak: "break-word",
+	                                    whiteSpace: "normal",
+	                                  }}
+	                                >
+	                                  {milestoneNavigation.formatMilestoneTitle?.(m) ?? m.title}
 	                                </span>
 	                                {isPrimary && (
-	                                  <span style={{ fontSize: 10, color: "#8a5a12", fontWeight: 800, backgroundColor: "#fef3c7", padding: "2px 6px", borderRadius: 4 }}>
+	                                  <span style={{ fontSize: 10, color: "#8a5a12", fontWeight: 800, backgroundColor: "#fef3c7", padding: "2px 6px", borderRadius: 4, flexShrink: 0 }}>
 	                                    ★
 	                                  </span>
 	                                )}
 	                                {m.status === "COMPLETED" && (
-	                                  <span style={{ fontSize: 10, color: "#059669" }}>✓</span>
+	                                  <span style={{ fontSize: 10, color: "#059669", flexShrink: 0 }}>✓</span>
 	                                )}
 	                              </button>
 	                            );
@@ -2617,18 +2632,19 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
   }, [state.grandPlan]);
 
   const wizardMilestoneIndex = useMemo(() => {
+    const allMilestones = state.grandPlan?.milestones ?? [];
     const map = new Map<string, { title: string; categoryTitle: string; categoryColor: string }>();
     for (const group of wizardMilestoneGroups) {
       for (const milestone of group.milestones) {
         map.set(milestone.id, {
-          title: milestone.title,
+          title: formatMilestoneTitle(milestone, allMilestones),
           categoryTitle: group.category.title,
           categoryColor: group.category.color,
         });
       }
     }
     return map;
-  }, [wizardMilestoneGroups]);
+  }, [state.grandPlan?.milestones, wizardMilestoneGroups]);
 
   const selectedObjectiveTitle = monthWizardPrimaryId
     ? wizardMilestoneIndex.get(monthWizardPrimaryId)?.title ?? ""
@@ -3011,7 +3027,7 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
           dateISO,
           badge: {
             id: m.id,
-            title: m.title,
+            title: formatMilestoneTitle(m, grandPlan?.milestones ?? []),
             dateLabel: formatDateLabel(dateISO as DateISO, { withYear: false }),
             categoryLabel,
             color,
@@ -3392,7 +3408,7 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
 	                  : null;
 
 		                const title = milestone
-		                  ? `[${category?.title ?? "Category"}] ${milestone.title}`
+		                  ? `[${category?.title ?? "Category"}] ${formatMilestoneTitle(milestone, state.grandPlan?.milestones ?? [])}`
 		                  : "Standalone";
 
 		                const color = milestone ? category?.color ?? APP_MAIN_COLOR : "#000";
@@ -3446,6 +3462,7 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
 		                      onSelectMilestone: setSelectedMilestoneId,
 		                      onPinMilestone: isInPeriod && state.grandPlan && state.grandPlan.milestones.length > 0 ? () => setShowMilestonePicker(true) : undefined,
 		                      onUnpinMilestone: isInPeriod ? handleUnpinMilestone : undefined,
+		                      formatMilestoneTitle: (m) => formatMilestoneTitle(m, state.grandPlan?.milestones ?? []),
 		                    }}
 		                  />
 		                );
@@ -3665,7 +3682,7 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
                                               style={{ cursor: "pointer" }}
                                             />
                                             <span style={{ flex: 1, color: "#111", fontSize: 14, lineHeight: 1.35 }}>
-                                              {milestone.title}
+                                              {formatMilestoneTitle(milestone, state.grandPlan?.milestones ?? [])}
                                             </span>
                                           </label>
                                         );
@@ -3775,7 +3792,7 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
                                               style={{ cursor: isPrimary ? "not-allowed" : "pointer" }}
                                             />
                                             <span style={{ flex: 1, color: "#111", fontSize: 14, lineHeight: 1.35 }}>
-                                              {milestone.title}
+                                              {formatMilestoneTitle(milestone, state.grandPlan?.milestones ?? [])}
                                             </span>
                                           </label>
                                         );
@@ -4014,7 +4031,7 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
                               fontSize: 14,
                             }}
                           >
-                            {milestone.title}
+                            {formatMilestoneTitle(milestone, state.grandPlan?.milestones ?? [])}
                             <span
                               style={{
                                 float: "right",
@@ -4356,7 +4373,7 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
 	                    ? state.grandPlan?.categories.find((c) => c.id === milestone.categoryId) ?? null
 	                    : null;
 	                  const accentColor = category?.color ?? "#FFD700";
-	                  const title = milestone?.title ?? "this milestone";
+	                  const title = milestone ? formatMilestoneTitle(milestone, state.grandPlan?.milestones ?? []) : "this milestone";
 
 	                  return (
 	                    <>
@@ -4415,7 +4432,10 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
 	              title="Add Task"
 	              subtitle={
                   creatingTask.milestoneId
-                    ? `This task will be linked to “${state.grandPlan?.milestones.find((m) => m.id === creatingTask.milestoneId)?.title ?? "Milestone"}”.`
+                    ? `This task will be linked to “${(() => {
+                        const milestone = state.grandPlan?.milestones.find((m) => m.id === creatingTask.milestoneId);
+                        return milestone ? formatMilestoneTitle(milestone, state.grandPlan?.milestones ?? []) : "Milestone";
+                      })()}”.`
                     : "This task will be standalone (not linked to a milestone)."
                 }
 	              accentColor={(() => {
