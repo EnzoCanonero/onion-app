@@ -586,6 +586,45 @@ export function isTaskFrozen(state: AppStateV0, taskId: string): boolean {
   return getFrozenTaskIds(state).has(taskId);
 }
 
+function buildHistoricalTaskProtection(state: AppStateV0): {
+  descendantLockedTaskIds: Set<string>;
+  directParentLockedTaskIds: Set<string>;
+} {
+  const tasks = getAllTasks(state);
+  const tasksById = new Map(tasks.map((task) => [task.id, task] as const));
+  const frozenTaskIds = getFrozenTaskIds(state);
+  const descendantLockedTaskIds = new Set<string>();
+  const directParentLockedTaskIds = new Set<string>();
+
+  frozenTaskIds.forEach((taskId) => {
+    const task = tasksById.get(taskId);
+    let parentId = task?.parentId ?? null;
+    if (parentId) directParentLockedTaskIds.add(parentId);
+    while (parentId) {
+      descendantLockedTaskIds.add(parentId);
+      parentId = tasksById.get(parentId)?.parentId ?? null;
+    }
+  });
+
+  return { descendantLockedTaskIds, directParentLockedTaskIds };
+}
+
+export function hasHistoricallyCompletedDescendant(state: AppStateV0, taskId: string): boolean {
+  return buildHistoricalTaskProtection(state).descendantLockedTaskIds.has(taskId);
+}
+
+export function isParentOfHistoricallyCompletedSubtask(state: AppStateV0, taskId: string): boolean {
+  return buildHistoricalTaskProtection(state).directParentLockedTaskIds.has(taskId);
+}
+
+export function getDeleteLockedTaskIds(state: AppStateV0): Set<string> {
+  return buildHistoricalTaskProtection(state).descendantLockedTaskIds;
+}
+
+export function getTitleLockedTaskIds(state: AppStateV0): Set<string> {
+  return buildHistoricalTaskProtection(state).directParentLockedTaskIds;
+}
+
 export function getTasksForMilestone(state: AppStateV0, milestoneId: string): TaskNode[] {
   return getTaskArchive(state).tasksByMilestoneId[milestoneId] ?? [];
 }
@@ -702,6 +741,45 @@ export function addTaskWithMilestone(
   };
 }
 
+export function addSubtask(
+  state: AppStateV0,
+  parentTaskId: string,
+  title: string
+): { state: AppStateV0; task: TaskNode } {
+  const archive = getTaskArchive(state);
+  const parentBucket = findTaskBucketById(archive, parentTaskId);
+  if (!parentBucket) return { state, task: { id: "", title, parentId: parentTaskId, status: "NONE" } };
+  if (isTaskFrozen(state, parentTaskId) || parentBucket.task.status === "GREEN") {
+    return { state, task: { id: "", title, parentId: parentTaskId, status: "NONE" } };
+  }
+
+  const subtask: TaskNode = {
+    id: makeId("task"),
+    title,
+    parentId: parentTaskId,
+    status: "NONE",
+    linkedMilestoneId: parentBucket.task.linkedMilestoneId,
+    createdAt: getVirtualTimestamp(),
+  };
+
+  return {
+    state: updateTaskArchive(state, (current) =>
+      setTaskBucket(current, parentBucket.milestoneId, [...parentBucket.tasks, subtask])
+    ),
+    task: subtask,
+  };
+}
+
+function getParentTaskFromBucket(tasks: TaskNode[], task: TaskNode): TaskNode | undefined {
+  if (!task.parentId) return undefined;
+  return tasks.find((candidate) => candidate.id === task.parentId);
+}
+
+function isBlockedByCompletedParent(tasks: TaskNode[], task: TaskNode, nextStatus: TaskNode["status"]): boolean {
+  const parent = getParentTaskFromBucket(tasks, task);
+  return parent?.status === "GREEN" && nextStatus !== "GREEN";
+}
+
 export function setDayTasks(
   state: AppStateV0,
   date: DateISO,
@@ -738,8 +816,17 @@ export function applyTaskStatus(
 
   if (nextStatus === existing.status) return state;
 
+  if (isBlockedByCompletedParent(existingBucket.tasks, existing, nextStatus)) return state;
+
+  // Subtask rules: if this task has subtasks, enforce constraints
+  const subtasks = existingBucket.tasks.filter((t) => t.parentId === taskId);
+  if (subtasks.length > 0) {
+    if (nextStatus === "GREEN" && subtasks.some((s) => s.status !== "GREEN")) return state;
+    if (nextStatus === "YELLOW" && !subtasks.some((s) => s.status === "YELLOW" || s.status === "GREEN")) return state;
+  }
+
   const now = getVirtualTimestamp();
-  const nextTasks = existingBucket.tasks.map((task) =>
+  let nextTasks = existingBucket.tasks.map((task) =>
     task.id === taskId
       ? {
           ...task,
@@ -748,20 +835,30 @@ export function applyTaskStatus(
         }
       : task
   );
+
+  // Subtask rule: marking a subtask as WIP/completed auto-marks parent as WIP
+  if (existing.parentId && (nextStatus === "YELLOW" || nextStatus === "GREEN")) {
+    const parent = nextTasks.find((t) => t.id === existing.parentId);
+    if (parent && parent.status === "NONE") {
+      nextTasks = nextTasks.map((t) => t.id === existing.parentId ? { ...t, status: "YELLOW" } : t);
+    }
+  }
+
   let nextState = updateTaskArchive(state, (current) =>
     setTaskBucket(current, existingBucket.milestoneId, nextTasks)
   );
 
   // v6.2: Auto-progress milestone to IN_PROGRESS when a task is marked
-  if (existing.linkedMilestoneId && nextState.grandPlan && (nextStatus === "GREEN" || nextStatus === "YELLOW")) {
-    const milestone = nextState.grandPlan.milestones.find((m) => m.id === existing.linkedMilestoneId);
+  const linkedMilestoneId = existing.linkedMilestoneId ?? (existing.parentId ? existingBucket.tasks.find((t) => t.id === existing.parentId)?.linkedMilestoneId : undefined);
+  if (linkedMilestoneId && nextState.grandPlan && (nextStatus === "GREEN" || nextStatus === "YELLOW")) {
+    const milestone = nextState.grandPlan.milestones.find((m) => m.id === linkedMilestoneId);
     if (milestone && milestone.status === "NOT_STARTED") {
       nextState = {
         ...nextState,
         grandPlan: {
           ...nextState.grandPlan,
           milestones: nextState.grandPlan.milestones.map((m) =>
-            m.id === existing.linkedMilestoneId ? { ...m, status: "IN_PROGRESS" } : m
+            m.id === linkedMilestoneId ? { ...m, status: "IN_PROGRESS" } : m
           ),
           updatedAt: getVirtualTimestamp(),
         },
@@ -800,6 +897,15 @@ export function setTaskOutcome(
       : nextOutcome === "NOT_COMPLETED"
         ? "YELLOW"
         : "NONE";
+  if (isBlockedByCompletedParent(existingBucket.tasks, existing, nextStatus)) return state;
+
+  // Subtask rules: if this task has subtasks, enforce constraints
+  const subtasks = existingBucket.tasks.filter((t) => t.parentId === taskId);
+  if (subtasks.length > 0) {
+    if (nextOutcome === "COMPLETED" && subtasks.some((s) => s.status !== "GREEN")) return state;
+    if (nextOutcome === "NOT_COMPLETED" && !subtasks.some((s) => s.status === "YELLOW" || s.status === "GREEN")) return state;
+  }
+
   const completedAt =
     nextStatus === "GREEN"
       ? existing.completedAt && existing.completedAt.slice(0, 10) === date
@@ -809,7 +915,7 @@ export function setTaskOutcome(
           : getVirtualTimestamp()
       : undefined;
 
-  const nextTasks = existingBucket.tasks.map((task) =>
+  let nextTasks = existingBucket.tasks.map((task) =>
     task.id === taskId
       ? {
           ...task,
@@ -819,20 +925,29 @@ export function setTaskOutcome(
       : task
   );
 
+  // Subtask rule: marking a subtask as WIP/completed auto-marks parent as WIP
+  if (existing.parentId && (nextStatus === "YELLOW" || nextStatus === "GREEN")) {
+    const parent = nextTasks.find((t) => t.id === existing.parentId);
+    if (parent && parent.status === "NONE") {
+      nextTasks = nextTasks.map((t) => t.id === existing.parentId ? { ...t, status: "YELLOW" } : t);
+    }
+  }
+
   let next = updateDay(withDay, { ...day, outcomeByTaskId: nextMap });
   next = updateTaskArchive(next, (current) =>
     setTaskBucket(current, existingBucket.milestoneId, nextTasks)
   );
 
-  if (existing.linkedMilestoneId && next.grandPlan && nextStatus !== "NONE") {
-    const milestone = next.grandPlan.milestones.find((m) => m.id === existing.linkedMilestoneId);
+  const linkedMilestoneId = existing.linkedMilestoneId ?? (existing.parentId ? existingBucket.tasks.find((t) => t.id === existing.parentId)?.linkedMilestoneId : undefined);
+  if (linkedMilestoneId && next.grandPlan && nextStatus !== "NONE") {
+    const milestone = next.grandPlan.milestones.find((m) => m.id === linkedMilestoneId);
     if (milestone && milestone.status === "NOT_STARTED") {
       next = {
         ...next,
         grandPlan: {
           ...next.grandPlan,
           milestones: next.grandPlan.milestones.map((m) =>
-            m.id === existing.linkedMilestoneId ? { ...m, status: "IN_PROGRESS" } : m
+            m.id === linkedMilestoneId ? { ...m, status: "IN_PROGRESS" } : m
           ),
           updatedAt: getVirtualTimestamp(),
         },
@@ -900,6 +1015,14 @@ export function updateTask(
   const archive = getTaskArchive(state);
   const existingBucket = findTaskBucketById(archive, taskId);
   if (!existingBucket) return state;
+  const existingTask = existingBucket.task;
+  if (
+    updates.title !== undefined &&
+    updates.title !== existingTask.title &&
+    isParentOfHistoricallyCompletedSubtask(state, taskId)
+  ) {
+    return state;
+  }
 
   const nextTasks = existingBucket.tasks.map((task) => (task.id === taskId ? { ...task, ...updates } : task));
   return updateTaskArchive(state, (current) =>
@@ -1054,6 +1177,74 @@ function defaultStartedAtTimestamp(date: DateISO): string {
   return localTimestampForDate(date, 9, 0, 0);
 }
 
+function hasCompletedDescendantForArchive(
+  state: AppStateV0,
+  day: DayEntry,
+  taskId: string
+): boolean {
+  const archive = getTaskArchive(state);
+  const existingBucket = findTaskBucketById(archive, taskId);
+  if (!existingBucket) return false;
+
+  const frozenTaskIds = getFrozenTaskIds(state);
+  const stack = existingBucket.tasks
+    .filter((task) => task.parentId === taskId)
+    .map((task) => task.id);
+
+  while (stack.length > 0) {
+    const currentId = stack.pop();
+    if (!currentId) continue;
+    if (frozenTaskIds.has(currentId) || day.outcomeByTaskId?.[currentId] === "COMPLETED") {
+      return true;
+    }
+    existingBucket.tasks.forEach((task) => {
+      if (task.parentId === currentId) stack.push(task.id);
+    });
+  }
+
+  return false;
+}
+
+function buildArchivedTaskOutcomeMapForClose(
+  state: AppStateV0,
+  day: DayEntry
+): Record<string, "COMPLETED" | "NOT_COMPLETED"> {
+  const nextMap: Record<string, "COMPLETED" | "NOT_COMPLETED"> = {
+    ...(day.outcomeByTaskId ?? {}),
+  };
+
+  Object.entries(nextMap).forEach(([taskId, outcome]) => {
+    const task = getTaskById(state, taskId);
+    if (task?.parentId && outcome === "NOT_COMPLETED") {
+      delete nextMap[taskId];
+    }
+  });
+
+  const selectedTopLevelTaskIds = [day.primaryTaskId, ...day.secondaryTaskIds].filter(
+    (taskId): taskId is string => Boolean(taskId)
+  );
+
+  selectedTopLevelTaskIds.forEach((taskId) => {
+    const task = getTaskById(state, taskId);
+    if (!task || task.parentId) return;
+    if (nextMap[taskId] === "COMPLETED") return;
+
+    const shouldArchiveAsWip =
+      task.status === "YELLOW" && hasCompletedDescendantForArchive(state, day, taskId);
+
+    if (shouldArchiveAsWip) {
+      nextMap[taskId] = "NOT_COMPLETED";
+      return;
+    }
+
+    if (nextMap[taskId] === "NOT_COMPLETED") {
+      delete nextMap[taskId];
+    }
+  });
+
+  return nextMap;
+}
+
 export function closeDay(state: AppStateV0, date: DateISO): AppStateV0 {
   const ym = ymFromDate(date);
   const { state: withDay, day } = getOrCreateDay(state, date, ym);
@@ -1075,12 +1266,14 @@ export function closeDay(state: AppStateV0, date: DateISO): AppStateV0 {
     }
   }
 
+  const archivedOutcomeByTaskId = buildArchivedTaskOutcomeMapForClose(next, day);
   const updated = updateDay(next, {
     ...day,
     isClosed: true,
     activeSessionId: undefined,
     endedAt,
     autoClosed,
+    outcomeByTaskId: archivedOutcomeByTaskId,
   });
   const hasEndedEvent = Array.isArray(day.events)
     ? day.events.some((e) => e.kind === "SYSTEM" && e.text === "Day ended")
@@ -1112,12 +1305,14 @@ export function autoCloseDay(state: AppStateV0, date: DateISO): AppStateV0 {
     }
   }
 
+  const archivedOutcomeByTaskId = buildArchivedTaskOutcomeMapForClose(next, day);
   const updated = updateDay(next, {
     ...day,
     isClosed: true,
     activeSessionId: undefined,
     endedAt,
     autoClosed: true,
+    outcomeByTaskId: archivedOutcomeByTaskId,
   });
   const hasEndedEvent = Array.isArray(day.events)
     ? day.events.some((e) => e.kind === "SYSTEM" && e.text === "Day ended")
@@ -1197,6 +1392,13 @@ export function formatTime(isoTimestamp: string): string {
   }
 }
 
+export function getSubtasksForTask(state: AppStateV0, parentTaskId: string): TaskNode[] {
+  const archive = getTaskArchive(state);
+  const bucket = findTaskBucketById(archive, parentTaskId);
+  if (!bucket) return [];
+  return bucket.tasks.filter((t) => t.parentId === parentTaskId);
+}
+
 export function getChildrenIds(tasks: TaskNode[], parentId: string | null): string[] {
   return tasks.filter((t) => t.parentId === parentId).map((t) => t.id);
 }
@@ -1267,6 +1469,35 @@ function getEventTimestamp(
   return fallbackAt;
 }
 
+function getTaskCompletionEventTimestamp(
+  day: DayEntry,
+  eventId: string,
+  kind: DayLogEvent["kind"],
+  text: string,
+  fallbackAt: string,
+  legacyEventId?: string,
+  legacyText?: string
+): string {
+  const events = Array.isArray(day.events) ? day.events : [];
+  const exactMatch = events.find((event) => event.id === eventId);
+  if (exactMatch?.at) return exactMatch.at;
+
+  const exactTextMatch = events.find((event) => event.kind === kind && event.text === text);
+  if (exactTextMatch?.at) return exactTextMatch.at;
+
+  if (legacyEventId) {
+    const legacyIdMatch = events.find((event) => event.id === legacyEventId);
+    if (legacyIdMatch?.at) return legacyIdMatch.at;
+  }
+
+  if (legacyText) {
+    const legacyTextMatch = events.find((event) => event.kind === "TASK" && event.text === legacyText);
+    if (legacyTextMatch?.at) return legacyTextMatch.at;
+  }
+
+  return fallbackAt;
+}
+
 export function buildDayHistory(
   state: AppStateV0,
   date: DateISO,
@@ -1315,15 +1546,30 @@ export function buildDayHistory(
     if (outcome !== "COMPLETED") return;
     const task = tasksById.get(taskId);
     const title = task?.title ?? "Unknown task";
-    const text = `✓ Completed: ${title}`;
+    const parentTask = task?.parentId ? tasksById.get(task.parentId) : undefined;
+    const isSubtask = Boolean(task?.parentId);
+    const legacyText = `✓ Completed: ${title}`;
+    const text = isSubtask
+      ? `✓ Completed subtask: ${(parentTask?.title ?? "Parent task")} → ${title}`
+      : `✓ Completed task: ${title}`;
+    const eventId = isSubtask ? `subtask:completed:${taskId}` : `task:completed:${taskId}`;
+    const eventKind: DayLogEvent["kind"] = isSubtask ? "SUBTASK" : "TASK";
     const fallbackAt =
       task?.completedAt && task.completedAt.slice(0, 10) === date
         ? task.completedAt
         : day.endedAt ?? localTimestampForDate(date, 23, 59, 59);
     derivedEvents.push({
-      id: `task:completed:${taskId}`,
-      at: getEventTimestamp(day, `task:completed:${taskId}`, "TASK", text, fallbackAt),
-      kind: "TASK",
+      id: eventId,
+      at: getTaskCompletionEventTimestamp(
+        day,
+        eventId,
+        eventKind,
+        text,
+        fallbackAt,
+        isSubtask ? `task:completed:${taskId}` : undefined,
+        legacyText
+      ),
+      kind: eventKind,
       text,
     });
   });

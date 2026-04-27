@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import type { DateISO, YM, Category, MilestoneNode } from "../app/types";
+import type { DateISO, YM, Category, MilestoneNode, TaskNode } from "../app/types";
 import { APP_MAIN_COLOR, REPORT_THEME } from "../app/theme";
 import {
   BadgePanel,
@@ -32,8 +32,12 @@ import {
   getAllTasks,
   getTasksForMilestone,
   getFrozenTaskIds,
+  getDeleteLockedTaskIds,
+  getTitleLockedTaskIds,
   applyTaskStatus,
   deleteTask,
+  updateTask,
+  addSubtask,
   getTodayDate,
   getCurrentYM,
 } from "../app/storage";
@@ -41,6 +45,7 @@ import { getShortUserName, getUserName } from "../app/userProfile";
 import { getSelectableMilestoneIds } from "../app/milestones";
 import MilestoneTreeView from "../components/MilestoneTreeView";
 import MilestoneDetailModal from "../components/MilestoneDetailModal";
+import TaskDetailModal from "../components/TaskDetailModal";
 import TitleDescriptionModal from "../components/TitleDescriptionModal";
 
 const DEFAULT_COLORS = ["#4caf50", "#2196f3", "#ff9800", "#e91e63", APP_MAIN_COLOR, "#00bcd4"];
@@ -122,6 +127,8 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
   const state = useMemo(() => loadState(), [tick]);
   const grandPlan = state.grandPlan;
   const frozenTaskIds = useMemo(() => getFrozenTaskIds(state), [state]);
+  const deleteLockedTaskIds = useMemo(() => getDeleteLockedTaskIds(state), [state]);
+  const titleLockedTaskIds = useMemo(() => getTitleLockedTaskIds(state), [state]);
   const shortName = getShortUserName(getUserName());
   const pinnedMilestoneIds = useMemo(() => {
     const ids = new Set<string>();
@@ -153,6 +160,10 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
     }
   });
   const [selectedMilestone, setSelectedMilestone] = useState<MilestoneNode | null>(null);
+  const [taskModalTaskId, setTaskModalTaskId] = useState<string | null>(null);
+  const [taskModalTitle, setTaskModalTitle] = useState("");
+  const [taskModalNotes, setTaskModalNotes] = useState("");
+  const [taskModalError, setTaskModalError] = useState<string | null>(null);
   const [creatingMilestone, setCreatingMilestone] = useState<{ categoryId: string; parentId: string | null } | null>(null);
 
   useEffect(() => {
@@ -272,6 +283,7 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
   const handleDeleteMilestone = (milestoneId: string) => {
     mutate((s) => deleteMilestone(s, milestoneId, false));
     setSelectedMilestone(null);
+    setTaskModalTaskId(null);
   };
 
   const handleSetMilestoneTaskStatus = (
@@ -308,6 +320,110 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
         : [],
     [state, selectedMilestoneLive]
   );
+  const selectedMilestoneAccentColor = useMemo(
+    () =>
+      selectedMilestoneLive
+        ? grandPlan?.categories.find((category) => category.id === selectedMilestoneLive.categoryId)?.color ?? APP_MAIN_COLOR
+        : APP_MAIN_COLOR,
+    [grandPlan, selectedMilestoneLive]
+  );
+  const taskModalTask = taskModalTaskId
+    ? selectedMilestoneTasks.find((task) => task.id === taskModalTaskId)
+    : undefined;
+  const taskModalReadOnly = taskModalTaskId ? frozenTaskIds.has(taskModalTaskId) : true;
+  const taskModalTitleReadOnly = taskModalTaskId ? titleLockedTaskIds.has(taskModalTaskId) : false;
+  const taskModalParentIsGreen = taskModalTask?.status === "GREEN";
+
+  const canToggleMilestoneTaskStatus = (
+    task: TaskNode,
+    outcome: "COMPLETED" | "NOT_COMPLETED"
+  ) => {
+    if (frozenTaskIds.has(task.id)) return false;
+    const nextStatus =
+      outcome === "COMPLETED"
+        ? task.status === "GREEN" ? "NONE" : "GREEN"
+        : task.status === "YELLOW" ? "NONE" : "YELLOW";
+    const parentTask = task.parentId
+      ? selectedMilestoneTasks.find((candidate) => candidate.id === task.parentId)
+      : undefined;
+    if (parentTask?.status === "GREEN" && nextStatus !== "GREEN") return false;
+    const subtasks = selectedMilestoneTasks.filter((candidate) => candidate.parentId === task.id);
+    if (subtasks.length > 0) {
+      if (nextStatus === "GREEN" && subtasks.some((subtask) => subtask.status !== "GREEN")) return false;
+      if (
+        nextStatus === "YELLOW" &&
+        !subtasks.some((subtask) => subtask.status === "YELLOW" || subtask.status === "GREEN")
+      ) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const taskModalSubtasks = taskModalTaskId
+    ? selectedMilestoneTasks
+        .filter((task) => task.parentId === taskModalTaskId)
+        .map((subtask) => {
+          const subtaskDeleteLocked = deleteLockedTaskIds.has(subtask.id);
+          return {
+            id: subtask.id,
+            title: subtask.title,
+            status: subtask.status,
+            showActionCluster: true,
+            canToggleCompleted: canToggleMilestoneTaskStatus(subtask, "COMPLETED"),
+            canToggleInProgress: canToggleMilestoneTaskStatus(subtask, "NOT_COMPLETED"),
+            canDelete: !frozenTaskIds.has(subtask.id) && !subtaskDeleteLocked,
+            onToggleCompleted: () => handleSetMilestoneTaskStatus(subtask.id, "COMPLETED"),
+            onToggleInProgress: () => handleSetMilestoneTaskStatus(subtask.id, "NOT_COMPLETED"),
+            onDelete: () => {
+              if (!window.confirm(`Delete subtask "${subtask.title}"?`)) return;
+              handleDeleteMilestoneTask(subtask.id);
+            },
+          };
+        })
+    : [];
+  const canAddTaskModalSubtask = Boolean(taskModalTaskId && !taskModalReadOnly && !taskModalParentIsGreen);
+
+  const openTaskModal = (task: TaskNode) => {
+    setTaskModalTaskId(task.id);
+    setTaskModalTitle(task.title);
+    setTaskModalNotes((task.notes ?? "").trim());
+    setTaskModalError(null);
+  };
+
+  const closeTaskModal = () => {
+    setTaskModalTaskId(null);
+    setTaskModalTitle("");
+    setTaskModalNotes("");
+    setTaskModalError(null);
+  };
+
+  const saveTaskModal = () => {
+    if (!taskModalTaskId) return;
+    if (frozenTaskIds.has(taskModalTaskId)) {
+      closeTaskModal();
+      return;
+    }
+    const nextTitle = taskModalTitle.trim();
+    if (!nextTitle) {
+      setTaskModalError("Title is required.");
+      return;
+    }
+    const nextNotes = taskModalNotes.trim();
+    mutate((s) =>
+      updateTask(s, taskModalTaskId, {
+        title: nextTitle,
+        notes: nextNotes || undefined,
+      })
+    );
+    closeTaskModal();
+  };
+
+  useEffect(() => {
+    if (taskModalTaskId && !taskModalTask) {
+      closeTaskModal();
+    }
+  }, [taskModalTaskId, taskModalTask]);
 
   useEffect(() => {
     if (!grandPlan) return;
@@ -1567,11 +1683,38 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
           milestone={selectedMilestoneLive}
           linkedTasks={selectedMilestoneTasks}
           frozenTaskIds={frozenTaskIds}
-          onClose={() => setSelectedMilestone(null)}
+          deleteLockedTaskIds={deleteLockedTaskIds}
+          onClose={() => {
+            setSelectedMilestone(null);
+            closeTaskModal();
+          }}
           onSave={handleSaveMilestone}
           onDelete={handleDeleteMilestone}
           onSetTaskStatus={handleSetMilestoneTaskStatus}
           onDeleteTask={handleDeleteMilestoneTask}
+          onOpenTask={openTaskModal}
+        />
+      )}
+
+      {taskModalTaskId && (
+        <TaskDetailModal
+          accentColor={selectedMilestoneAccentColor}
+          titleValue={taskModalTitle}
+          notesValue={taskModalNotes}
+          readOnly={taskModalReadOnly}
+          titleReadOnly={taskModalTitleReadOnly}
+          errorMessage={taskModalError}
+          onTitleChange={setTaskModalTitle}
+          onNotesChange={setTaskModalNotes}
+          onClose={closeTaskModal}
+          onSave={saveTaskModal}
+          subtasks={taskModalSubtasks}
+          canAddSubtask={canAddTaskModalSubtask}
+          onAddSubtask={(title) => {
+            if (!taskModalTaskId) return;
+            mutate((s) => addSubtask(s, taskModalTaskId, title).state);
+          }}
+          autoFocusTitle
         />
       )}
 
