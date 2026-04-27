@@ -19,6 +19,8 @@ import {
   getTasksForMilestone,
   getTasksForMonth,
   getFrozenTaskIds,
+  getDeleteLockedTaskIds,
+  getTitleLockedTaskIds,
   getTaskBoardForScope,
   getTaskLinksForScope,
   updateTaskBoardForScope,
@@ -26,6 +28,7 @@ import {
   deleteTask,
   updateTask,
   applyTaskStatus,
+  addSubtask,
   updateMilestone,
   getCurrentYM,
 } from "../app/storage";
@@ -47,6 +50,7 @@ import FireworksOverlay from "../components/FireworksOverlay";
 import NoGrandPlanPanel from "../components/NoGrandPlanPanel";
 import PastUnactivatedMonthPanel from "../components/PastUnactivatedMonthPanel";
 import FutureMonthPanel from "../components/FutureMonthPanel";
+import TaskDetailModal from "../components/TaskDetailModal";
 import TitleDescriptionModal from "../components/TitleDescriptionModal";
 import {
   BadgePanel,
@@ -125,6 +129,8 @@ function TaskGroup({
   milestoneId,
   milestoneStatus,
   frozenTaskIds,
+  deleteLockedTaskIds,
+  titleLockedTaskIds,
   boardSize,
   onUpdateBoardSize,
   links,
@@ -134,6 +140,7 @@ function TaskGroup({
   onUpdateTask,
   onSetTaskStatus,
   onDeleteTask,
+  onAddSubtask,
   onMarkMilestoneCompleted,
   isObjective = false,
   onSetObjective,
@@ -149,6 +156,8 @@ function TaskGroup({
   milestoneId: string | null;
   milestoneStatus?: MilestoneStatus;
   frozenTaskIds: Set<string>;
+  deleteLockedTaskIds: Set<string>;
+  titleLockedTaskIds: Set<string>;
   boardSize: { width: number; height: number };
   onUpdateBoardSize: (next: { width: number; height: number }) => void;
   links: { from: string; to: string }[];
@@ -161,6 +170,7 @@ function TaskGroup({
   ) => void;
   onSetTaskStatus: (taskId: string, outcome: "COMPLETED" | "NOT_COMPLETED" | undefined) => void;
   onDeleteTask: (taskId: string) => void;
+  onAddSubtask: (parentTaskId: string, title: string) => void;
   onMarkMilestoneCompleted?: (milestoneId: string) => void;
   isObjective?: boolean;
   onSetObjective?: (milestoneId: string) => void;
@@ -176,13 +186,64 @@ function TaskGroup({
   const [taskModalError, setTaskModalError] = useState<string | null>(null);
 
   const isCompleted = milestoneStatus === "COMPLETED";
+  const taskModalTask = taskModalTaskId ? tasks.find((task) => task.id === taskModalTaskId) : undefined;
+  const taskModalParentIsGreen = taskModalTask?.status === "GREEN";
   const accentColor = color;
   const uiAccent = chromeless ? "#000" : accentColor;
   const noteBorderColor = chromeless ? "#000" : accentColor;
-  const noteBackgroundColor = "white";
   const canEditBoard = !isCompleted;
   const canSetObjective = Boolean(milestoneId && onSetObjective && !isObjective && !isCompleted);
   const objectiveAccent = "#d6a14a";
+  const blockedStatusColors = {
+    border: "#d1d5db",
+    background: "#f3f4f6",
+    text: "#9ca3af",
+  };
+
+  const canToggleTaskStatus = (task: TaskNode, outcome: "COMPLETED" | "NOT_COMPLETED") => {
+    if (isCompleted || frozenTaskIds.has(task.id)) return false;
+    const nextStatus =
+      outcome === "COMPLETED"
+        ? task.status === "GREEN" ? "NONE" : "GREEN"
+        : task.status === "YELLOW" ? "NONE" : "YELLOW";
+    const parentTask = task.parentId ? tasks.find((candidate) => candidate.id === task.parentId) : undefined;
+    if (parentTask?.status === "GREEN" && nextStatus !== "GREEN") return false;
+    const subtasks = tasks.filter((candidate) => candidate.parentId === task.id);
+    if (subtasks.length > 0) {
+      if (nextStatus === "GREEN" && subtasks.some((subtask) => subtask.status !== "GREEN")) return false;
+      if (
+        nextStatus === "YELLOW" &&
+        !subtasks.some((subtask) => subtask.status === "YELLOW" || subtask.status === "GREEN")
+      ) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const taskModalReadOnly = taskModalTaskId ? isCompleted || frozenTaskIds.has(taskModalTaskId) : true;
+  const taskModalTitleReadOnly = taskModalTaskId ? titleLockedTaskIds.has(taskModalTaskId) : false;
+  const taskModalSubtasks = taskModalTaskId
+    ? tasks.filter((task) => task.parentId === taskModalTaskId).map((subtask) => {
+        const subtaskDeleteLocked = deleteLockedTaskIds.has(subtask.id);
+        return {
+          id: subtask.id,
+          title: subtask.title,
+          status: subtask.status,
+          showActionCluster: true,
+          canToggleCompleted: canToggleTaskStatus(subtask, "COMPLETED"),
+          canToggleInProgress: canToggleTaskStatus(subtask, "NOT_COMPLETED"),
+          canDelete: !frozenTaskIds.has(subtask.id) && !subtaskDeleteLocked,
+          onToggleCompleted: () => onSetTaskStatus(subtask.id, "COMPLETED"),
+          onToggleInProgress: () => onSetTaskStatus(subtask.id, "NOT_COMPLETED"),
+          onDelete: () => {
+            if (!window.confirm(`Delete subtask "${subtask.title}"?`)) return;
+            onDeleteTask(subtask.id);
+          },
+        };
+      })
+    : [];
+  const canAddTaskModalSubtask = Boolean(taskModalTaskId && !taskModalReadOnly && !taskModalParentIsGreen);
 
   const baseBoardWidth = Math.max(800, boardSize.width);
   const baseBoardHeight = Math.max(600, boardSize.height);
@@ -294,6 +355,8 @@ function TaskGroup({
     if (!isLinkMode) setLinkFromTaskId(null);
   }, [isLinkMode]);
 
+  const topLevelTasks = useMemo(() => tasks.filter((t) => !t.parentId), [tasks]);
+
   const taskRectsById = useMemo(() => {
     const DEFAULT_W = 260;
     const DEFAULT_H = 180;
@@ -305,7 +368,7 @@ function TaskGroup({
     const map = new Map<string, TaskRect>();
 
     let unpositionedIdx = 0;
-    tasks.forEach((task) => {
+    topLevelTasks.forEach((task) => {
       let w = typeof task.boardW === "number" && Number.isFinite(task.boardW) ? task.boardW : DEFAULT_W;
       let h = typeof task.boardH === "number" && Number.isFinite(task.boardH) ? task.boardH : DEFAULT_H;
 
@@ -335,7 +398,7 @@ function TaskGroup({
     });
 
     return map;
-  }, [tasks, boardSize.width, dragPreview, resizePreview, floatingToolbar]);
+  }, [topLevelTasks, boardSize.width, dragPreview, resizePreview, floatingToolbar]);
 
   const extendBoardToFit = (rect: TaskRect) => {
     const PAD = 160;
@@ -1534,10 +1597,13 @@ function TaskGroup({
 		                  })()}
 		                </svg>
 
-	                {tasks.map((task) => {
+	                {topLevelTasks.map((task) => {
 	                const rect = taskRectsById.get(task.id);
 	                if (!rect) return null;
                   const isTaskFrozen = frozenTaskIds.has(task.id);
+                  const isTaskDeleteLocked = deleteLockedTaskIds.has(task.id);
+                  const canSetCompleted = canToggleTaskStatus(task, "COMPLETED");
+                  const canSetInProgress = canToggleTaskStatus(task, "NOT_COMPLETED");
 
                 const statusGlyph = task.status === "GREEN" ? "✓" : task.status === "YELLOW" ? "◐" : "○";
                 const statusLabel = task.status === "GREEN" ? "Completed" : task.status === "YELLOW" ? "In Progress" : "Not Started";
@@ -1606,16 +1672,18 @@ function TaskGroup({
                             onPointerDown={(e) => e.stopPropagation()}
                             onClick={(e) => {
                               e.stopPropagation();
+                              if (!canSetCompleted) return;
                               onSetTaskStatus(task.id, "COMPLETED");
                             }}
+                            disabled={!canSetCompleted}
                             style={{
                               width: 18,
                               height: 18,
                               borderRadius: 5,
-                              border: "1px solid #10b981",
-                              backgroundColor: task.status === "GREEN" ? "#10b981" : "#ffffff",
-                              color: task.status === "GREEN" ? "#ffffff" : "#10b981",
-                              cursor: "pointer",
+                              border: `1px solid ${canSetCompleted ? "#10b981" : blockedStatusColors.border}`,
+                              backgroundColor: canSetCompleted ? (task.status === "GREEN" ? "#10b981" : "#ffffff") : blockedStatusColors.background,
+                              color: canSetCompleted ? (task.status === "GREEN" ? "#ffffff" : "#10b981") : blockedStatusColors.text,
+                              cursor: canSetCompleted ? "pointer" : "not-allowed",
                               fontSize: 10,
                               fontWeight: 800,
                               display: "flex",
@@ -1630,16 +1698,18 @@ function TaskGroup({
                             onPointerDown={(e) => e.stopPropagation()}
                             onClick={(e) => {
                               e.stopPropagation();
+                              if (!canSetInProgress) return;
                               onSetTaskStatus(task.id, "NOT_COMPLETED");
                             }}
+                            disabled={!canSetInProgress}
                             style={{
                               width: 18,
                               height: 18,
                               borderRadius: 5,
-                              border: "1px solid #f59e0b",
-                              backgroundColor: task.status === "YELLOW" ? "#f59e0b" : "#ffffff",
-                              color: task.status === "YELLOW" ? "#ffffff" : "#f59e0b",
-                              cursor: "pointer",
+                              border: `1px solid ${canSetInProgress ? "#f59e0b" : blockedStatusColors.border}`,
+                              backgroundColor: canSetInProgress ? (task.status === "YELLOW" ? "#f59e0b" : "#ffffff") : blockedStatusColors.background,
+                              color: canSetInProgress ? (task.status === "YELLOW" ? "#ffffff" : "#f59e0b") : blockedStatusColors.text,
+                              cursor: canSetInProgress ? "pointer" : "not-allowed",
                               fontSize: 10,
                               fontWeight: 800,
                               display: "flex",
@@ -1654,19 +1724,21 @@ function TaskGroup({
                             onPointerDown={(e) => e.stopPropagation()}
                             onClick={(e) => {
                               e.stopPropagation();
+                              if (isTaskDeleteLocked) return;
                               if (!window.confirm(`Delete task "${task.title}"?`)) return;
                               const nextLinks = links.filter((l) => l.from !== task.id && l.to !== task.id);
                               if (nextLinks.length !== links.length) onUpdateLinks(nextLinks);
                               onDeleteTask(task.id);
                             }}
+                            disabled={isTaskDeleteLocked}
                             style={{
                               width: 18,
                               height: 18,
                               borderRadius: 5,
-                              border: "1px solid #fecaca",
-                              backgroundColor: "#ffffff",
-                              color: "#ef4444",
-                              cursor: "pointer",
+                              border: `1px solid ${isTaskDeleteLocked ? blockedStatusColors.border : "#fecaca"}`,
+                              backgroundColor: isTaskDeleteLocked ? blockedStatusColors.background : "#ffffff",
+                              color: isTaskDeleteLocked ? blockedStatusColors.text : "#ef4444",
+                              cursor: isTaskDeleteLocked ? "not-allowed" : "pointer",
                               fontSize: 10,
                               fontWeight: 800,
                               display: "flex",
@@ -1682,22 +1754,27 @@ function TaskGroup({
                       )}
                     </div>
 
-                    <div
-                      style={{
-                        marginTop: 8,
-                        fontSize: 13,
-                        color: notes ? "#4b5563" : "#9ca3af",
-                        fontStyle: notes ? "normal" : "italic",
-                        lineHeight: 1.45,
-                        display: "-webkit-box",
-                        WebkitLineClamp: 4,
-                        WebkitBoxOrient: "vertical",
-                        overflow: "hidden",
-                        whiteSpace: "pre-wrap",
-                      }}
-                    >
-                      {notes || "Add notes…"}
-                    </div>
+                    {(() => {
+                      const subtasks = tasks.filter((t) => t.parentId === task.id);
+                      if (subtasks.length === 0) return null;
+                      return (
+                        <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 3, overflow: "hidden" }}>
+                          {subtasks.slice(0, 5).map((st) => {
+                            const stGlyph = st.status === "GREEN" ? "✓" : st.status === "YELLOW" ? "◐" : "○";
+                            const stColor = st.status === "GREEN" ? "#10b981" : st.status === "YELLOW" ? "#f59e0b" : "#9ca3af";
+                            return (
+                              <div key={st.id} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, lineHeight: 1.3 }}>
+                                <span style={{ color: stColor, fontWeight: 700, flexShrink: 0 }}>{stGlyph}</span>
+                                <span style={{ color: "#4b5563", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{st.title}</span>
+                              </div>
+                            );
+                          })}
+                          {subtasks.length > 5 && (
+                            <div style={{ fontSize: 11, color: "#9ca3af", fontStyle: "italic" }}>+{subtasks.length - 5} more</div>
+                          )}
+                        </div>
+                      );
+                    })()}
 
                     <div
                       style={{
@@ -1772,147 +1849,26 @@ function TaskGroup({
       </div>
 
 	      {taskModalTaskId && (
-	        <div
-	          style={{
-	            position: "fixed",
-	            inset: 0,
-            backgroundColor: "rgba(0, 0, 0, 0.5)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 1200,
-            padding: 16,
-          }}
-          onClick={closeTaskModal}
-        >
-          <div
-            style={{
-              backgroundColor: noteBackgroundColor,
-              backgroundImage: "linear-gradient(180deg, rgba(255,255,255,0.65), rgba(0,0,0,0.02))",
-              borderRadius: 12,
-              padding: 24,
-              width: "100%",
-              maxWidth: 560,
-              maxHeight: "90vh",
-              overflow: "auto",
-              boxShadow: "0 10px 40px rgba(0,0,0,0.30)",
-              border: `2px solid ${noteBorderColor}`,
+          <TaskDetailModal
+            accentColor={noteBorderColor}
+            titleValue={taskModalTitle}
+            notesValue={taskModalNotes}
+            readOnly={taskModalReadOnly}
+            titleReadOnly={taskModalTitleReadOnly}
+            errorMessage={taskModalError}
+            onTitleChange={setTaskModalTitle}
+            onNotesChange={setTaskModalNotes}
+            onClose={closeTaskModal}
+            onSave={saveTaskModal}
+            subtasks={taskModalSubtasks}
+            canAddSubtask={canAddTaskModalSubtask}
+            onAddSubtask={(title) => {
+              if (!taskModalTaskId) return;
+              onAddSubtask(taskModalTaskId, title);
             }}
-            onClick={(e) => e.stopPropagation()}
-	          >
-	            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
-	              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 900, color: "#111" }}>
-	                Task Details
-	              </h3>
-	              <button
-	                onClick={closeTaskModal}
-	                style={{
-	                  padding: "4px 8px",
-                  fontSize: 18,
-                  backgroundColor: "transparent",
-                  border: "none",
-                  cursor: "pointer",
-                  color: "#666",
-                  lineHeight: 1,
-                }}
-                title="Close"
-              >
-                ✕
-              </button>
-            </div>
-
-	            <div style={{ marginBottom: 12 }}>
-	              <label style={{ display: "block", marginBottom: 6, fontWeight: 600, fontSize: 12, color: "#333" }}>
-	                Title
-	              </label>
-	              <input
-	                type="text"
-	                value={taskModalTitle}
-	                onChange={(e) => setTaskModalTitle(e.target.value)}
-	                readOnly={isCompleted || frozenTaskIds.has(taskModalTaskId)}
-	                autoFocus
-	                style={{
-	                  width: "100%",
-	                  padding: 10,
-	                  fontSize: 14,
-	                  backgroundColor: isCompleted || frozenTaskIds.has(taskModalTaskId) ? "rgba(255,255,255,0.55)" : "white",
-	                  border: `1px solid ${noteBorderColor}`,
-	                  borderRadius: 6,
-	                  boxSizing: "border-box",
-	                  outline: "none",
-	                  cursor: isCompleted || frozenTaskIds.has(taskModalTaskId) ? "default" : "text",
-	                }}
-	              />
-	            </div>
-
-            <div style={{ marginBottom: 12 }}>
-              <label style={{ display: "block", marginBottom: 6, fontWeight: 600, fontSize: 12, color: "#333" }}>
-                Notes
-              </label>
-	              <textarea
-	                value={taskModalNotes}
-	                onChange={(e) => setTaskModalNotes(e.target.value)}
-	                readOnly={isCompleted || frozenTaskIds.has(taskModalTaskId)}
-	                rows={14}
-	                style={{
-	                  width: "100%",
-	                  padding: 10,
-	                  fontSize: 13,
-	                  backgroundColor: isCompleted || frozenTaskIds.has(taskModalTaskId) ? "rgba(255,255,255,0.55)" : "white",
-	                  border: `1px solid ${noteBorderColor}`,
-	                  borderRadius: 6,
-	                  boxSizing: "border-box",
-	                  outline: "none",
-	                  resize: "vertical",
-	                  fontFamily: "inherit",
-	                  cursor: isCompleted || frozenTaskIds.has(taskModalTaskId) ? "default" : "text",
-	                }}
-	              />
-	            </div>
-
-            {taskModalError && (
-              <div style={{ marginBottom: 10, color: "#f44336", fontSize: 12, fontWeight: 600 }}>
-                {taskModalError}
-              </div>
-            )}
-
-	            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-	              <button
-	                onClick={closeTaskModal}
-	                style={{
-	                  padding: "8px 12px",
-                  fontSize: 13,
-                  fontWeight: 700,
-                  backgroundColor: "white",
-                  color: "#666",
-                  border: "1px solid #ddd",
-                  borderRadius: 8,
-	                  cursor: "pointer",
-	                }}
-	              >
-	                {isCompleted || frozenTaskIds.has(taskModalTaskId) ? "Close" : "Cancel"}
-	              </button>
-	              {!isCompleted && !frozenTaskIds.has(taskModalTaskId) && (
-	                <button
-	                  onClick={saveTaskModal}
-	                  style={{
-	                    padding: "8px 12px",
-	                    fontSize: 13,
-	                    fontWeight: 800,
-	                    backgroundColor: noteBorderColor,
-	                    color: "white",
-	                    border: "none",
-	                    borderRadius: 8,
-	                    cursor: "pointer",
-	                  }}
-	                >
-	                  Save
-	                </button>
-	              )}
-	            </div>
-	          </div>
-	        </div>
-	      )}
+            autoFocusTitle
+          />
+        )}
     </div>
   );
 }
@@ -2411,6 +2367,8 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
   }, [rawState, currentYM]);
   const plan = getMonth(state, ymSafe);
   const frozenTaskIds = useMemo(() => getFrozenTaskIds(state), [state]);
+  const deleteLockedTaskIds = useMemo(() => getDeleteLockedTaskIds(state), [state]);
+  const titleLockedTaskIds = useMemo(() => getTitleLockedTaskIds(state), [state]);
   const shortName = getShortUserName(getUserName());
   const selectableMilestoneIds = state.grandPlan
     ? getSelectableMilestoneIds(state.grandPlan.milestones)
@@ -2590,6 +2548,10 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
 
   const handleSetTaskStatus = (taskId: string, outcome: "COMPLETED" | "NOT_COMPLETED" | undefined) => {
     mutate((s) => applyTaskStatus(s, taskId, outcome));
+  };
+
+  const handleAddSubtask = (parentTaskId: string, title: string) => {
+    mutate((s) => addSubtask(s, parentTaskId, title).state);
   };
 
   // v8: Milestones pinned to this month (shown as "pins" at the top)
@@ -3458,6 +3420,8 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
 		                    milestoneId={milestone ? milestone.id : null}
 		                    milestoneStatus={milestone?.status}
                         frozenTaskIds={frozenTaskIds}
+                        deleteLockedTaskIds={deleteLockedTaskIds}
+                        titleLockedTaskIds={titleLockedTaskIds}
                         isObjective={Boolean(milestone && primaryMilestoneId === milestone.id)}
                         onSetObjective={milestone ? handleSetObjectiveMilestone : undefined}
 		                    boardSize={boardSize}
@@ -3469,6 +3433,7 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
 			                    onUpdateTask={handleUpdateTask}
 			                    onSetTaskStatus={handleSetTaskStatus}
 			                    onDeleteTask={handleDeleteTask}
+			                    onAddSubtask={handleAddSubtask}
 		                    onMarkMilestoneCompleted={milestone ? handleMarkMilestoneCompleted : undefined}
 		                    hideTitle
 		                    chromeless={!milestone}

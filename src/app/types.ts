@@ -6,7 +6,7 @@ export type TaskStatus = "NONE" | "YELLOW" | "GREEN";
 
 export type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
-export type DayLogEventKind = "SYSTEM" | "REMINDER" | "TASK" | "MEETING" | "FOCUS";
+export type DayLogEventKind = "SYSTEM" | "REMINDER" | "TASK" | "SUBTASK" | "MEETING" | "FOCUS";
 
 export type DayLogEvent = {
   id: string;

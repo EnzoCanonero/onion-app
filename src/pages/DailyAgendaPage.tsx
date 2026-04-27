@@ -44,7 +44,12 @@ import {
   removeDayEvent,
   buildDayHistory,
   getFrozenTaskIds,
+  getDeleteLockedTaskIds,
+  getTitleLockedTaskIds,
   getTodayDate,
+  addSubtask,
+  deleteTask,
+  getSubtasksForTask,
 } from "../app/storage";
 import { checkDateAccess } from "../app/dateAccess";
 import { dayOfWeekFromDateISO, isTemplateScheduledForWeekday } from "../app/weekdays";
@@ -61,6 +66,9 @@ import EmptyMonthPanel from "../components/EmptyMonthPanel";
 import MeetingFormModal from "../components/MeetingFormModal";
 import PastUnactivatedDayPanel from "../components/PastUnactivatedDayPanel";
 import PastUnactivatedMonthPanel from "../components/PastUnactivatedMonthPanel";
+import TaskDetailModal from "../components/TaskDetailModal";
+import DailyTaskCard from "../components/DailyTaskCard";
+import type { TaskSubtaskItem } from "../components/TaskSubtasksSection";
 import FutureDatePanel from "../components/FutureDatePanel";
 import { ReportCard } from "../components/ReportCharts";
 import { getShortUserName, getUserName } from "../app/userProfile";
@@ -346,6 +354,29 @@ function DailyAgendaPageContent({
   const monthTasks = useMemo(() => getTasksForMonth(state, ym), [state, ym]);
   const tasksById = useMemo(() => new Map(allTasks.map((t) => [t.id, t] as const)), [allTasks]);
   const frozenTaskIds = useMemo(() => getFrozenTaskIds(state), [state]);
+  const deleteLockedTaskIds = useMemo(() => getDeleteLockedTaskIds(state), [state]);
+  const titleLockedTaskIds = useMemo(() => getTitleLockedTaskIds(state), [state]);
+
+  const canToggleTaskStatus = (task: TaskNode, outcome: "COMPLETED" | "NOT_COMPLETED") => {
+    if (frozenTaskIds.has(task.id)) return false;
+    const nextStatus =
+      outcome === "COMPLETED"
+        ? task.status === "GREEN" ? "NONE" : "GREEN"
+        : task.status === "YELLOW" ? "NONE" : "YELLOW";
+    const parentTask = task.parentId ? allTasks.find((candidate) => candidate.id === task.parentId) : undefined;
+    if (parentTask?.status === "GREEN" && nextStatus !== "GREEN") return false;
+    const subtasks = allTasks.filter((candidate) => candidate.parentId === task.id);
+    if (subtasks.length > 0) {
+      if (nextStatus === "GREEN" && subtasks.some((subtask) => subtask.status !== "GREEN")) return false;
+      if (
+        nextStatus === "YELLOW" &&
+        !subtasks.some((subtask) => subtask.status === "YELLOW" || subtask.status === "GREEN")
+      ) {
+        return false;
+      }
+    }
+    return true;
+  };
 
   const completedMilestoneIds = useMemo(() => {
     return new Set(
@@ -356,6 +387,7 @@ function DailyAgendaPageContent({
   const selectableTasks = useMemo(() => {
     return monthTasks.filter(
       (t) =>
+        !t.parentId && // Only top-level tasks are selectable
         (t.status !== "GREEN" || day.outcomeByTaskId[t.id] === "COMPLETED") &&
         (!t.linkedMilestoneId || !completedMilestoneIds.has(t.linkedMilestoneId))
     );
@@ -572,6 +604,8 @@ function DailyAgendaPageContent({
   const editingTask = editingTaskId ? tasksById.get(editingTaskId) : undefined;
   const editingTaskAccentColor = getCategoryMeta(state.grandPlan, editingTask?.linkedMilestoneId).color || APP_MAIN_COLOR;
   const editingTaskReadOnly = editingTaskId ? frozenTaskIds.has(editingTaskId) : false;
+  const editingTaskTitleReadOnly = editingTaskId ? titleLockedTaskIds.has(editingTaskId) : false;
+  const editingTaskLocksSubtasks = editingTask?.status === "GREEN";
 
   const wizardSteps = ["Tasks", "Meetings", "Focus Sessions"] as const;
   const wizardStepTitle = wizardSteps[wizardStep] ?? wizardSteps[0];
@@ -706,25 +740,74 @@ function DailyAgendaPageContent({
   // v2: Last working day info (not just previous day)
   const lastWorkingDay = useMemo(() => findLastWorkingDay(state, dateSafe, ym), [state, dateSafe, ym]);
 
+  const getTaskCompletionEventInfo = (stateForLookup: typeof state, taskId: string) => {
+    const task = getTaskById(stateForLookup, taskId) ?? tasksById.get(taskId);
+    const title = task?.title ?? "Task";
+    const parentTask = task?.parentId
+      ? (getTaskById(stateForLookup, task.parentId) ?? tasksById.get(task.parentId))
+      : undefined;
+    const isSubtask = Boolean(task?.parentId);
+    return {
+      eventId: isSubtask ? `subtask:completed:${taskId}` : `task:completed:${taskId}`,
+      legacyEventId: isSubtask ? `task:completed:${taskId}` : undefined,
+      kind: (isSubtask ? "SUBTASK" : "TASK") as DayLogEvent["kind"],
+      text: isSubtask
+        ? `✓ Completed subtask: ${(parentTask?.title ?? "Parent task")} → ${title}`
+        : `✓ Completed task: ${title}`,
+    };
+  };
+
   const setOutcome = (taskId: string, outcome: "COMPLETED" | "NOT_COMPLETED" | undefined) => {
     mutate((s0) => {
       let next = setTaskOutcome(s0, dateSafe, taskId, outcome);
+      const eventInfo = getTaskCompletionEventInfo(next, taskId);
       const { day: nextDay } = getOrCreateDay(next, dateSafe, ym);
       const finalOutcome = nextDay.outcomeByTaskId?.[taskId];
       if (finalOutcome === "COMPLETED") {
-        const title = getTaskById(next, taskId)?.title ?? tasksById.get(taskId)?.title ?? "Task";
+        if (eventInfo.legacyEventId) {
+          next = removeDayEvent(next, dateSafe, eventInfo.legacyEventId);
+        }
         next = upsertDayEvent(next, dateSafe, {
-          id: `task:completed:${taskId}`,
+          id: eventInfo.eventId,
           at: getVirtualTimestamp(),
-          kind: "TASK",
-          text: `✓ Completed: ${title}`,
+          kind: eventInfo.kind,
+          text: eventInfo.text,
         });
       } else {
-        next = removeDayEvent(next, dateSafe, `task:completed:${taskId}`);
+        next = removeDayEvent(next, dateSafe, eventInfo.eventId);
+        if (eventInfo.legacyEventId) {
+          next = removeDayEvent(next, dateSafe, eventInfo.legacyEventId);
+        }
       }
       return next;
     });
   };
+
+  const buildTaskSubtaskItems = (parentTaskId: string): TaskSubtaskItem[] => {
+    return getSubtasksForTask(state, parentTaskId).map((subtask) => {
+      const canDeleteSubtask = !frozenTaskIds.has(subtask.id) && !deleteLockedTaskIds.has(subtask.id);
+      return {
+        id: subtask.id,
+        title: subtask.title,
+        status: subtask.status,
+        showActionCluster: true,
+        canToggleCompleted: canToggleTaskStatus(subtask, "COMPLETED"),
+        canToggleInProgress: canToggleTaskStatus(subtask, "NOT_COMPLETED"),
+        canDelete: canDeleteSubtask,
+        onToggleCompleted: () => setOutcome(subtask.id, "COMPLETED"),
+        onToggleInProgress: () => setOutcome(subtask.id, "NOT_COMPLETED"),
+        onDelete: () => {
+          if (!window.confirm(`Delete subtask "${subtask.title}"?`)) return;
+          mutate((s) => deleteTask(s, subtask.id));
+        },
+      };
+    });
+  };
+
+  const editingTaskSubtasks = editingTaskId
+    ? buildTaskSubtaskItems(editingTaskId)
+    : [];
+  const canAddEditingSubtask = Boolean(editingTaskId && !editingTaskReadOnly && !editingTaskLocksSubtasks);
 
   const handleToggleReminder = (reminder: DailyReminderTemplate) => {
     mutate((s0) => {
@@ -1066,12 +1149,43 @@ function DailyAgendaPageContent({
     const endedAtDate = day.endedAt ? day.endedAt.slice(0, 10) : undefined;
     const closeStatusLabel = day.autoClosed ? "Auto-closed" : "Closed manually";
 
-    const completedTasks = [
+    const activeTaskReports = [
       day.primaryTaskId ? { id: day.primaryTaskId, isPrimary: true } : null,
       ...day.secondaryTaskIds.map((id) => ({ id, isPrimary: false })),
     ]
       .filter((t): t is { id: string; isPrimary: boolean } => t !== null)
-      .filter((t) => day.outcomeByTaskId[t.id] === "COMPLETED");
+      .map((t) => {
+        const task = tasksById.get(t.id) ?? getTaskById(state, t.id);
+        if (!task) return null;
+        const subtasks = getSubtasksForTask(state, t.id).map((subtask) => ({
+          id: subtask.id,
+          title: subtask.title,
+          outcome: day.outcomeByTaskId[subtask.id],
+        })).filter((subtask) => subtask.outcome === "COMPLETED");
+        return {
+          id: t.id,
+          isPrimary: t.isPrimary,
+          title: task.title,
+          linkedMilestoneId: task.linkedMilestoneId,
+          outcome:
+            day.outcomeByTaskId[t.id] === "COMPLETED" || day.outcomeByTaskId[t.id] === "NOT_COMPLETED"
+              ? day.outcomeByTaskId[t.id]
+              : undefined,
+          subtasks,
+        };
+      })
+      .filter(
+        (
+          report
+        ): report is {
+          id: string;
+          isPrimary: boolean;
+          title: string;
+          linkedMilestoneId?: string;
+          outcome: "COMPLETED" | "NOT_COMPLETED" | undefined;
+          subtasks: { id: string; title: string; outcome: "COMPLETED" | "NOT_COMPLETED" | undefined }[];
+        } => report !== null
+      );
 
     const completedSessions = state.sessions.filter((s) => s.date === dateSafe && s.endedAt);
     const logEvents = buildDayHistory(state, dateSafe, plan);
@@ -1080,6 +1194,7 @@ function DailyAgendaPageContent({
       SYSTEM: REPORT_THEME.textMuted,
       REMINDER: APP_MAIN_COLOR,
       TASK: "#16a34a",
+      SUBTASK: "#0f766e",
       MEETING: APP_MAIN_COLOR,
       FOCUS: "#b45309",
     };
@@ -1148,62 +1263,136 @@ function DailyAgendaPageContent({
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 16, marginBottom: 16 }}>
             <ReportCard title="Tasks">
-              {completedTasks.length === 0 ? (
+              {activeTaskReports.length === 0 ? (
                 <div style={{ fontSize: 12, color: REPORT_THEME.textMuted, fontStyle: "italic" }}>No tasks logged</div>
               ) : (
                 <div style={{ display: "grid", gap: 10 }}>
-                  {completedTasks.map((t) => {
-                    const task = tasksById.get(t.id);
-                    const title = task?.title ?? "Unknown task";
-                    const notes = (task?.notes ?? "").trim();
-                    const categoryColor = getCategoryMeta(state.grandPlan, task?.linkedMilestoneId).color;
+                  {activeTaskReports.map((taskReport) => {
+                    const categoryColor = getCategoryMeta(state.grandPlan, taskReport.linkedMilestoneId).color;
+                    const getStatusUi = (outcome: "COMPLETED" | "NOT_COMPLETED" | undefined) => {
+                      if (outcome === "COMPLETED") {
+                        return {
+                          label: "Completed",
+                          color: "#16a34a",
+                          background: "#ecfdf5",
+                        };
+                      }
+                      if (outcome === "NOT_COMPLETED") {
+                        return {
+                          label: "Work in progress",
+                          color: "#d97706",
+                          background: "#fffbeb",
+                        };
+                      }
+                      return null;
+                    };
+                    const taskStatusUi = getStatusUi(taskReport.outcome);
                     return (
                       <div
-                        key={t.id}
+                        key={taskReport.id}
                         style={{
-                          padding: "10px 12px",
-                          backgroundColor: t.isPrimary ? "#fff8e1" : "white",
+                          padding: "12px 14px",
+                          backgroundColor: taskReport.isPrimary ? "#fff8e1" : "white",
                           border: `1px solid ${REPORT_THEME.borderLight}`,
                           borderLeft: `4px solid ${categoryColor}`,
                           borderRadius: 12,
-                          display: "flex",
-                          alignItems: "flex-start",
-                          justifyContent: "space-between",
+                          display: "grid",
                           gap: 10,
                         }}
                       >
-                        <div style={{ flex: 1, minWidth: 0 }}>
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "minmax(0, 1fr) auto",
+                            gap: 12,
+                            alignItems: "start",
+                          }}
+                        >
                           <div
                             style={{
-                              fontSize: 13,
-                              fontWeight: 800,
-                              color: REPORT_THEME.textPrimary,
                               minWidth: 0,
-                              wordBreak: "break-word",
                             }}
                           >
-                            {title}
-                          </div>
-                          {notes ? (
                             <div
                               style={{
-                                marginTop: 6,
-                                fontSize: 12,
-                                lineHeight: 1.55,
-                                color: REPORT_THEME.textSecondary,
-                                whiteSpace: "pre-wrap",
+                                fontSize: 13,
+                                fontWeight: 900,
+                                color: REPORT_THEME.textPrimary,
                                 wordBreak: "break-word",
                               }}
                             >
-                              {notes}
+                              {taskReport.title}
                             </div>
+                          </div>
+                          {taskStatusUi ? (
+                            <span
+                              style={{
+                                padding: "4px 8px",
+                                borderRadius: 999,
+                                backgroundColor: taskStatusUi.background,
+                                fontSize: 12,
+                                fontWeight: 900,
+                                color: taskStatusUi.color,
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {taskStatusUi.label}
+                            </span>
                           ) : null}
                         </div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, flex: "0 0 auto" }}>
-                          <span style={{ fontSize: 12, fontWeight: 900, color: "#16a34a" }}>
-                            Completed
-                          </span>
-                        </div>
+
+                        {taskReport.subtasks.length > 0 ? (
+                          <div
+                            style={{
+                              display: "grid",
+                              gap: 6,
+                              paddingTop: 8,
+                              borderTop: `1px solid ${REPORT_THEME.borderLight}`,
+                            }}
+                          >
+                            {taskReport.subtasks.map((subtask) => {
+                              const subtaskStatusUi = getStatusUi(subtask.outcome);
+                              return (
+                                <div
+                                  key={subtask.id}
+                                  style={{
+                                    display: "grid",
+                                    gridTemplateColumns: "minmax(0, 1fr) auto",
+                                    gap: 12,
+                                    alignItems: "center",
+                                  }}
+                                >
+                                  <div
+                                    style={{
+                                      fontSize: 12,
+                                      color: REPORT_THEME.textPrimary,
+                                      minWidth: 0,
+                                      wordBreak: "break-word",
+                                      paddingLeft: 10,
+                                    }}
+                                  >
+                                    ↳ {subtask.title}
+                                  </div>
+                                  {subtaskStatusUi ? (
+                                    <span
+                                      style={{
+                                        padding: "3px 8px",
+                                        borderRadius: 999,
+                                        backgroundColor: subtaskStatusUi.background,
+                                        fontSize: 11,
+                                        fontWeight: 800,
+                                        color: subtaskStatusUi.color,
+                                        whiteSpace: "nowrap",
+                                      }}
+                                    >
+                                      {subtaskStatusUi.label}
+                                    </span>
+                                  ) : null}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : null}
                       </div>
                     );
                   })}
@@ -1814,146 +2003,25 @@ function DailyAgendaPageContent({
           )}
 
           {editingTaskId && (
-            <div
-              style={{
-                position: "fixed",
-                inset: 0,
-                backgroundColor: "rgba(0, 0, 0, 0.5)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                zIndex: 1200,
-                padding: 16,
+            <TaskDetailModal
+              accentColor={editingTaskAccentColor}
+              titleValue={editingTaskTitle}
+              notesValue={editingTaskNotes}
+              readOnly={editingTaskReadOnly}
+              titleReadOnly={editingTaskTitleReadOnly}
+              errorMessage={editingTaskError}
+              onTitleChange={setEditingTaskTitle}
+              onNotesChange={setEditingTaskNotes}
+              onClose={closeTaskEditor}
+              onSave={saveTaskEditor}
+              subtasks={editingTaskSubtasks}
+              canAddSubtask={canAddEditingSubtask}
+              onAddSubtask={(title) => {
+                if (!editingTaskId) return;
+                mutate((s) => addSubtask(s, editingTaskId, title).state);
               }}
-              onClick={closeTaskEditor}
-            >
-              <div
-                style={{
-                  backgroundColor: "white",
-                  backgroundImage: "linear-gradient(180deg, rgba(255,255,255,0.65), rgba(0,0,0,0.02))",
-                  borderRadius: 12,
-                  padding: 24,
-                  width: "100%",
-                  maxWidth: 560,
-                  maxHeight: "90vh",
-                  overflow: "auto",
-                  boxShadow: "0 10px 40px rgba(0,0,0,0.30)",
-                  border: `2px solid ${editingTaskAccentColor}`,
-                }}
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
-                  <h3 style={{ margin: 0, fontSize: 16, fontWeight: 900, color: "#111" }}>
-                    Task Details
-                  </h3>
-                  <button
-                    onClick={closeTaskEditor}
-                    style={{
-                      padding: "4px 8px",
-                      fontSize: 18,
-                      backgroundColor: "transparent",
-                      border: "none",
-                      cursor: "pointer",
-                      color: "#666",
-                      lineHeight: 1,
-                    }}
-                    title="Close"
-                  >
-                    ✕
-                  </button>
-                </div>
-
-                <div style={{ marginBottom: 12 }}>
-                  <label style={{ display: "block", marginBottom: 6, fontWeight: 600, fontSize: 12, color: "#333" }}>
-                    Title
-                  </label>
-                  <input
-                    type="text"
-                    value={editingTaskTitle}
-                    onChange={(e) => setEditingTaskTitle(e.target.value)}
-                    readOnly={editingTaskReadOnly}
-                    autoFocus
-                    style={{
-                      width: "100%",
-                      padding: 10,
-                      fontSize: 14,
-                      backgroundColor: editingTaskReadOnly ? "rgba(255,255,255,0.55)" : "white",
-                      border: `1px solid ${editingTaskAccentColor}`,
-                      borderRadius: 6,
-                      boxSizing: "border-box",
-                      outline: "none",
-                      cursor: editingTaskReadOnly ? "default" : "text",
-                    }}
-                  />
-                </div>
-
-                <div style={{ marginBottom: 12 }}>
-                  <label style={{ display: "block", marginBottom: 6, fontWeight: 600, fontSize: 12, color: "#333" }}>
-                    Notes
-                  </label>
-                  <textarea
-                    value={editingTaskNotes}
-                    onChange={(e) => setEditingTaskNotes(e.target.value)}
-                    readOnly={editingTaskReadOnly}
-                    rows={14}
-                    style={{
-                      width: "100%",
-                      padding: 10,
-                      fontSize: 13,
-                      backgroundColor: editingTaskReadOnly ? "rgba(255,255,255,0.55)" : "white",
-                      border: `1px solid ${editingTaskAccentColor}`,
-                      borderRadius: 6,
-                      boxSizing: "border-box",
-                      outline: "none",
-                      resize: "vertical",
-                      fontFamily: "inherit",
-                      cursor: editingTaskReadOnly ? "default" : "text",
-                    }}
-                  />
-                </div>
-
-                {editingTaskError ? (
-                  <div style={{ marginBottom: 10, color: "#f44336", fontSize: 12, fontWeight: 600 }}>
-                    {editingTaskError}
-                  </div>
-                ) : null}
-
-                <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-                  <button
-                    onClick={closeTaskEditor}
-                    style={{
-                      padding: "8px 12px",
-                      fontSize: 13,
-                      fontWeight: 700,
-                      backgroundColor: "white",
-                      color: "#666",
-                      border: "1px solid #ddd",
-                      borderRadius: 8,
-                      cursor: "pointer",
-                    }}
-                  >
-                    {editingTaskReadOnly ? "Close" : "Cancel"}
-                  </button>
-                  {!editingTaskReadOnly && (
-                    <button
-                      onClick={saveTaskEditor}
-                      style={{
-                        padding: "8px 12px",
-                        fontSize: 13,
-                        fontWeight: 800,
-                        backgroundColor: editingTaskAccentColor,
-                        color: "white",
-                        border: "none",
-                        borderRadius: 8,
-                        cursor: "pointer",
-                      }}
-                    >
-                      Save
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
+              autoFocusTitle
+            />
           )}
 
           {/* Selected Tasks Display */}
@@ -2030,178 +2098,42 @@ function DailyAgendaPageContent({
                       <div style={{ display: "grid", gap: 8 }}>
                         {group.items.map((item) => {
                           const accentColor = getCategoryMeta(state.grandPlan, item.task.linkedMilestoneId).color;
-                          const isCompleted = item.task.status === "GREEN";
-                          const isInProgress = item.task.status === "YELLOW";
                           const isPrimary = item.role === "primary";
                           const isTaskFrozen = frozenTaskIds.has(item.taskId);
-                          const taskNotes = (item.task.notes ?? "").trim();
+                          const canSetCompleted = canToggleTaskStatus(item.task, "COMPLETED");
+                          const canSetInProgress = canToggleTaskStatus(item.task, "NOT_COMPLETED");
+                          const taskSubtasks = buildTaskSubtaskItems(item.taskId).filter(
+                            (subtask) => !hideCompletedTasks || subtask.status !== "GREEN"
+                          );
+                          const canAddTaskSubtask = !isTaskFrozen && item.task.status !== "GREEN";
                           return (
-                            <div
+                            <DailyTaskCard
                               key={item.taskId}
-                              role={!isTaskFrozen ? "button" : undefined}
-                              tabIndex={!isTaskFrozen ? 0 : undefined}
-                              onClick={!isTaskFrozen ? () => openTaskEditor(item.task) : undefined}
-                              onKeyDown={
-                                !isTaskFrozen
-                                  ? (event) => {
-                                      if (event.key !== "Enter" && event.key !== " ") return;
-                                      event.preventDefault();
-                                      openTaskEditor(item.task);
+                              task={item.task}
+                              accentColor={accentColor}
+                              isPrimary={isPrimary}
+                              frozen={isTaskFrozen}
+                              canSetCompleted={canSetCompleted}
+                              canSetInProgress={canSetInProgress}
+                              canSwitchPrimaryTask={isPrimary ? canSwitchPrimaryTask : false}
+                              onOpen={!isTaskFrozen ? () => openTaskEditor(item.task) : undefined}
+                              onToggleCompleted={() => setOutcome(item.taskId, "COMPLETED")}
+                              onToggleInProgress={() => setOutcome(item.taskId, "NOT_COMPLETED")}
+                              onSwitchPrimary={
+                                isPrimary
+                                  ? () => {
+                                      if (!canSwitchPrimaryTask) return;
+                                      setShowPrimarySwitchModal(true);
                                     }
                                   : undefined
                               }
-                              style={{
-                                border: "2px solid #eee",
-                                borderLeft: `6px solid ${accentColor}`,
-                                borderRadius: 12,
-                                padding: 16,
-                                backgroundColor: isPrimary ? "#fff8e1" : "rgba(255,255,255,0.92)",
-                                boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
-                                cursor: !isTaskFrozen ? "pointer" : "default",
-                              }}
-                            >
-                              <div style={{ marginBottom: 10 }}>
-                                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
-                                  <div style={{ flex: 1, minWidth: 0 }}>
-                                    {isPrimary ? (
-                                      <div
-                                        style={{
-                                          display: "inline-flex",
-                                          alignItems: "center",
-                                          gap: 6,
-                                          marginBottom: 6,
-                                          padding: "3px 8px",
-                                          borderRadius: 999,
-                                          backgroundColor: "rgba(245, 158, 11, 0.14)",
-                                          color: "#9a6700",
-                                          fontSize: 11,
-                                          fontWeight: 800,
-                                          letterSpacing: 0.2,
-                                          textTransform: "uppercase",
-                                        }}
-                                      >
-                                        Primary
-                                      </div>
-                                    ) : null}
-                                    <div style={{ fontSize: isPrimary ? 18 : 15, fontWeight: isPrimary ? 700 : 600 }}>
-                                      {item.task.title}
-                                    </div>
-                                    {taskNotes ? (
-                                      <div
-                                        style={{
-                                          marginTop: 8,
-                                          fontSize: isPrimary ? 13 : 12,
-                                          lineHeight: 1.6,
-                                          color: "#64748b",
-                                          whiteSpace: "pre-wrap",
-                                          wordBreak: "break-word",
-                                        }}
-                                      >
-                                        {taskNotes}
-                                      </div>
-                                    ) : null}
-                                  </div>
-
-                                  {item.task.status !== "GREEN" ? (
-                                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-                                      {isPrimary ? (
-                                        <button
-                                          onClick={(event) => {
-                                            event.stopPropagation();
-                                            if (!canSwitchPrimaryTask) return;
-                                            setShowPrimarySwitchModal(true);
-                                          }}
-                                          disabled={!canSwitchPrimaryTask}
-                                          style={{
-                                            width: 28,
-                                            height: 28,
-                                            borderRadius: 7,
-                                            border: "1px solid #cbd5e1",
-                                            backgroundColor: canSwitchPrimaryTask ? "white" : "#f3f4f6",
-                                            color: canSwitchPrimaryTask ? "#475569" : "#9ca3af",
-                                            cursor: canSwitchPrimaryTask ? "pointer" : "not-allowed",
-                                            fontSize: 14,
-                                            fontWeight: 800,
-                                            display: "flex",
-                                            alignItems: "center",
-                                            justifyContent: "center",
-                                          }}
-                                          title={canSwitchPrimaryTask ? "Change primary task" : "No secondary task available to switch"}
-                                        >
-                                          ↻
-                                        </button>
-                                      ) : null}
-                                      {!isPrimary ? (
-                                        <button
-                                          onClick={(event) => {
-                                            event.stopPropagation();
-                                            handleRemoveTaskFromSelection(item.taskId);
-                                          }}
-                                          style={{
-                                            width: 28,
-                                            height: 28,
-                                            borderRadius: 7,
-                                            border: "1px solid #fecaca",
-                                            backgroundColor: "white",
-                                            color: "#ef4444",
-                                            cursor: "pointer",
-                                            fontSize: 14,
-                                            fontWeight: 800,
-                                            display: "flex",
-                                            alignItems: "center",
-                                            justifyContent: "center",
-                                          }}
-                                          title="Remove from daily selection"
-                                        >
-                                          ✕
-                                        </button>
-                                      ) : null}
-                                    </div>
-                                  ) : null}
-                                </div>
-                              </div>
-
-                              {!isTaskFrozen ? (
-                                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                                  <button
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      setOutcome(item.taskId, "COMPLETED");
-                                    }}
-                                    style={{
-                                      padding: isPrimary ? "6px 12px" : "4px 10px",
-                                      fontSize: isPrimary ? 13 : 12,
-                                      fontWeight: 600,
-                                      backgroundColor: isCompleted ? "#4caf50" : "white",
-                                      color: isCompleted ? "white" : "#4caf50",
-                                      border: `${isPrimary ? 2 : 1.5}px solid #4caf50`,
-                                      borderRadius: isPrimary ? 6 : 4,
-                                      cursor: "pointer",
-                                    }}
-                                  >
-                                    ✓ Completed
-                                  </button>
-                                  <button
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      setOutcome(item.taskId, "NOT_COMPLETED");
-                                    }}
-                                    style={{
-                                      padding: isPrimary ? "6px 12px" : "4px 10px",
-                                      fontSize: isPrimary ? 13 : 12,
-                                      fontWeight: 600,
-                                      backgroundColor: isInProgress ? "#ff9800" : "white",
-                                      color: isInProgress ? "white" : "#ff9800",
-                                      border: `${isPrimary ? 2 : 1.5}px solid #ff9800`,
-                                      borderRadius: isPrimary ? 6 : 4,
-                                      cursor: "pointer",
-                                    }}
-                                  >
-                                    ⏳ {isPrimary ? "Work in Progress" : "In Progress"}
-                                  </button>
-                                </div>
-                              ) : null}
-                            </div>
+                              onRemoveFromSelection={
+                                !isPrimary ? () => handleRemoveTaskFromSelection(item.taskId) : undefined
+                              }
+                              subtasks={taskSubtasks}
+                              canAddSubtask={canAddTaskSubtask}
+                              onAddSubtask={(title) => mutate((s) => addSubtask(s, item.taskId, title).state)}
+                            />
                           );
                         })}
                       </div>
