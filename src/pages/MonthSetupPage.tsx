@@ -2399,9 +2399,20 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
 
   useEffect(() => {
     if (!didAutoClose) return;
-    saveState(state);
+    // Re-derive from fresh storage: the memoized `state` may be stale if another
+    // component saved since this page's last loadState, and saving it directly
+    // would roll those writes back.
+    let next = loadState();
+    let changed = false;
+    Object.values(next.months).forEach((plan0) => {
+      if (plan0.ym < currentYM && !plan0.isClosed) {
+        next = autoCloseMonth(next, plan0.ym);
+        changed = true;
+      }
+    });
+    if (changed) saveState(next);
     setTick((t) => t + 1);
-  }, [didAutoClose, state]);
+  }, [didAutoClose, currentYM]);
 
   const previousYM = useMemo(() => getPreviousYM(ymSafe), [ymSafe]);
   const previousPlan = previousYM ? getMonth(state, previousYM) : undefined;

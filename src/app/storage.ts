@@ -22,6 +22,9 @@ import { getStorageBackend } from "./storageBackend";
 
 export const STATE_KEY = "onion-app.state";
 const KEY = STATE_KEY;
+export const STATE_BACKUP_KEY = `${STATE_KEY}.backup`;
+const BACKUP_DATE_KEY = `${STATE_KEY}.backupAt`;
+export const STATE_CORRUPT_KEY = `${STATE_KEY}.corrupt`;
 
 const DEFAULT_DAILY_REMINDER_TEMPLATES: DailyReminderTemplate[] = [
   { id: "rem_email", text: "Check your email 📧" },
@@ -73,12 +76,45 @@ const emptyState: AppStateV0 = {
   dailyReminderTemplates: DEFAULT_DAILY_REMINDER_TEMPLATES,
 };
 
-export function loadState(): AppStateV0 {
+// A corrupt or unrecognized state file must never be left in place to be silently
+// overwritten by the next saveState: preserve a copy under a separate key first.
+function quarantineCorruptState(raw: string, reason: unknown) {
+  console.error(
+    `FocusTree could not read the saved state; keeping a recovery copy under "${STATE_CORRUPT_KEY}".`,
+    reason
+  );
   try {
-    const raw = getStorageBackend().getItem(KEY);
-    if (!raw) return emptyState;
-    const parsed = JSON.parse(raw) as AppStateV0;
-    if (parsed?.version !== 0) return emptyState;
+    const backend = getStorageBackend();
+    if (backend.getItem(STATE_CORRUPT_KEY) !== raw) {
+      backend.setItem(STATE_CORRUPT_KEY, raw);
+    }
+  } catch {
+    // recovery is best effort — never let it break loading
+  }
+}
+
+export function loadState(): AppStateV0 {
+  let raw: string | null = null;
+  try {
+    raw = getStorageBackend().getItem(KEY);
+  } catch {
+    return emptyState;
+  }
+  if (!raw) return emptyState;
+
+  let parsed: AppStateV0;
+  try {
+    parsed = JSON.parse(raw) as AppStateV0;
+  } catch (err) {
+    quarantineCorruptState(raw, err);
+    return emptyState;
+  }
+  if (parsed?.version !== 0) {
+    quarantineCorruptState(raw, `unsupported state version: ${(parsed as { version?: unknown })?.version}`);
+    return emptyState;
+  }
+
+  try {
     let didNormalizeTaskNotes = false;
     let didMigrateTaskArchive = false;
     let didMigrateMeetingSeries = false;
@@ -120,8 +156,10 @@ export function loadState(): AppStateV0 {
       fallbackCreatedAt: string | undefined
     ): TaskNode | null => {
       if (!task || typeof task !== "object") return null;
-      const title = typeof task.title === "string" ? task.title.trim() : "";
-      if (!title) return null;
+      const rawTitle = typeof task.title === "string" ? task.title.trim() : "";
+      // Never silently delete a task over a blank title — rename it instead.
+      if (!rawTitle) didMigrateTaskArchive = true;
+      const title = rawTitle || "Untitled task";
       const prevDescription = task.description;
       const prevNotes = task.notes;
       const legacyDescription = typeof task.description === "string" ? task.description.trim() : "";
@@ -397,11 +435,26 @@ export function loadState(): AppStateV0 {
       }
     }
 
+    // A task id must live in exactly one scope; duplicates from legacy data make
+    // edits ambiguous (findTaskBucketById checks standalone first, so it wins).
+    const claimedTaskIds = new Set<string>(taskMapsByScope.get("standalone")?.keys() ?? []);
+    taskMapsByScope.forEach((tasksById, scopeKey) => {
+      if (scopeKey === "standalone") return;
+      Array.from(tasksById.keys()).forEach((taskId) => {
+        if (claimedTaskIds.has(taskId)) {
+          tasksById.delete(taskId);
+          didMigrateTaskArchive = true;
+        } else {
+          claimedTaskIds.add(taskId);
+        }
+      });
+    });
+
     const nextTasksByMilestoneId: Record<string, TaskNode[]> = {};
     taskMapsByScope.forEach((tasksById, scopeKey) => {
       const tasks = Array.from(tasksById.values());
       const milestoneId = getTaskScopeMilestoneId(scopeKey);
-      if (milestoneId) nextTasksByMilestoneId[milestoneId] = tasks;
+      if (milestoneId && tasks.length > 0) nextTasksByMilestoneId[milestoneId] = tasks;
     });
     parsed.taskArchive = {
       standaloneTasks: Array.from(taskMapsByScope.get("standalone")?.values() ?? []),
@@ -435,13 +488,46 @@ export function loadState(): AppStateV0 {
     }
 
     return parsed;
-  } catch {
+  } catch (err) {
+    quarantineCorruptState(raw, err);
     return emptyState;
   }
 }
 
+let lastBackupDate: string | null = null;
+let didWarnSaveFailure = false;
+
+// Rolling daily backup: before the first overwrite of a calendar day, copy the
+// previous state aside so one bad save/migration can't destroy everything.
+function backupCurrentStateOncePerDay() {
+  const today = new Date().toISOString().slice(0, 10);
+  if (lastBackupDate === today) return;
+  lastBackupDate = today;
+  try {
+    const backend = getStorageBackend();
+    if (backend.getItem(BACKUP_DATE_KEY) === today) return;
+    const current = backend.getItem(KEY);
+    if (current === null) return;
+    backend.setItem(STATE_BACKUP_KEY, current);
+    backend.setItem(BACKUP_DATE_KEY, today);
+  } catch {
+    // backup is best effort
+  }
+}
+
 export function saveState(state: AppStateV0) {
-  getStorageBackend().setItem(KEY, JSON.stringify(state));
+  backupCurrentStateOncePerDay();
+  try {
+    getStorageBackend().setItem(KEY, JSON.stringify(state));
+  } catch (err) {
+    console.error("Failed to persist app state", err);
+    if (!didWarnSaveFailure && typeof window !== "undefined") {
+      didWarnSaveFailure = true;
+      window.alert(
+        "FocusTree could not save your latest changes (storage may be full or unavailable). Recent edits may be lost when the app closes."
+      );
+    }
+  }
 }
 
 export function getMonth(state: AppStateV0, ym: YM): MonthPlan | undefined {
@@ -510,6 +596,9 @@ export function updateSession(state: AppStateV0, sessionId: string, patch: Parti
 }
 
 export function makeId(prefix: string) {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `${prefix}_${crypto.randomUUID()}`;
+  }
   return `${prefix}_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
 }
 
@@ -584,7 +673,14 @@ export function getTaskById(state: AppStateV0, taskId: string): TaskNode | undef
   return findTaskBucketById(archive, taskId)?.task;
 }
 
+// Frozen ids depend only on `days`, which is replaced (never mutated) on every
+// day update, so the container's identity is a valid cache key. Guards call this
+// per task; without the cache it rescans every day entry each time.
+const frozenTaskIdsCacheByDays = new WeakMap<object, Set<string>>();
+
 export function getFrozenTaskIds(state: AppStateV0): Set<string> {
+  const cached = frozenTaskIdsCacheByDays.get(state.days);
+  if (cached) return cached;
   const frozenTaskIds = new Set<string>();
   Object.values(state.days).forEach((day) => {
     if (!day.isClosed) return;
@@ -592,6 +688,7 @@ export function getFrozenTaskIds(state: AppStateV0): Set<string> {
       if (outcome === "COMPLETED") frozenTaskIds.add(taskId);
     });
   });
+  frozenTaskIdsCacheByDays.set(state.days, frozenTaskIds);
   return frozenTaskIds;
 }
 
@@ -599,10 +696,16 @@ export function isTaskFrozen(state: AppStateV0, taskId: string): boolean {
   return getFrozenTaskIds(state).has(taskId);
 }
 
-function buildHistoricalTaskProtection(state: AppStateV0): {
+type HistoricalTaskProtection = {
   descendantLockedTaskIds: Set<string>;
   directParentLockedTaskIds: Set<string>;
-} {
+};
+
+const historicalProtectionCache = new WeakMap<AppStateV0, HistoricalTaskProtection>();
+
+function buildHistoricalTaskProtection(state: AppStateV0): HistoricalTaskProtection {
+  const cached = historicalProtectionCache.get(state);
+  if (cached) return cached;
   const tasks = getAllTasks(state);
   const tasksById = new Map(tasks.map((task) => [task.id, task] as const));
   const frozenTaskIds = getFrozenTaskIds(state);
@@ -619,7 +722,9 @@ function buildHistoricalTaskProtection(state: AppStateV0): {
     }
   });
 
-  return { descendantLockedTaskIds, directParentLockedTaskIds };
+  const protection = { descendantLockedTaskIds, directParentLockedTaskIds };
+  historicalProtectionCache.set(state, protection);
+  return protection;
 }
 
 export function hasHistoricallyCompletedDescendant(state: AppStateV0, taskId: string): boolean {
@@ -758,12 +863,12 @@ export function addSubtask(
   state: AppStateV0,
   parentTaskId: string,
   title: string
-): { state: AppStateV0; task: TaskNode } {
+): { state: AppStateV0; task: TaskNode | null } {
   const archive = getTaskArchive(state);
   const parentBucket = findTaskBucketById(archive, parentTaskId);
-  if (!parentBucket) return { state, task: { id: "", title, parentId: parentTaskId, status: "NONE" } };
+  if (!parentBucket) return { state, task: null };
   if (isTaskFrozen(state, parentTaskId) || parentBucket.task.status === "GREEN") {
-    return { state, task: { id: "", title, parentId: parentTaskId, status: "NONE" } };
+    return { state, task: null };
   }
 
   const subtask: TaskNode = {
@@ -1022,7 +1127,9 @@ export function setFocusTemplateMilestoneForDay(
 export function updateTask(
   state: AppStateV0,
   taskId: string,
-  updates: Partial<Pick<TaskNode, "title" | "notes" | "boardX" | "boardY" | "boardW" | "boardH" | "parentId" | "status">>
+  // Status is deliberately not editable here: applyTaskStatus/setTaskOutcome own
+  // the status invariants (subtask rules, completedAt, milestone auto-progress).
+  updates: Partial<Pick<TaskNode, "title" | "notes" | "boardX" | "boardY" | "boardW" | "boardH" | "parentId">>
 ): AppStateV0 {
   if (isTaskFrozen(state, taskId)) return state;
   const archive = getTaskArchive(state);
@@ -1035,6 +1142,17 @@ export function updateTask(
     isParentOfHistoricallyCompletedSubtask(state, taskId)
   ) {
     return state;
+  }
+
+  // A new parent must exist in the same bucket and must not create a cycle;
+  // anything else would orphan the task (no root, no reachable parent).
+  if (updates.parentId != null && updates.parentId !== existingTask.parentId) {
+    if (!existingBucket.tasks.some((t) => t.id === updates.parentId)) return state;
+    let checkParent: string | null = updates.parentId;
+    while (checkParent) {
+      if (checkParent === taskId) return state;
+      checkParent = existingBucket.tasks.find((t) => t.id === checkParent)?.parentId ?? null;
+    }
   }
 
   const nextTasks = existingBucket.tasks.map((task) => (task.id === taskId ? { ...task, ...updates } : task));
@@ -1075,7 +1193,7 @@ export function deleteTask(
     (link) => !toDelete.has(link.from) && !toDelete.has(link.to)
   );
 
-  return updateTaskArchive(state, (current) => {
+  const next = updateTaskArchive(state, (current) => {
     const nextArchive = setTaskBucket(current, existingBucket.milestoneId, nextTasks);
     return {
       ...nextArchive,
@@ -1085,6 +1203,31 @@ export function deleteTask(
       },
     };
   });
+
+  // Scrub day references so deleted ids don't linger in selections and outcomes.
+  // Frozen tasks never reach this point, so closed-day history stays intact.
+  let daysChanged = false;
+  const cleanedDays: Record<string, DayEntry> = {};
+  for (const [date, day] of Object.entries(next.days)) {
+    const primaryDeleted = day.primaryTaskId !== undefined && toDelete.has(day.primaryTaskId);
+    const nextSecondary = day.secondaryTaskIds.filter((id) => !toDelete.has(id));
+    const staleOutcomeIds = Object.keys(day.outcomeByTaskId ?? {}).filter((id) => toDelete.has(id));
+    if (!primaryDeleted && nextSecondary.length === day.secondaryTaskIds.length && staleOutcomeIds.length === 0) {
+      cleanedDays[date] = day;
+      continue;
+    }
+    daysChanged = true;
+    const nextOutcomes = { ...(day.outcomeByTaskId ?? {}) };
+    staleOutcomeIds.forEach((id) => delete nextOutcomes[id]);
+    cleanedDays[date] = {
+      ...day,
+      primaryTaskId: primaryDeleted ? undefined : day.primaryTaskId,
+      secondaryTaskIds: nextSecondary,
+      outcomeByTaskId: nextOutcomes,
+    };
+  }
+
+  return daysChanged ? { ...next, days: cleanedDays } : next;
 }
 
 export function reorderTask(
