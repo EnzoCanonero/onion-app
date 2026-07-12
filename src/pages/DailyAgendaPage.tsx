@@ -254,9 +254,15 @@ function DailyAgendaPageContent({
     return () => ro.disconnect();
   }, [day.isWorkingDay, day.isClosed, dateSafe]);
 
-  // Persist newly created day entry (only once)
+  // Persist newly created day entry (only once). Re-derive from fresh storage:
+  // the memoized rawState can be stale on re-renders that don't bump `tick`, and
+  // saving it directly would repeatedly roll back writes made elsewhere.
   if (withDay !== rawState && !shouldAutoClose) {
-    saveState(withDay);
+    const current = loadState();
+    const { state: currentWithDay } = getOrCreateDay(current, dateSafe, ym);
+    if (currentWithDay !== current) {
+      saveState(currentWithDay);
+    }
   }
 
   useEffect(() => {
