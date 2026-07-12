@@ -12,7 +12,7 @@ import {
   type DonutSlice,
   type StackedDatum,
 } from "../components/ReportCharts";
-import { formatDateLabel, getCategoryMeta, listMonthsInRange, UNKNOWN_CATEGORY, UNCATEGORIZED_CATEGORY } from "../app/reporting";
+import { formatDateLabel, getCategoryMeta, UNKNOWN_CATEGORY, UNCATEGORIZED_CATEGORY } from "../app/reporting";
 import { dayOfWeekFromDateISO, isTemplateScheduledForWeekday } from "../app/weekdays";
 import {
   loadState,
@@ -659,9 +659,6 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
     const weekStartsRaw = listWeekStartsInRange(startDate, endDate);
     const weeks = weekStartsRaw.length > 0 ? weekStartsRaw : ([weekStartMonday(startDate) ?? startDate] as DateISO[]);
     const xLabelEvery = weeks.length > 40 ? 4 : weeks.length > 24 ? 3 : 2;
-
-    const monthsInPlan = listMonthsInRange(grandPlan.startMonth, actualEndMonth);
-    const months = monthsInPlan.length > 0 ? monthsInPlan : ([grandPlan.startMonth] as YM[]);
 
     const tasksInPlan = getAllTasks(state);
     const tasksTotalCount = tasksInPlan.length;

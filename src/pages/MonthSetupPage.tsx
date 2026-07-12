@@ -318,7 +318,7 @@ function TaskGroup({
       });
 
     return sortedCategories
-      .map((category) => {
+      .map((category): { category: Category | null; milestones: MilestoneNode[] } | null => {
         const milestones = milestoneNavigation.pinnedMilestones
           .filter((milestone) => milestone.categoryId === category.id)
           .slice()
@@ -332,7 +332,7 @@ function TaskGroup({
         if (milestones.length === 0) return null;
         return { category, milestones };
       })
-      .filter((group): group is { category: Category; milestones: MilestoneNode[] } => group !== null)
+      .filter((group): group is { category: Category | null; milestones: MilestoneNode[] } => group !== null)
       .concat(
         (() => {
           const uncategorizedMilestones = milestoneNavigation.pinnedMilestones
@@ -373,13 +373,13 @@ function TaskGroup({
       let w = typeof task.boardW === "number" && Number.isFinite(task.boardW) ? task.boardW : DEFAULT_W;
       let h = typeof task.boardH === "number" && Number.isFinite(task.boardH) ? task.boardH : DEFAULT_H;
 
-      const hasX = typeof task.boardX === "number" && Number.isFinite(task.boardX);
-      const hasY = typeof task.boardY === "number" && Number.isFinite(task.boardY);
+      const boardX = typeof task.boardX === "number" && Number.isFinite(task.boardX) ? task.boardX : undefined;
+      const boardY = typeof task.boardY === "number" && Number.isFinite(task.boardY) ? task.boardY : undefined;
 
-      let x = hasX ? task.boardX : START_X + (unpositionedIdx % cols) * (DEFAULT_W + GAP);
-      let y = hasY ? task.boardY : START_Y + Math.floor(unpositionedIdx / cols) * (DEFAULT_H + GAP);
+      let x = boardX ?? START_X + (unpositionedIdx % cols) * (DEFAULT_W + GAP);
+      let y = boardY ?? START_Y + Math.floor(unpositionedIdx / cols) * (DEFAULT_H + GAP);
 
-      if (!hasX || !hasY) unpositionedIdx++;
+      if (boardX === undefined || boardY === undefined) unpositionedIdx++;
 
       if (dragPreview?.taskId === task.id) {
         x = dragPreview.x;
@@ -1624,7 +1624,6 @@ function TaskGroup({
                 const statusLabel = task.status === "GREEN" ? "Completed" : task.status === "YELLOW" ? "In Progress" : "Not Started";
                 const statusColor = task.status === "GREEN" ? "#10b981" : task.status === "YELLOW" ? "#f59e0b" : "#9ca3af";
                 const statusBgColor = task.status === "GREEN" ? "#d1fae5" : task.status === "YELLOW" ? "#fef3c7" : "#f3f4f6";
-                const notes = (task.notes ?? "").trim();
 
                 const isLinkSelected = isLinkMode && linkFromTaskId === task.id;
                 const isDragging = dragPreview?.taskId === task.id;

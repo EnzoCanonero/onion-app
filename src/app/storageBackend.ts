@@ -37,7 +37,10 @@ class ElectronStorageBackend implements StorageBackend {
   private pendingOps: Map<string, PendingOp> = new Map();
   private warnedUnregisteredKeys = new Set<string>();
 
-  constructor(private api: ElectronAPI) {
+  private readonly api: ElectronAPI;
+
+  constructor(api: ElectronAPI) {
+    this.api = api;
     // Debounced writes would die with the window; send anything pending over
     // IPC before the renderer goes away.
     const flush = () => this.flushPending();

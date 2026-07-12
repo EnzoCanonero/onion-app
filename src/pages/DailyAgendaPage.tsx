@@ -94,9 +94,6 @@ export default function DailyAgendaPage(props: DailyAgendaPageProps = {}) {
 
   const state = loadState();
   const plan = getMonth(state, ym);
-  const paperBgColor = "#fbfaf7";
-  const paperBgPattern =
-    "radial-gradient(circle at 1px 1px, rgba(0,0,0,0.06) 1px, transparent 0)";
 
   const dateAccess = checkDateAccess(state, dateSafe);
 
@@ -1183,18 +1180,7 @@ function DailyAgendaPageContent({
           subtasks,
         };
       })
-      .filter(
-        (
-          report
-        ): report is {
-          id: string;
-          isPrimary: boolean;
-          title: string;
-          linkedMilestoneId?: string;
-          outcome: "COMPLETED" | "NOT_COMPLETED" | undefined;
-          subtasks: { id: string; title: string; outcome: "COMPLETED" | "NOT_COMPLETED" | undefined }[];
-        } => report !== null
-      );
+      .filter((report): report is NonNullable<typeof report> => report !== null);
 
     const completedSessions = state.sessions.filter((s) => s.date === dateSafe && s.endedAt);
     const logEvents = buildDayHistory(state, dateSafe, plan);
