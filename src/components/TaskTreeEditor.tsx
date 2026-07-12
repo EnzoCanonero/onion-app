@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactElement } from "react";
 import type { TaskNode } from "../app/types";
 import { countDescendants, makeId } from "../app/storage";
 
@@ -86,7 +86,7 @@ export default function TaskTreeEditor({ tasks, onUpdate }: TaskTreeEditorProps)
     setNewTaskTitle("");
   };
 
-  const renderTask = (task: TaskNode, depth: number = 0): JSX.Element => {
+  const renderTask = (task: TaskNode, depth: number = 0): ReactElement => {
     const children = tasks.filter((candidate) => candidate.parentId === task.id);
     const hasChildren = children.length > 0;
     const isExpanded = expandedIds.has(task.id);

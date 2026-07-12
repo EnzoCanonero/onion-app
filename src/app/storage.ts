@@ -80,7 +80,7 @@ const emptyState: AppStateV0 = {
 // overwritten by the next saveState: preserve a copy under a separate key first.
 function quarantineCorruptState(raw: string, reason: unknown) {
   console.error(
-    `FocusTree could not read the saved state; keeping a recovery copy under "${STATE_CORRUPT_KEY}".`,
+    `Onion-App could not read the saved state; keeping a recovery copy under "${STATE_CORRUPT_KEY}".`,
     reason
   );
   try {
@@ -524,7 +524,7 @@ export function saveState(state: AppStateV0) {
     if (!didWarnSaveFailure && typeof window !== "undefined") {
       didWarnSaveFailure = true;
       window.alert(
-        "FocusTree could not save your latest changes (storage may be full or unavailable). Recent edits may be lost when the app closes."
+        "Onion-App could not save your latest changes (storage may be full or unavailable). Recent edits may be lost when the app closes."
       );
     }
   }
@@ -1033,7 +1033,7 @@ export function setTaskOutcome(
           : getVirtualTimestamp()
       : undefined;
 
-  let nextTasks = existingBucket.tasks.map((task) =>
+  let nextTasks: TaskNode[] = existingBucket.tasks.map((task) =>
     task.id === taskId
       ? {
           ...task,
@@ -1327,10 +1327,6 @@ function localTimestampForDate(date: DateISO, hours: number, minutes: number, se
 
 function endOfDayTimestamp(date: DateISO): string {
   return localTimestampForDate(date, 23, 59, 59);
-}
-
-function defaultStartedAtTimestamp(date: DateISO): string {
-  return localTimestampForDate(date, 9, 0, 0);
 }
 
 function hasCompletedDescendantForArchive(
