@@ -238,7 +238,7 @@ function TutorialJourneySection({
             aria-hidden={!allDone}
             tabIndex={allDone ? 0 : -1}
           >
-            Enter OnionOps
+            Enter Onion-App
           </button>
         </div>
       </div>
@@ -278,7 +278,7 @@ export default function GetStartedPage() {
     }
     let alreadyShown = false;
     try {
-      alreadyShown = window.localStorage.getItem("focustree:get-started:panels-shown") === "true";
+      alreadyShown = window.localStorage.getItem("onion-app:get-started:panels-shown") === "true";
     } catch {
       alreadyShown = false;
     }
@@ -289,7 +289,7 @@ export default function GetStartedPage() {
     const t = setTimeout(() => {
       setJourneyCardsVisible(true);
       try {
-        window.localStorage.setItem("focustree:get-started:panels-shown", "true");
+        window.localStorage.setItem("onion-app:get-started:panels-shown", "true");
       } catch {
         // ignore
       }
@@ -352,7 +352,7 @@ export default function GetStartedPage() {
             }}
           >
             Welcome to{" "}
-            <span style={{ color: APP_MAIN_COLOR }}>OnionOps</span>
+            <span style={{ color: APP_MAIN_COLOR }}>Onion-App</span>
           </div>
 
           <div
@@ -566,7 +566,7 @@ export default function GetStartedPage() {
                 zIndex: 1,
               }}
             >
-              OnionOps works in layers: Grand Plan → Month Setup → Daily Agenda. Start with the big
+              Onion-App works in layers: Grand Plan → Month Setup → Daily Agenda. Start with the big
               picture, pin your objective for the month, then choose today’s tasks and focus sessions.
             </div>
           </div>

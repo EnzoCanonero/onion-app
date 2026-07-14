@@ -1,41 +1,67 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import type { MilestoneNode, MilestoneStatus, TaskNode } from "../app/types";
-import { loadState } from "../app/storage";
 
 interface MilestoneDetailModalProps {
   milestone: MilestoneNode;
+  linkedTasks: TaskNode[];
+  frozenTaskIds: Set<string>;
+  deleteLockedTaskIds: Set<string>;
+  showTreeNameField?: boolean;
   onClose: () => void;
-  onSave: (milestoneId: string, updates: Partial<Pick<MilestoneNode, "title" | "description" | "status">>) => void;
+  onSave: (milestoneId: string, updates: Partial<Pick<MilestoneNode, "title" | "treeName" | "description" | "status">>) => void;
   onDelete: (milestoneId: string) => void;
+  onSetTaskStatus: (taskId: string, outcome: "COMPLETED" | "NOT_COMPLETED") => void;
+  onDeleteTask: (taskId: string) => void;
+  onOpenTask: (task: TaskNode) => void;
 }
 
 export default function MilestoneDetailModal({
   milestone,
+  linkedTasks,
+  frozenTaskIds,
+  deleteLockedTaskIds,
+  showTreeNameField,
   onClose,
   onSave,
   onDelete,
+  onSetTaskStatus,
+  onDeleteTask,
+  onOpenTask,
 }: MilestoneDetailModalProps) {
   const [title, setTitle] = useState(milestone.title);
+  const [treeName, setTreeName] = useState(milestone.treeName ?? "");
   const [description, setDescription] = useState(milestone.description ?? "");
   const [status, setStatus] = useState<MilestoneStatus>(milestone.status);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const blockedStatusColors = {
+    border: "#d1d5db",
+    background: "#f3f4f6",
+    text: "#9ca3af",
+  };
 
-  const linkedTasksByMonth = useMemo(() => {
-    const state = loadState();
-    const months = Object.values(state.months ?? {});
-    return months
-      .map((plan) => ({
-        ym: plan.ym,
-        tasks: plan.tasks.filter((t) => t.linkedMilestoneId === milestone.id),
-      }))
-      .filter((x) => x.tasks.length > 0)
-      .sort((a, b) => a.ym.localeCompare(b.ym));
-  }, [milestone.id]);
+  const topLevelTasks = linkedTasks.filter((t) => !t.parentId);
+  const totalLinkedTasks = topLevelTasks.length;
 
-  const totalLinkedTasks = useMemo(
-    () => linkedTasksByMonth.reduce((sum, x) => sum + x.tasks.length, 0),
-    [linkedTasksByMonth]
-  );
+  const canToggleTaskStatus = (task: TaskNode, outcome: "COMPLETED" | "NOT_COMPLETED") => {
+    if (frozenTaskIds.has(task.id)) return false;
+    const nextStatus =
+      outcome === "COMPLETED"
+        ? task.status === "GREEN" ? "NONE" : "GREEN"
+        : task.status === "YELLOW" ? "NONE" : "YELLOW";
+    const parentTask = task.parentId ? linkedTasks.find((candidate) => candidate.id === task.parentId) : undefined;
+    if (parentTask?.status === "GREEN" && nextStatus !== "GREEN") return false;
+    const subtasks = linkedTasks.filter((candidate) => candidate.parentId === task.id);
+    if (subtasks.length > 0) {
+      if (nextStatus === "GREEN" && subtasks.some((subtask) => subtask.status !== "GREEN")) return false;
+      if (
+        nextStatus === "YELLOW" &&
+        !subtasks.some((subtask) => subtask.status === "YELLOW" || subtask.status === "GREEN")
+      ) {
+        return false;
+      }
+    }
+    return true;
+  };
 
   const getTaskStatusIcon = (task: TaskNode) => {
     switch (task.status) {
@@ -62,17 +88,37 @@ export default function MilestoneDetailModal({
   };
 
   const handleSave = () => {
-    onSave(milestone.id, {
+    const updates: Partial<Pick<MilestoneNode, "title" | "treeName" | "description" | "status">> = {
       title: title.trim() || milestone.title,
       description: description.trim() || undefined,
       status,
-    });
+    };
+    if (showTreeNameField) {
+      updates.treeName = treeName.trim() || undefined;
+    }
+    onSave(milestone.id, updates);
     onClose();
   };
 
   const handleDelete = () => {
     onDelete(milestone.id);
     onClose();
+  };
+
+  const handleSetLinkedTaskStatus = (
+    taskId: string,
+    outcome: "COMPLETED" | "NOT_COMPLETED"
+  ) => {
+    onSetTaskStatus(taskId, outcome);
+    if (status === "NOT_STARTED") {
+      setStatus("IN_PROGRESS");
+    }
+  };
+
+  const handleDeleteLinkedTask = (task: TaskNode) => {
+    if (deleteLockedTaskIds.has(task.id)) return;
+    if (!window.confirm(`Delete task "${task.title}"?`)) return;
+    onDeleteTask(task.id);
   };
 
   return (
@@ -137,6 +183,29 @@ export default function MilestoneDetailModal({
           />
         </div>
 
+        {showTreeNameField ? (
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ display: "block", marginBottom: 6, fontWeight: 500 }}>Tree name</label>
+            <input
+              type="text"
+              value={treeName}
+              onChange={(e) => setTreeName(e.target.value)}
+              placeholder="e.g., PhD, New job, Fitness"
+              style={{
+                width: "100%",
+                padding: 10,
+                fontSize: 14,
+                border: "1px solid #ddd",
+                borderRadius: 6,
+                boxSizing: "border-box",
+              }}
+            />
+            <div style={{ marginTop: 4, fontSize: 12, color: "#666", lineHeight: 1.4 }}>
+              Child milestones from this goal will show this name in parentheses.
+            </div>
+          </div>
+        ) : null}
+
         {/* Status */}
         <div style={{ marginBottom: 16 }}>
           <label style={{ display: "block", marginBottom: 6, fontWeight: 500 }}>Status</label>
@@ -158,22 +227,24 @@ export default function MilestoneDetailModal({
           </select>
         </div>
 
-        {/* Description */}
+        {/* Notes */}
         <div style={{ marginBottom: 24 }}>
-          <label style={{ display: "block", marginBottom: 6, fontWeight: 500 }}>Description</label>
+          <label style={{ display: "block", marginBottom: 6, fontWeight: 500 }}>Notes</label>
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder="Add notes about this milestone..."
-            rows={3}
+            rows={12}
             style={{
               width: "100%",
-              padding: 10,
+              padding: 12,
               fontSize: 14,
               border: "1px solid #ddd",
               borderRadius: 6,
               boxSizing: "border-box",
               resize: "vertical",
+              lineHeight: 1.6,
+              minHeight: 300,
             }}
           />
         </div>
@@ -184,55 +255,158 @@ export default function MilestoneDetailModal({
             Linked Tasks
           </div>
 
-          {linkedTasksByMonth.length === 0 ? (
+          {topLevelTasks.length === 0 ? (
             <div style={{ padding: 12, backgroundColor: "#f5f5f5", borderRadius: 6 }}>
               <p style={{ fontSize: 13, color: "#666", margin: 0, lineHeight: 1.5 }}>
-                Tasks for this milestone are managed in the Month Setup page. Link this milestone to a month to add tasks that contribute to this goal.
+                This milestone has no tasks yet. Add them from the Month Plan page and they will stay attached to this milestone instead of being split by month.
               </p>
             </div>
           ) : (
             <div style={{ padding: 12, backgroundColor: "#f5f5f5", borderRadius: 6 }}>
               <div style={{ fontSize: 13, color: "#666", marginBottom: 10 }}>
-                {totalLinkedTasks} task{totalLinkedTasks === 1 ? "" : "s"} across {linkedTasksByMonth.length} month{linkedTasksByMonth.length === 1 ? "" : "s"} (managed in Month Setup)
+                {totalLinkedTasks} task{totalLinkedTasks === 1 ? "" : "s"} linked to this milestone
               </div>
 
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {linkedTasksByMonth.map((bucket) => (
-                  <div key={bucket.ym}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: "#333", marginBottom: 6 }}>
-                      {bucket.ym}
-                    </div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                      {bucket.tasks.map((task) => (
-                        <div
-                          key={task.id}
+                {topLevelTasks.map((task) => {
+                  const isTaskFrozen = frozenTaskIds.has(task.id);
+                  const isTaskDeleteLocked = deleteLockedTaskIds.has(task.id);
+                  const canSetCompleted = canToggleTaskStatus(task, "COMPLETED");
+                  const canSetInProgress = canToggleTaskStatus(task, "NOT_COMPLETED");
+                  return (
+                    <div
+                      key={task.id}
+                      onClick={() => onOpenTask(task)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          onOpenTask(task);
+                        }
+                      }}
+                      role="button"
+                      tabIndex={0}
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        justifyContent: "space-between",
+                        gap: 10,
+                        padding: "10px 12px",
+                        backgroundColor: "white",
+                        borderRadius: 10,
+                        border: "1px solid #e0e0e0",
+                        boxShadow: "0 2px 8px rgba(0,0,0,0.04)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: 8, minWidth: 0 }}>
+                        <span
                           style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 8,
-                            padding: "6px 8px",
-                            backgroundColor: "white",
-                            borderRadius: 6,
-                            border: "1px solid #e0e0e0",
+                            width: 20,
+                            textAlign: "center",
+                            fontWeight: 800,
+                            color: getTaskStatusColor(task),
+                            flexShrink: 0,
+                          }}
+                          title={task.status}
+                        >
+                          {getTaskStatusIcon(task)}
+                        </span>
+                        <span
+                          style={{
+                            fontSize: 13,
+                            color: "#333",
+                            fontWeight: 600,
+                            flex: "1 1 auto",
+                            minWidth: 0,
+                            lineHeight: 1.35,
+                            overflowWrap: "anywhere",
+                            wordBreak: "break-word",
+                            whiteSpace: "normal",
                           }}
                         >
-                          <span
-                            style={{
-                              width: 20,
-                              textAlign: "center",
-                              fontWeight: 800,
-                              color: getTaskStatusColor(task),
+                          {task.title}
+                        </span>
+                      </div>
+
+                      {!isTaskFrozen ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                          <button
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              handleSetLinkedTaskStatus(task.id, "COMPLETED");
                             }}
-                            title={task.status}
+                            disabled={!canSetCompleted}
+                            style={{
+                              width: 28,
+                              height: 28,
+                              borderRadius: 7,
+                              border: `1px solid ${canSetCompleted ? "#10b981" : blockedStatusColors.border}`,
+                              backgroundColor: canSetCompleted ? (task.status === "GREEN" ? "#10b981" : "#ffffff") : blockedStatusColors.background,
+                              color: canSetCompleted ? (task.status === "GREEN" ? "#ffffff" : "#10b981") : blockedStatusColors.text,
+                              cursor: canSetCompleted ? "pointer" : "not-allowed",
+                              fontSize: 13,
+                              fontWeight: 800,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                            }}
+                            title={task.status === "GREEN" ? "Clear completed status" : "Mark task as completed"}
                           >
-                            {getTaskStatusIcon(task)}
-                          </span>
-                          <span style={{ fontSize: 13, color: "#333" }}>{task.title}</span>
+                            ✓
+                          </button>
+                          <button
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              handleSetLinkedTaskStatus(task.id, "NOT_COMPLETED");
+                            }}
+                            disabled={!canSetInProgress}
+                            style={{
+                              width: 28,
+                              height: 28,
+                              borderRadius: 7,
+                              border: `1px solid ${canSetInProgress ? "#f59e0b" : blockedStatusColors.border}`,
+                              backgroundColor: canSetInProgress ? (task.status === "YELLOW" ? "#f59e0b" : "#ffffff") : blockedStatusColors.background,
+                              color: canSetInProgress ? (task.status === "YELLOW" ? "#ffffff" : "#f59e0b") : blockedStatusColors.text,
+                              cursor: canSetInProgress ? "pointer" : "not-allowed",
+                              fontSize: 13,
+                              fontWeight: 800,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                            }}
+                            title={task.status === "YELLOW" ? "Clear work in progress status" : "Mark task as work in progress"}
+                          >
+                            ◐
+                          </button>
+                          <button
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              handleDeleteLinkedTask(task);
+                            }}
+                            disabled={isTaskDeleteLocked}
+                            style={{
+                              width: 28,
+                              height: 28,
+                              borderRadius: 7,
+                              border: `1px solid ${isTaskDeleteLocked ? blockedStatusColors.border : "#fecaca"}`,
+                              backgroundColor: isTaskDeleteLocked ? blockedStatusColors.background : "#ffffff",
+                              color: isTaskDeleteLocked ? blockedStatusColors.text : "#ef4444",
+                              cursor: isTaskDeleteLocked ? "not-allowed" : "pointer",
+                              fontSize: 13,
+                              fontWeight: 800,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                            }}
+                            title="Delete task"
+                          >
+                            ✕
+                          </button>
                         </div>
-                      ))}
+                      ) : null}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}

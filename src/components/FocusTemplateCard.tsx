@@ -10,6 +10,7 @@ type FocusTemplateCardProps = {
   completedSessions: ProductivitySession[];
   onStartSession?: (templateId: string) => void;
   onEndSession?: () => void;
+  onEditCompletedSession?: (sessionId: string, startedAt: string, endedAt: string) => void;
   accentColor?: string;
   milestoneTitle?: string;
   milestoneOptions?: { id: string; title: string; disabled?: boolean }[];
@@ -28,6 +29,7 @@ export default function FocusTemplateCard({
   completedSessions,
   onStartSession,
   onEndSession,
+  onEditCompletedSession,
   accentColor,
   milestoneTitle,
   milestoneOptions,
@@ -46,6 +48,10 @@ export default function FocusTemplateCard({
   const [rescheduleStart, setRescheduleStart] = useState(template.plannedStart);
   const [rescheduleEnd, setRescheduleEnd] = useState(template.plannedEnd);
   const [rescheduleError, setRescheduleError] = useState<string | null>(null);
+  const [showSessionEdit, setShowSessionEdit] = useState(false);
+  const [sessionEditStart, setSessionEditStart] = useState("");
+  const [sessionEditEnd, setSessionEditEnd] = useState("");
+  const [sessionEditError, setSessionEditError] = useState<string | null>(null);
 
   // Update current time every second for progress bar (uses virtual time in dev mode)
   useEffect(() => {
@@ -86,6 +92,22 @@ export default function FocusTemplateCard({
   const completedSession = completedSessions.find(
     (s) => s.templateId === template.id && s.endedAt && !activeSession
   );
+
+  const toTimeInputValue = (iso: string | undefined): string => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    const h = String(d.getHours()).padStart(2, "0");
+    const m = String(d.getMinutes()).padStart(2, "0");
+    return `${h}:${m}`;
+  };
+
+  const withTimeApplied = (baseIso: string, hhmm: string): string | null => {
+    const [h, m] = hhmm.split(":").map(Number);
+    if (Number.isNaN(h) || Number.isNaN(m)) return null;
+    const d = new Date(baseIso);
+    d.setHours(h, m, 0, 0);
+    return d.toISOString();
+  };
 
   // Completed session percentage (actual vs planned)
   const completedPercentage = completedSession
@@ -130,6 +152,35 @@ export default function FocusTemplateCard({
     setShowReschedule(false);
   };
 
+  const handleToggleSessionEdit = () => {
+    if (!completedSession?.endedAt || !onEditCompletedSession) return;
+    if (!showSessionEdit) {
+      setSessionEditStart(toTimeInputValue(completedSession.startedAt));
+      setSessionEditEnd(toTimeInputValue(completedSession.endedAt));
+      setSessionEditError(null);
+    }
+    setShowSessionEdit((v) => !v);
+  };
+
+  const handleSessionEditSave = () => {
+    if (!completedSession?.endedAt || !onEditCompletedSession) return;
+    const nextStartedAt = withTimeApplied(completedSession.startedAt, sessionEditStart);
+    const nextEndedAt = withTimeApplied(completedSession.endedAt, sessionEditEnd);
+    if (!nextStartedAt || !nextEndedAt) {
+      setSessionEditError("Invalid time format.");
+      return;
+    }
+    const startMs = Date.parse(nextStartedAt);
+    const endMs = Date.parse(nextEndedAt);
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+      setSessionEditError("End time must be after start time.");
+      return;
+    }
+    onEditCompletedSession(completedSession.id, nextStartedAt, nextEndedAt);
+    setSessionEditError(null);
+    setShowSessionEdit(false);
+  };
+
   const stripeColor = accentColor ?? APP_MAIN_COLOR;
   const barPercent = completedSession ? completedPercentage : activeSession ? progressPercentage : 0;
   const barLabel = completedSession
@@ -139,6 +190,9 @@ export default function FocusTemplateCard({
       : `0 / ${plannedMinutes} min`;
 
   const showSessionControls = Boolean(onStartSession && onEndSession);
+  const canShowSkip = Boolean(onToggleSkipped && !completedSession);
+  const canShowEditSession = Boolean(completedSession && onEditCompletedSession);
+  const showTopActions = Boolean(onReschedule || canShowSkip || canShowEditSession);
 
   return (
     <div
@@ -154,7 +208,7 @@ export default function FocusTemplateCard({
       }}
     >
       {/* Header */}
-	      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
         <div>
           {milestoneTitle ? (
             <div style={{ fontSize: 11, fontWeight: 900, color: stripeColor, marginBottom: 8, letterSpacing: 0.2 }}>
@@ -199,7 +253,7 @@ export default function FocusTemplateCard({
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
-          {(onToggleSkipped || onReschedule) && (
+          {showTopActions && (
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
               {onReschedule ? (
                 <button
@@ -219,7 +273,7 @@ export default function FocusTemplateCard({
                   Reschedule
                 </button>
               ) : null}
-              {onToggleSkipped ? (
+              {canShowSkip ? (
                 <button
                   type="button"
                   onClick={onToggleSkipped}
@@ -235,6 +289,24 @@ export default function FocusTemplateCard({
                   }}
                 >
                   {isSkipped ? "Unskip" : "Skip"}
+                </button>
+              ) : null}
+              {canShowEditSession ? (
+                <button
+                  type="button"
+                  onClick={handleToggleSessionEdit}
+                  style={{
+                    padding: "6px 10px",
+                    fontSize: 12,
+                    fontWeight: 800,
+                    backgroundColor: showSessionEdit ? "#e6f0ff" : "white",
+                    color: "#1d4ed8",
+                    border: "1px solid #bfdbfe",
+                    borderRadius: 10,
+                    cursor: "pointer",
+                  }}
+                >
+                  {showSessionEdit ? "Close Edit" : "Edit"}
                 </button>
               ) : null}
             </div>
@@ -361,6 +433,89 @@ export default function FocusTemplateCard({
           </div>
           {rescheduleError ? (
             <div style={{ marginTop: 6, fontSize: 12, color: "#ef4444" }}>{rescheduleError}</div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {showSessionEdit && completedSession && onEditCompletedSession ? (
+        <div
+          style={{
+            padding: "10px 12px",
+            borderRadius: 12,
+            border: "1px solid #dbeafe",
+            backgroundColor: "#f8fbff",
+            marginBottom: 12,
+          }}
+        >
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label style={{ fontSize: 11, fontWeight: 800, color: "#555" }}>Start</label>
+              <input
+                type="time"
+                value={sessionEditStart}
+                onChange={(e) => setSessionEditStart(e.target.value)}
+                style={{
+                  padding: "6px 8px",
+                  borderRadius: 8,
+                  border: "1px solid #bfdbfe",
+                  fontSize: 12,
+                }}
+              />
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label style={{ fontSize: 11, fontWeight: 800, color: "#555" }}>End</label>
+              <input
+                type="time"
+                value={sessionEditEnd}
+                onChange={(e) => setSessionEditEnd(e.target.value)}
+                style={{
+                  padding: "6px 8px",
+                  borderRadius: 8,
+                  border: "1px solid #bfdbfe",
+                  fontSize: 12,
+                }}
+              />
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+              <button
+                type="button"
+                onClick={handleSessionEditSave}
+                style={{
+                  padding: "6px 10px",
+                  fontSize: 12,
+                  fontWeight: 800,
+                  backgroundColor: "#2563eb",
+                  color: "white",
+                  border: "none",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                }}
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowSessionEdit(false);
+                  setSessionEditError(null);
+                }}
+                style={{
+                  padding: "6px 10px",
+                  fontSize: 12,
+                  fontWeight: 800,
+                  backgroundColor: "white",
+                  color: "#444",
+                  border: "1px solid #ddd",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+          {sessionEditError ? (
+            <div style={{ marginTop: 6, fontSize: 12, color: "#ef4444" }}>{sessionEditError}</div>
           ) : null}
         </div>
       ) : null}

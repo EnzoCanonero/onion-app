@@ -6,7 +6,7 @@ export type TaskStatus = "NONE" | "YELLOW" | "GREEN";
 
 export type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
-export type DayLogEventKind = "SYSTEM" | "REMINDER" | "TASK" | "MEETING" | "FOCUS";
+export type DayLogEventKind = "SYSTEM" | "REMINDER" | "TASK" | "SUBTASK" | "MEETING" | "FOCUS";
 
 export type DayLogEvent = {
   id: string;
@@ -29,6 +29,7 @@ export type MilestoneNode = {
   categoryId: string;
   parentId: string | null;
   title: string;
+  treeName?: string;
   description?: string;
   status: MilestoneStatus;
   order: number;
@@ -62,7 +63,6 @@ export type GrandPlan = {
 export type TaskNode = {
   id: string;
   title: string;
-  description?: string;
   notes?: string;
   boardX?: number;
   boardY?: number;
@@ -71,6 +71,15 @@ export type TaskNode = {
   parentId: string | null;
   status: TaskStatus;
   linkedMilestoneId?: string; // v6.1: optional link to a milestone
+  createdAt?: string;
+  completedAt?: string;
+};
+
+export type TaskArchive = {
+  standaloneTasks: TaskNode[];
+  tasksByMilestoneId: Record<string, TaskNode[]>;
+  boardByScope: Record<string, { width: number; height: number }>;
+  taskLinksByScope: Record<string, { from: string; to: string }[]>;
 };
 
 export type FocusTemplate = {
@@ -85,14 +94,11 @@ export type FocusTemplate = {
 
 export type MonthPlan = {
   ym: YM;
-  tasks: TaskNode[];
   templates: FocusTemplate[];
   pinnedMilestoneIds: string[]; // v8: explicit milestone pins shown in Month Setup
   primaryMilestoneId?: string;
   createdAt: string; // ISO timestamp
   isClosed?: boolean; // v5: true if month is closed (read-only report mode)
-  boardByScope?: Record<string, { width: number; height: number }>;
-  taskLinksByScope?: Record<string, { from: string; to: string }[]>;
 };
 
 export type ProductivitySession = {
@@ -130,6 +136,7 @@ export type DayEntry = {
 };
 
 export type MeetingRecurrence = "NONE" | "WEEKLY" | "BIWEEKLY" | "MONTHLY";
+export type MeetingEditScope = "THIS_EVENT" | "THIS_AND_FUTURE";
 
 export type MeetingEntry = {
   id: string;
@@ -143,11 +150,13 @@ export type MeetingEntry = {
   skipped?: boolean;
   createdAt: string; // ISO timestamp
   recurrence?: MeetingRecurrence;
+  seriesId?: string;
 };
 
 export type AppStateV0 = {
   version: 0;
   months: Record<string, MonthPlan>;
+  taskArchive: TaskArchive;
   days: Record<string, DayEntry>;
   sessions: ProductivitySession[];
   meetings: MeetingEntry[]; // v4: meeting entries

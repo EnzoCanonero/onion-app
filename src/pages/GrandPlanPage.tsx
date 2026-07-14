@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import type { DateISO, YM, Category, MilestoneNode } from "../app/types";
+import type { DateISO, YM, Category, MilestoneNode, TaskNode } from "../app/types";
 import { APP_MAIN_COLOR, REPORT_THEME } from "../app/theme";
 import {
   BadgePanel,
@@ -12,7 +12,7 @@ import {
   type DonutSlice,
   type StackedDatum,
 } from "../components/ReportCharts";
-import { formatDateLabel, getCategoryMeta, listMonthsInRange, UNKNOWN_CATEGORY, UNCATEGORIZED_CATEGORY } from "../app/reporting";
+import { formatDateLabel, getCategoryMeta, UNKNOWN_CATEGORY, UNCATEGORIZED_CATEGORY } from "../app/reporting";
 import { dayOfWeekFromDateISO, isTemplateScheduledForWeekday } from "../app/weekdays";
 import {
   loadState,
@@ -29,17 +29,27 @@ import {
   addMilestone,
   updateMilestone,
   deleteMilestone,
+  getAllTasks,
+  getTasksForMilestone,
+  getFrozenTaskIds,
+  getDeleteLockedTaskIds,
+  getTitleLockedTaskIds,
+  applyTaskStatus,
+  deleteTask,
+  updateTask,
+  addSubtask,
   getTodayDate,
   getCurrentYM,
 } from "../app/storage";
 import { getShortUserName, getUserName } from "../app/userProfile";
-import { getSelectableMilestoneIds } from "../app/milestones";
+import { formatMilestoneTitle, getSelectableMilestoneIds } from "../app/milestones";
 import MilestoneTreeView from "../components/MilestoneTreeView";
 import MilestoneDetailModal from "../components/MilestoneDetailModal";
+import TaskDetailModal from "../components/TaskDetailModal";
 import TitleDescriptionModal from "../components/TitleDescriptionModal";
 
 const DEFAULT_COLORS = ["#4caf50", "#2196f3", "#ff9800", "#e91e63", APP_MAIN_COLOR, "#00bcd4"];
-const SELECTED_CATEGORY_STORAGE_KEY = "focustree:grand-plan:selected-category";
+const SELECTED_CATEGORY_STORAGE_KEY = "onion-app:grand-plan:selected-category";
 
 function dateISOToDate(date: DateISO): Date | null {
   const parts = date.split("-").map((x) => Number(x));
@@ -116,6 +126,9 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
   const [tick, setTick] = useState(0);
   const state = useMemo(() => loadState(), [tick]);
   const grandPlan = state.grandPlan;
+  const frozenTaskIds = useMemo(() => getFrozenTaskIds(state), [state]);
+  const deleteLockedTaskIds = useMemo(() => getDeleteLockedTaskIds(state), [state]);
+  const titleLockedTaskIds = useMemo(() => getTitleLockedTaskIds(state), [state]);
   const shortName = getShortUserName(getUserName());
   const pinnedMilestoneIds = useMemo(() => {
     const ids = new Set<string>();
@@ -147,6 +160,10 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
     }
   });
   const [selectedMilestone, setSelectedMilestone] = useState<MilestoneNode | null>(null);
+  const [taskModalTaskId, setTaskModalTaskId] = useState<string | null>(null);
+  const [taskModalTitle, setTaskModalTitle] = useState("");
+  const [taskModalNotes, setTaskModalNotes] = useState("");
+  const [taskModalError, setTaskModalError] = useState<string | null>(null);
   const [creatingMilestone, setCreatingMilestone] = useState<{ categoryId: string; parentId: string | null } | null>(null);
 
   useEffect(() => {
@@ -259,13 +276,25 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
     setCreatingMilestone({ categoryId: selectedCategoryId, parentId });
   };
 
-  const handleSaveMilestone = (milestoneId: string, updates: Partial<Pick<MilestoneNode, "title" | "description" | "status">>) => {
+  const handleSaveMilestone = (milestoneId: string, updates: Partial<Pick<MilestoneNode, "title" | "treeName" | "description" | "status">>) => {
     mutate((s) => updateMilestone(s, milestoneId, updates));
   };
 
   const handleDeleteMilestone = (milestoneId: string) => {
     mutate((s) => deleteMilestone(s, milestoneId, false));
     setSelectedMilestone(null);
+    setTaskModalTaskId(null);
+  };
+
+  const handleSetMilestoneTaskStatus = (
+    taskId: string,
+    outcome: "COMPLETED" | "NOT_COMPLETED"
+  ) => {
+    mutate((s) => applyTaskStatus(s, taskId, outcome));
+  };
+
+  const handleDeleteMilestoneTask = (taskId: string) => {
+    mutate((s) => deleteTask(s, taskId));
   };
 
   const handleCloseGrandPlan = () => {
@@ -281,6 +310,120 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
   const sortedCategories = grandPlan?.categories.slice().sort((a, b) => a.order - b.order) ?? [];
   const activeCategory =
     sortedCategories.find((c) => c.id === selectedCategoryId) ?? sortedCategories[0];
+  const selectedMilestoneLive = selectedMilestone
+    ? grandPlan?.milestones.find((m) => m.id === selectedMilestone.id) ?? selectedMilestone
+    : null;
+  const selectedMilestoneTasks = useMemo(
+    () =>
+      selectedMilestoneLive
+        ? [...getTasksForMilestone(state, selectedMilestoneLive.id)].sort((a, b) => a.title.localeCompare(b.title))
+        : [],
+    [state, selectedMilestoneLive]
+  );
+  const selectedMilestoneAccentColor = useMemo(
+    () =>
+      selectedMilestoneLive
+        ? grandPlan?.categories.find((category) => category.id === selectedMilestoneLive.categoryId)?.color ?? APP_MAIN_COLOR
+        : APP_MAIN_COLOR,
+    [grandPlan, selectedMilestoneLive]
+  );
+  const taskModalTask = taskModalTaskId
+    ? selectedMilestoneTasks.find((task) => task.id === taskModalTaskId)
+    : undefined;
+  const taskModalReadOnly = taskModalTaskId ? frozenTaskIds.has(taskModalTaskId) : true;
+  const taskModalTitleReadOnly = taskModalTaskId ? titleLockedTaskIds.has(taskModalTaskId) : false;
+  const taskModalParentIsGreen = taskModalTask?.status === "GREEN";
+
+  const canToggleMilestoneTaskStatus = (
+    task: TaskNode,
+    outcome: "COMPLETED" | "NOT_COMPLETED"
+  ) => {
+    if (frozenTaskIds.has(task.id)) return false;
+    const nextStatus =
+      outcome === "COMPLETED"
+        ? task.status === "GREEN" ? "NONE" : "GREEN"
+        : task.status === "YELLOW" ? "NONE" : "YELLOW";
+    const parentTask = task.parentId
+      ? selectedMilestoneTasks.find((candidate) => candidate.id === task.parentId)
+      : undefined;
+    if (parentTask?.status === "GREEN" && nextStatus !== "GREEN") return false;
+    const subtasks = selectedMilestoneTasks.filter((candidate) => candidate.parentId === task.id);
+    if (subtasks.length > 0) {
+      if (nextStatus === "GREEN" && subtasks.some((subtask) => subtask.status !== "GREEN")) return false;
+      if (
+        nextStatus === "YELLOW" &&
+        !subtasks.some((subtask) => subtask.status === "YELLOW" || subtask.status === "GREEN")
+      ) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const taskModalSubtasks = taskModalTaskId
+    ? selectedMilestoneTasks
+        .filter((task) => task.parentId === taskModalTaskId)
+        .map((subtask) => {
+          const subtaskDeleteLocked = deleteLockedTaskIds.has(subtask.id);
+          return {
+            id: subtask.id,
+            title: subtask.title,
+            status: subtask.status,
+            showActionCluster: true,
+            canToggleCompleted: canToggleMilestoneTaskStatus(subtask, "COMPLETED"),
+            canToggleInProgress: canToggleMilestoneTaskStatus(subtask, "NOT_COMPLETED"),
+            canDelete: !frozenTaskIds.has(subtask.id) && !subtaskDeleteLocked,
+            onToggleCompleted: () => handleSetMilestoneTaskStatus(subtask.id, "COMPLETED"),
+            onToggleInProgress: () => handleSetMilestoneTaskStatus(subtask.id, "NOT_COMPLETED"),
+            onDelete: () => {
+              if (!window.confirm(`Delete subtask "${subtask.title}"?`)) return;
+              handleDeleteMilestoneTask(subtask.id);
+            },
+          };
+        })
+    : [];
+  const canAddTaskModalSubtask = Boolean(taskModalTaskId && !taskModalReadOnly && !taskModalParentIsGreen);
+
+  const openTaskModal = (task: TaskNode) => {
+    setTaskModalTaskId(task.id);
+    setTaskModalTitle(task.title);
+    setTaskModalNotes((task.notes ?? "").trim());
+    setTaskModalError(null);
+  };
+
+  const closeTaskModal = () => {
+    setTaskModalTaskId(null);
+    setTaskModalTitle("");
+    setTaskModalNotes("");
+    setTaskModalError(null);
+  };
+
+  const saveTaskModal = () => {
+    if (!taskModalTaskId) return;
+    if (frozenTaskIds.has(taskModalTaskId)) {
+      closeTaskModal();
+      return;
+    }
+    const nextTitle = taskModalTitle.trim();
+    if (!nextTitle) {
+      setTaskModalError("Title is required.");
+      return;
+    }
+    const nextNotes = taskModalNotes.trim();
+    mutate((s) =>
+      updateTask(s, taskModalTaskId, {
+        title: nextTitle,
+        notes: nextNotes || undefined,
+      })
+    );
+    closeTaskModal();
+  };
+
+  useEffect(() => {
+    if (taskModalTaskId && !taskModalTask) {
+      closeTaskModal();
+    }
+  }, [taskModalTaskId, taskModalTask]);
 
   useEffect(() => {
     if (!grandPlan) return;
@@ -517,10 +660,7 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
     const weeks = weekStartsRaw.length > 0 ? weekStartsRaw : ([weekStartMonday(startDate) ?? startDate] as DateISO[]);
     const xLabelEvery = weeks.length > 40 ? 4 : weeks.length > 24 ? 3 : 2;
 
-    const monthsInPlan = listMonthsInRange(grandPlan.startMonth, actualEndMonth);
-    const months = monthsInPlan.length > 0 ? monthsInPlan : ([grandPlan.startMonth] as YM[]);
-
-    const tasksInPlan = months.flatMap((ym) => state.months[ym]?.tasks ?? []);
+    const tasksInPlan = getAllTasks(state);
     const tasksTotalCount = tasksInPlan.length;
     const tasksCompletedCount = tasksInPlan.filter((t) => t.status === "GREEN").length;
     const tasksCompletionRate = tasksTotalCount > 0 ? Math.round((tasksCompletedCount / tasksTotalCount) * 100) : 0;
@@ -547,7 +687,7 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
           dateISO,
           badge: {
             id: m.id,
-            title: m.title,
+            title: formatMilestoneTitle(m, grandPlan.milestones),
             dateLabel: formatDateLabel(dateISO as DateISO),
             categoryLabel,
             color,
@@ -561,10 +701,10 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
 
     const taskMilestoneById = new Map<string, string | null | undefined>();
     const templateMilestoneById = new Map<string, string | null | undefined>();
+    tasksInPlan.forEach((t) => {
+      if (!taskMilestoneById.has(t.id)) taskMilestoneById.set(t.id, t.linkedMilestoneId);
+    });
     Object.values(state.months).forEach((mp) => {
-      mp.tasks.forEach((t) => {
-        if (!taskMilestoneById.has(t.id)) taskMilestoneById.set(t.id, t.linkedMilestoneId);
-      });
       mp.templates.forEach((t) => {
         if (!templateMilestoneById.has(t.id)) templateMilestoneById.set(t.id, t.linkedMilestoneId);
       });
@@ -1535,12 +1675,44 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
       )}
 
       {/* Milestone Detail Modal */}
-      {selectedMilestone && (
+      {selectedMilestoneLive && (
         <MilestoneDetailModal
-          milestone={selectedMilestone}
-          onClose={() => setSelectedMilestone(null)}
+          milestone={selectedMilestoneLive}
+          linkedTasks={selectedMilestoneTasks}
+          frozenTaskIds={frozenTaskIds}
+          deleteLockedTaskIds={deleteLockedTaskIds}
+          showTreeNameField={selectedMilestoneLive.parentId === null}
+          onClose={() => {
+            setSelectedMilestone(null);
+            closeTaskModal();
+          }}
           onSave={handleSaveMilestone}
           onDelete={handleDeleteMilestone}
+          onSetTaskStatus={handleSetMilestoneTaskStatus}
+          onDeleteTask={handleDeleteMilestoneTask}
+          onOpenTask={openTaskModal}
+        />
+      )}
+
+      {taskModalTaskId && (
+        <TaskDetailModal
+          accentColor={selectedMilestoneAccentColor}
+          titleValue={taskModalTitle}
+          notesValue={taskModalNotes}
+          readOnly={taskModalReadOnly}
+          titleReadOnly={taskModalTitleReadOnly}
+          errorMessage={taskModalError}
+          onTitleChange={setTaskModalTitle}
+          onNotesChange={setTaskModalNotes}
+          onClose={closeTaskModal}
+          onSave={saveTaskModal}
+          subtasks={taskModalSubtasks}
+          canAddSubtask={canAddTaskModalSubtask}
+          onAddSubtask={(title) => {
+            if (!taskModalTaskId) return;
+            mutate((s) => addSubtask(s, taskModalTaskId, title).state);
+          }}
+          autoFocusTitle
         />
       )}
 
@@ -1555,7 +1727,8 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
           }
           accentColor={activeCategory?.color ?? APP_MAIN_COLOR}
           titlePlaceholder={creatingMilestone.parentId ? "Milestone title..." : "Goal title..."}
-          descriptionPlaceholder="Add a description (optional)..."
+          descriptionLabel="Notes"
+          descriptionPlaceholder="Add notes (optional)..."
           confirmLabel={creatingMilestone.parentId ? "Add Milestone" : "Add Goal"}
           onCancel={() => setCreatingMilestone(null)}
           onConfirm={(title, description) => {

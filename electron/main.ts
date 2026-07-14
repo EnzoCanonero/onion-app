@@ -1,10 +1,25 @@
 import { app, BrowserWindow, ipcMain, shell } from "electron";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { StorageHandler } from "./storage.js";
 
 let mainWindow: BrowserWindow | null = null;
 let storage: StorageHandler;
+
+function resolveUserDataPath() {
+  const home = os.homedir();
+  if (process.platform === "darwin") {
+    return path.join(home, "Library", "Application Support", "onion-app");
+  }
+  if (process.platform === "win32") {
+    return path.join(process.env.APPDATA || path.join(home, "AppData", "Roaming"), "onion-app");
+  }
+  if (process.platform === "linux") {
+    return path.join(process.env.XDG_CONFIG_HOME || path.join(home, ".config"), "onion-app");
+  }
+  return app.getPath("userData");
+}
 
 function getDevIconPath(fileName: "icon.png") {
   return path.join(process.cwd(), "build", fileName);
@@ -33,6 +48,8 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
   }
 }
+
+app.setPath("userData", resolveUserDataPath());
 
 app.whenReady().then(() => {
   if (!app.isPackaged && process.platform === "darwin") {

@@ -29,11 +29,24 @@ declare global {
   }
 }
 
+type PendingOp = { kind: "save"; value: string } | { kind: "delete" };
+
 class ElectronStorageBackend implements StorageBackend {
   private cache: Map<string, string | null> = new Map();
   private writeTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private pendingOps: Map<string, PendingOp> = new Map();
+  private warnedUnregisteredKeys = new Set<string>();
 
-  constructor(private api: ElectronAPI) {}
+  private readonly api: ElectronAPI;
+
+  constructor(api: ElectronAPI) {
+    this.api = api;
+    // Debounced writes would die with the window; send anything pending over
+    // IPC before the renderer goes away.
+    const flush = () => this.flushPending();
+    window.addEventListener("beforeunload", flush);
+    window.addEventListener("pagehide", flush);
+  }
 
   async init(keys: string[]): Promise<void> {
     const results = await Promise.all(
@@ -48,40 +61,55 @@ class ElectronStorageBackend implements StorageBackend {
   }
 
   getItem(key: string): string | null {
-    if (this.cache.has(key)) return this.cache.get(key) ?? null;
-    return null;
+    if (!this.cache.has(key)) {
+      if (!this.warnedUnregisteredKeys.has(key)) {
+        this.warnedUnregisteredKeys.add(key);
+        console.warn(
+          `Storage key "${key}" is not in PERSISTENT_KEYS; it was not loaded from disk and will read as empty until written this session.`
+        );
+      }
+      return null;
+    }
+    return this.cache.get(key) ?? null;
   }
 
   setItem(key: string, value: string): void {
     this.cache.set(key, value);
-    this.debouncedWrite(key, value);
+    this.queueOp(key, { kind: "save", value });
   }
 
   removeItem(key: string): void {
     this.cache.set(key, null);
-    this.debouncedDelete(key);
+    this.queueOp(key, { kind: "delete" });
   }
 
-  private debouncedWrite(key: string, value: string): void {
+  flushPending(): void {
+    this.writeTimers.forEach((timer) => clearTimeout(timer));
+    this.writeTimers.clear();
+    const ops = Array.from(this.pendingOps.entries());
+    this.pendingOps.clear();
+    for (const [key, op] of ops) {
+      this.performOp(key, op);
+    }
+  }
+
+  private performOp(key: string, op: PendingOp): void {
+    if (op.kind === "save") this.api.saveStorage(key, op.value);
+    else this.api.deleteStorage(key);
+  }
+
+  private queueOp(key: string, op: PendingOp): void {
+    this.pendingOps.set(key, op);
     const existing = this.writeTimers.get(key);
     if (existing) clearTimeout(existing);
     this.writeTimers.set(
       key,
       setTimeout(() => {
-        this.api.saveStorage(key, value);
         this.writeTimers.delete(key);
-      }, 100)
-    );
-  }
-
-  private debouncedDelete(key: string): void {
-    const existing = this.writeTimers.get(key);
-    if (existing) clearTimeout(existing);
-    this.writeTimers.set(
-      key,
-      setTimeout(() => {
-        this.api.deleteStorage(key);
-        this.writeTimers.delete(key);
+        const pending = this.pendingOps.get(key);
+        if (!pending) return;
+        this.pendingOps.delete(key);
+        this.performOp(key, pending);
       }, 100)
     );
   }
@@ -110,11 +138,14 @@ export async function flushStorageKey(key: string): Promise<void> {
 }
 
 const PERSISTENT_KEYS = [
-  "focustree.state",
-  "focustree.userName",
-  "focustree.developerMode",
-  "focustree.virtualClock",
-  "focustree.onboarding",
+  "onion-app.state",
+  "onion-app.state.backup",
+  "onion-app.state.backupAt",
+  "onion-app.state.corrupt",
+  "onion-app.userName",
+  "onion-app.developerMode",
+  "onion-app.virtualClock",
+  "onion-app.onboarding",
 ];
 
 export async function initStorageBackend(): Promise<StorageBackend> {

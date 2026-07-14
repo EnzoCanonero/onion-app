@@ -11,10 +11,24 @@ import {
   autoCloseMonth,
   reopenMonth,
   isMonthInGrandPlanPeriod,
+  addStandaloneTask,
   addTaskWithMilestone,
+  getAllTasks,
   getMilestonesInMonth,
-  deleteTaskFromMonth,
-  updateTaskInMonth,
+  getStandaloneTasks,
+  getTasksForMilestone,
+  getTasksForMonth,
+  getFrozenTaskIds,
+  getDeleteLockedTaskIds,
+  getTitleLockedTaskIds,
+  getTaskBoardForScope,
+  getTaskLinksForScope,
+  updateTaskBoardForScope,
+  updateTaskLinksForScope,
+  deleteTask,
+  updateTask,
+  applyTaskStatus,
+  addSubtask,
   updateMilestone,
   getCurrentYM,
 } from "../app/storage";
@@ -31,11 +45,12 @@ import {
 import { useDateNavigation } from "../contexts/DateNavigationContext";
 import { getVirtualTimestamp } from "../contexts/VirtualClockContext";
 import { getShortUserName, getUserName } from "../app/userProfile";
-import { getSelectableMilestoneIds } from "../app/milestones";
+import { formatMilestoneTitle, getSelectableMilestoneIds } from "../app/milestones";
 import FireworksOverlay from "../components/FireworksOverlay";
 import NoGrandPlanPanel from "../components/NoGrandPlanPanel";
 import PastUnactivatedMonthPanel from "../components/PastUnactivatedMonthPanel";
 import FutureMonthPanel from "../components/FutureMonthPanel";
+import TaskDetailModal from "../components/TaskDetailModal";
 import TitleDescriptionModal from "../components/TitleDescriptionModal";
 import {
   BadgePanel,
@@ -47,7 +62,7 @@ import {
   type DonutSlice,
   type StackedDatum,
 } from "../components/ReportCharts";
-import { formatDateLabel, getCategoryMeta, listDatesInMonth, UNKNOWN_CATEGORY, UNCATEGORIZED_CATEGORY } from "../app/reporting";
+import { formatDateLabel, getCategoryMeta, getColorHue, listDatesInMonth, UNKNOWN_CATEGORY, UNCATEGORIZED_CATEGORY } from "../app/reporting";
 import { APP_MAIN_COLOR, REPORT_THEME } from "../app/theme";
 
 function parseTimeToMinutes(time: string): number | null {
@@ -88,7 +103,6 @@ function getPreviousYM(ym: YM): YM | null {
 function seedPlan(ym: YM): MonthPlan {
   return {
     ym,
-    tasks: [],
     templates: [],
     pinnedMilestoneIds: [],
     primaryMilestoneId: undefined,
@@ -104,6 +118,8 @@ type MilestoneNavigationProps = {
   primaryMilestoneId: string | null;
   onSelectMilestone: (id: string | null) => void;
   onPinMilestone?: () => void;
+  onUnpinMilestone?: (id: string) => void;
+  formatMilestoneTitle?: (milestone: MilestoneNode) => string;
 };
 
 // Component for editing tasks under a milestone group
@@ -113,6 +129,9 @@ function TaskGroup({
   tasks,
   milestoneId,
   milestoneStatus,
+  frozenTaskIds,
+  deleteLockedTaskIds,
+  titleLockedTaskIds,
   boardSize,
   onUpdateBoardSize,
   links,
@@ -120,7 +139,9 @@ function TaskGroup({
   zoomStorageKey,
   onAddTask,
   onUpdateTask,
+  onSetTaskStatus,
   onDeleteTask,
+  onAddSubtask,
   onMarkMilestoneCompleted,
   isObjective = false,
   onSetObjective,
@@ -135,6 +156,9 @@ function TaskGroup({
   tasks: TaskNode[];
   milestoneId: string | null;
   milestoneStatus?: MilestoneStatus;
+  frozenTaskIds: Set<string>;
+  deleteLockedTaskIds: Set<string>;
+  titleLockedTaskIds: Set<string>;
   boardSize: { width: number; height: number };
   onUpdateBoardSize: (next: { width: number; height: number }) => void;
   links: { from: string; to: string }[];
@@ -143,9 +167,11 @@ function TaskGroup({
   onAddTask: (milestoneId: string | null) => void;
   onUpdateTask: (
     taskId: string,
-    updates: Partial<Pick<TaskNode, "title" | "description" | "notes" | "boardX" | "boardY" | "boardW" | "boardH">>
+    updates: Partial<Pick<TaskNode, "title" | "notes" | "boardX" | "boardY" | "boardW" | "boardH">>
   ) => void;
+  onSetTaskStatus: (taskId: string, outcome: "COMPLETED" | "NOT_COMPLETED" | undefined) => void;
   onDeleteTask: (taskId: string) => void;
+  onAddSubtask: (parentTaskId: string, title: string) => void;
   onMarkMilestoneCompleted?: (milestoneId: string) => void;
   isObjective?: boolean;
   onSetObjective?: (milestoneId: string) => void;
@@ -157,18 +183,68 @@ function TaskGroup({
 }) {
   const [taskModalTaskId, setTaskModalTaskId] = useState<string | null>(null);
   const [taskModalTitle, setTaskModalTitle] = useState("");
-  const [taskModalDescription, setTaskModalDescription] = useState("");
   const [taskModalNotes, setTaskModalNotes] = useState("");
   const [taskModalError, setTaskModalError] = useState<string | null>(null);
 
   const isCompleted = milestoneStatus === "COMPLETED";
+  const taskModalTask = taskModalTaskId ? tasks.find((task) => task.id === taskModalTaskId) : undefined;
+  const taskModalParentIsGreen = taskModalTask?.status === "GREEN";
   const accentColor = color;
   const uiAccent = chromeless ? "#000" : accentColor;
   const noteBorderColor = chromeless ? "#000" : accentColor;
-  const noteBackgroundColor = "white";
   const canEditBoard = !isCompleted;
   const canSetObjective = Boolean(milestoneId && onSetObjective && !isObjective && !isCompleted);
   const objectiveAccent = "#d6a14a";
+  const blockedStatusColors = {
+    border: "#d1d5db",
+    background: "#f3f4f6",
+    text: "#9ca3af",
+  };
+
+  const canToggleTaskStatus = (task: TaskNode, outcome: "COMPLETED" | "NOT_COMPLETED") => {
+    if (isCompleted || frozenTaskIds.has(task.id)) return false;
+    const nextStatus =
+      outcome === "COMPLETED"
+        ? task.status === "GREEN" ? "NONE" : "GREEN"
+        : task.status === "YELLOW" ? "NONE" : "YELLOW";
+    const parentTask = task.parentId ? tasks.find((candidate) => candidate.id === task.parentId) : undefined;
+    if (parentTask?.status === "GREEN" && nextStatus !== "GREEN") return false;
+    const subtasks = tasks.filter((candidate) => candidate.parentId === task.id);
+    if (subtasks.length > 0) {
+      if (nextStatus === "GREEN" && subtasks.some((subtask) => subtask.status !== "GREEN")) return false;
+      if (
+        nextStatus === "YELLOW" &&
+        !subtasks.some((subtask) => subtask.status === "YELLOW" || subtask.status === "GREEN")
+      ) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const taskModalReadOnly = taskModalTaskId ? isCompleted || frozenTaskIds.has(taskModalTaskId) : true;
+  const taskModalTitleReadOnly = taskModalTaskId ? titleLockedTaskIds.has(taskModalTaskId) : false;
+  const taskModalSubtasks = taskModalTaskId
+    ? tasks.filter((task) => task.parentId === taskModalTaskId).map((subtask) => {
+        const subtaskDeleteLocked = deleteLockedTaskIds.has(subtask.id);
+        return {
+          id: subtask.id,
+          title: subtask.title,
+          status: subtask.status,
+          showActionCluster: true,
+          canToggleCompleted: canToggleTaskStatus(subtask, "COMPLETED"),
+          canToggleInProgress: canToggleTaskStatus(subtask, "NOT_COMPLETED"),
+          canDelete: !frozenTaskIds.has(subtask.id) && !subtaskDeleteLocked,
+          onToggleCompleted: () => onSetTaskStatus(subtask.id, "COMPLETED"),
+          onToggleInProgress: () => onSetTaskStatus(subtask.id, "NOT_COMPLETED"),
+          onDelete: () => {
+            if (!window.confirm(`Delete subtask "${subtask.title}"?`)) return;
+            onDeleteTask(subtask.id);
+          },
+        };
+      })
+    : [];
+  const canAddTaskModalSubtask = Boolean(taskModalTaskId && !taskModalReadOnly && !taskModalParentIsGreen);
 
   const baseBoardWidth = Math.max(800, boardSize.width);
   const baseBoardHeight = Math.max(600, boardSize.height);
@@ -229,9 +305,58 @@ function TaskGroup({
   const [dragPreview, setDragPreview] = useState<{ taskId: string; x: number; y: number } | null>(null);
   const [resizePreview, setResizePreview] = useState<{ taskId: string; w: number; h: number } | null>(null);
 
+  const pinnedMilestoneGroups = useMemo(() => {
+    if (!milestoneNavigation) return [] as Array<{ category: Category | null; milestones: MilestoneNode[] }>;
+
+    const categoriesById = new Map(milestoneNavigation.categories.map((category) => [category.id, category] as const));
+    const sortedCategories = milestoneNavigation.categories
+      .slice()
+      .sort((a, b) => {
+        const hueDiff = getColorHue(a.color) - getColorHue(b.color);
+        if (hueDiff !== 0) return hueDiff;
+        return a.title.localeCompare(b.title);
+      });
+
+    return sortedCategories
+      .map((category): { category: Category | null; milestones: MilestoneNode[] } | null => {
+        const milestones = milestoneNavigation.pinnedMilestones
+          .filter((milestone) => milestone.categoryId === category.id)
+          .slice()
+          .sort((a, b) => {
+            const aIsPrimary = milestoneNavigation.primaryMilestoneId === a.id;
+            const bIsPrimary = milestoneNavigation.primaryMilestoneId === b.id;
+            if (aIsPrimary !== bIsPrimary) return aIsPrimary ? -1 : 1;
+            if (a.order !== b.order) return a.order - b.order;
+            return a.title.localeCompare(b.title);
+          });
+        if (milestones.length === 0) return null;
+        return { category, milestones };
+      })
+      .filter((group): group is { category: Category | null; milestones: MilestoneNode[] } => group !== null)
+      .concat(
+        (() => {
+          const uncategorizedMilestones = milestoneNavigation.pinnedMilestones
+            .filter((milestone) => !categoriesById.has(milestone.categoryId))
+            .slice()
+            .sort((a, b) => {
+              const aIsPrimary = milestoneNavigation.primaryMilestoneId === a.id;
+              const bIsPrimary = milestoneNavigation.primaryMilestoneId === b.id;
+              if (aIsPrimary !== bIsPrimary) return aIsPrimary ? -1 : 1;
+              if (a.order !== b.order) return a.order - b.order;
+              return a.title.localeCompare(b.title);
+            });
+          return uncategorizedMilestones.length > 0
+            ? [{ category: null, milestones: uncategorizedMilestones }]
+            : [];
+        })()
+      );
+  }, [milestoneNavigation]);
+
   useEffect(() => {
     if (!isLinkMode) setLinkFromTaskId(null);
   }, [isLinkMode]);
+
+  const topLevelTasks = useMemo(() => tasks.filter((t) => !t.parentId), [tasks]);
 
   const taskRectsById = useMemo(() => {
     const DEFAULT_W = 260;
@@ -243,18 +368,18 @@ function TaskGroup({
     const cols = Math.max(1, Math.floor((Math.max(320, boardSize.width) - START_X * 2) / (DEFAULT_W + GAP)));
     const map = new Map<string, TaskRect>();
 
-    tasks.forEach((task, idx) => {
+    let unpositionedIdx = 0;
+    topLevelTasks.forEach((task) => {
       let w = typeof task.boardW === "number" && Number.isFinite(task.boardW) ? task.boardW : DEFAULT_W;
       let h = typeof task.boardH === "number" && Number.isFinite(task.boardH) ? task.boardH : DEFAULT_H;
 
-      let x =
-        typeof task.boardX === "number" && Number.isFinite(task.boardX)
-          ? task.boardX
-          : START_X + (idx % cols) * (DEFAULT_W + GAP);
-      let y =
-        typeof task.boardY === "number" && Number.isFinite(task.boardY)
-          ? task.boardY
-          : START_Y + Math.floor(idx / cols) * (DEFAULT_H + GAP);
+      const boardX = typeof task.boardX === "number" && Number.isFinite(task.boardX) ? task.boardX : undefined;
+      const boardY = typeof task.boardY === "number" && Number.isFinite(task.boardY) ? task.boardY : undefined;
+
+      let x = boardX ?? START_X + (unpositionedIdx % cols) * (DEFAULT_W + GAP);
+      let y = boardY ?? START_Y + Math.floor(unpositionedIdx / cols) * (DEFAULT_H + GAP);
+
+      if (boardX === undefined || boardY === undefined) unpositionedIdx++;
 
       if (dragPreview?.taskId === task.id) {
         x = dragPreview.x;
@@ -274,7 +399,7 @@ function TaskGroup({
     });
 
     return map;
-  }, [tasks, boardSize.width, dragPreview, resizePreview, floatingToolbar]);
+  }, [topLevelTasks, boardSize.width, dragPreview, resizePreview, floatingToolbar]);
 
   const extendBoardToFit = (rect: TaskRect) => {
     const PAD = 160;
@@ -296,6 +421,11 @@ function TaskGroup({
   const handleLinkTaskClick = (taskId: string) => {
     if (!canEditBoard) return;
     if (!isLinkMode) return;
+    if (frozenTaskIds.has(taskId)) return;
+    if (linkFromTaskId && frozenTaskIds.has(linkFromTaskId)) {
+      setLinkFromTaskId(null);
+      return;
+    }
 
     if (!linkFromTaskId) {
       setLinkFromTaskId(taskId);
@@ -328,22 +458,20 @@ function TaskGroup({
   const openTaskModal = (task: TaskNode) => {
     setTaskModalTaskId(task.id);
     setTaskModalTitle(task.title);
-    setTaskModalDescription(task.description ?? "");
-    setTaskModalNotes(task.notes ?? "");
+    setTaskModalNotes((task.notes ?? "").trim());
     setTaskModalError(null);
   };
 
   const closeTaskModal = () => {
     setTaskModalTaskId(null);
     setTaskModalTitle("");
-    setTaskModalDescription("");
     setTaskModalNotes("");
     setTaskModalError(null);
   };
 
   const saveTaskModal = () => {
     if (!taskModalTaskId) return;
-    if (isCompleted) {
+    if (isCompleted || frozenTaskIds.has(taskModalTaskId)) {
       closeTaskModal();
       return;
     }
@@ -352,11 +480,9 @@ function TaskGroup({
       setTaskModalError("Title is required.");
       return;
     }
-    const nextDescription = taskModalDescription.trim();
     const nextNotes = taskModalNotes.trim();
     onUpdateTask(taskModalTaskId, {
       title: nextTitle,
-      description: nextDescription || undefined,
       notes: nextNotes || undefined,
     });
     closeTaskModal();
@@ -366,6 +492,7 @@ function TaskGroup({
 	    if (e.button !== 0) return;
 	    const rect = taskRectsById.get(taskId);
 	    if (!rect) return;
+      const isTaskFrozen = frozenTaskIds.has(taskId);
 
 	    taskPointerRef.current = {
 	      taskId,
@@ -377,7 +504,7 @@ function TaskGroup({
 	      originY: rect.y,
 	      w: rect.w,
       h: rect.h,
-      canDrag: canEditBoard && !isLinkMode,
+      canDrag: canEditBoard && !isLinkMode && !isTaskFrozen,
       moved: false,
     };
 
@@ -387,7 +514,7 @@ function TaskGroup({
       // ignore
     }
 
-    if (canEditBoard && !isLinkMode) {
+    if (canEditBoard && !isLinkMode && !isTaskFrozen) {
       e.preventDefault();
     }
   };
@@ -453,6 +580,7 @@ function TaskGroup({
 	  const handleResizePointerDown = (e: ReactPointerEvent<HTMLDivElement>, taskId: string) => {
 	    if (!canEditBoard) return;
 	    if (isLinkMode) return;
+      if (frozenTaskIds.has(taskId)) return;
 	    const rect = taskRectsById.get(taskId);
     if (!rect) return;
 
@@ -927,7 +1055,12 @@ function TaskGroup({
 	                    />
 	                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
 	                      {milestoneNavigation.currentMilestoneId
-	                        ? milestoneNavigation.pinnedMilestones.find((m) => m.id === milestoneNavigation.currentMilestoneId)?.title ?? "Milestone"
+	                        ? (() => {
+	                            const milestone = milestoneNavigation.pinnedMilestones.find((m) => m.id === milestoneNavigation.currentMilestoneId);
+	                            return milestone
+	                              ? milestoneNavigation.formatMilestoneTitle?.(milestone) ?? milestone.title
+	                              : "Milestone";
+	                          })()
 	                        : "Standalone"}
 	                    </span>
 	                    <span style={{ fontSize: 10, color: "#9ca3af", marginLeft: 2 }}>▼</span>
@@ -968,58 +1101,100 @@ function TaskGroup({
 	                        Milestones
 	                      </div>
 	                      {/* Pinned milestones */}
-	                      {milestoneNavigation.pinnedMilestones.map((m) => {
-	                        const cat = milestoneNavigation.categories.find((c) => c.id === m.categoryId);
-	                        const mColor = cat?.color ?? APP_MAIN_COLOR;
-	                        const isPrimary = milestoneNavigation.primaryMilestoneId === m.id;
-	                        const isActive = milestoneNavigation.currentMilestoneId === m.id;
-	                        return (
-	                          <button
-	                            key={m.id}
-	                            onClick={() => {
-	                              milestoneNavigation.onSelectMilestone(m.id);
-	                              setMilestoneDropdownOpen(false);
-	                            }}
+	                      {pinnedMilestoneGroups.map((group, groupIndex) => (
+	                        <div
+	                          key={group.category?.id ?? `uncategorized-${groupIndex}`}
+	                          style={{
+	                            borderTop: groupIndex === 0 ? "none" : "1px solid #eef2f7",
+	                            marginTop: groupIndex === 0 ? 0 : 6,
+	                            paddingTop: groupIndex === 0 ? 0 : 8,
+	                          }}
+	                        >
+	                          <div
 	                            style={{
-	                              width: "100%",
-	                              padding: "10px 14px",
-	                              fontSize: 12,
-	                              fontWeight: isActive ? 800 : 600,
-	                              backgroundColor: isActive ? "#f3f4f6" : "transparent",
-	                              color: "#333",
-	                              border: "none",
-	                              cursor: "pointer",
+	                              padding: "4px 14px 6px",
+	                              fontSize: 11,
+	                              fontWeight: 700,
+	                              color: "#94a3b8",
+	                              lineHeight: 1.2,
 	                              display: "flex",
 	                              alignItems: "center",
-	                              gap: 10,
-	                              textAlign: "left",
+	                              gap: 8,
 	                            }}
-	                            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "#f9fafb"}
-	                            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = isActive ? "#f3f4f6" : "transparent"}
 	                          >
 	                            <span
 	                              style={{
-	                                width: 10,
-	                                height: 10,
+	                                width: 8,
+	                                height: 8,
 	                                borderRadius: "50%",
-	                                backgroundColor: mColor,
+	                                backgroundColor: group.category?.color ?? "#cbd5e1",
 	                                flexShrink: 0,
 	                              }}
 	                            />
-	                            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
-	                              {m.title}
-	                            </span>
-	                            {isPrimary && (
-	                              <span style={{ fontSize: 10, color: "#8a5a12", fontWeight: 800, backgroundColor: "#fef3c7", padding: "2px 6px", borderRadius: 4 }}>
-	                                ★
-	                              </span>
-	                            )}
-	                            {m.status === "COMPLETED" && (
-	                              <span style={{ fontSize: 10, color: "#059669" }}>✓</span>
-	                            )}
-	                          </button>
-	                        );
-	                      })}
+	                            <span>{group.category?.title ?? "Other"}</span>
+	                          </div>
+	                          {group.milestones.map((m) => {
+	                            const mColor = group.category?.color ?? APP_MAIN_COLOR;
+	                            const isPrimary = milestoneNavigation.primaryMilestoneId === m.id;
+	                            const isActive = milestoneNavigation.currentMilestoneId === m.id;
+	                            return (
+	                              <button
+	                                key={m.id}
+	                                onClick={() => {
+	                                  milestoneNavigation.onSelectMilestone(m.id);
+	                                  setMilestoneDropdownOpen(false);
+	                                }}
+	                                style={{
+	                                  width: "100%",
+	                                  padding: "10px 14px",
+	                                  fontSize: 12,
+	                                  fontWeight: isActive ? 800 : 600,
+	                                  backgroundColor: isActive ? "#f3f4f6" : "transparent",
+	                                  color: "#333",
+	                                  border: "none",
+	                                  cursor: "pointer",
+	                                  display: "flex",
+	                                  alignItems: "flex-start",
+	                                  gap: 10,
+	                                  textAlign: "left",
+	                                }}
+	                                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "#f9fafb"}
+	                                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = isActive ? "#f3f4f6" : "transparent"}
+	                              >
+	                                <span
+	                                  style={{
+	                                    width: 10,
+	                                    height: 10,
+	                                    borderRadius: "50%",
+	                                    backgroundColor: mColor,
+	                                    flexShrink: 0,
+	                                  }}
+	                                />
+	                                <span
+	                                  style={{
+	                                    flex: "1 1 auto",
+	                                    minWidth: 0,
+	                                    lineHeight: 1.35,
+	                                    overflowWrap: "anywhere",
+	                                    wordBreak: "break-word",
+	                                    whiteSpace: "normal",
+	                                  }}
+	                                >
+	                                  {milestoneNavigation.formatMilestoneTitle?.(m) ?? m.title}
+	                                </span>
+	                                {isPrimary && (
+	                                  <span style={{ fontSize: 10, color: "#8a5a12", fontWeight: 800, backgroundColor: "#fef3c7", padding: "2px 6px", borderRadius: 4, flexShrink: 0 }}>
+	                                    ★
+	                                  </span>
+	                                )}
+	                                {m.status === "COMPLETED" && (
+	                                  <span style={{ fontSize: 10, color: "#059669", flexShrink: 0 }}>✓</span>
+	                                )}
+	                              </button>
+	                            );
+	                          })}
+	                        </div>
+	                      ))}
 
 	                      {/* Standalone option */}
 	                      <button
@@ -1089,7 +1264,7 @@ function TaskGroup({
 	                      )}
 
 	                      {/* Milestone actions - only for selected milestone */}
-	                      {milestoneNavigation.currentMilestoneId && (canSetObjective || onMarkMilestoneCompleted) && (
+	                      {milestoneNavigation.currentMilestoneId && (canSetObjective || onMarkMilestoneCompleted || milestoneNavigation.onUnpinMilestone) && (
 	                        <>
 	                          <div style={{ height: 1, backgroundColor: "#e5e7eb", margin: "8px 0" }} />
 
@@ -1180,6 +1355,45 @@ function TaskGroup({
 	                                fontSize: 11,
 	                              }}>✓</span>
 	                              <span>Mark Complete</span>
+	                            </button>
+	                          )}
+
+	                          {/* Unpin milestone */}
+	                          {milestoneNavigation.onUnpinMilestone && (
+	                            <button
+	                              onClick={() => {
+	                                milestoneNavigation.onUnpinMilestone!(milestoneNavigation.currentMilestoneId!);
+	                                setMilestoneDropdownOpen(false);
+	                              }}
+	                              style={{
+	                                width: "100%",
+	                                padding: "10px 14px",
+	                                fontSize: 12,
+	                                fontWeight: 600,
+	                                backgroundColor: "transparent",
+	                                color: "#dc2626",
+	                                border: "none",
+	                                cursor: "pointer",
+	                                display: "flex",
+	                                alignItems: "center",
+	                                gap: 10,
+	                                textAlign: "left",
+	                                transition: "background-color 0.15s ease",
+	                              }}
+	                              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "#fef2f2"}
+	                              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "transparent"}
+	                            >
+	                              <span style={{
+	                                width: 20,
+	                                height: 20,
+	                                borderRadius: 6,
+	                                backgroundColor: "#fef2f2",
+	                                display: "flex",
+	                                alignItems: "center",
+	                                justifyContent: "center",
+	                                fontSize: 11,
+	                              }}>✕</span>
+	                              <span>Unpin from Month</span>
 	                            </button>
 	                          )}
 	                        </>
@@ -1398,14 +1612,18 @@ function TaskGroup({
 		                  })()}
 		                </svg>
 
-	                {tasks.map((task) => {
+	                {topLevelTasks.map((task) => {
 	                const rect = taskRectsById.get(task.id);
 	                if (!rect) return null;
+                  const isTaskFrozen = frozenTaskIds.has(task.id);
+                  const isTaskDeleteLocked = deleteLockedTaskIds.has(task.id);
+                  const canSetCompleted = canToggleTaskStatus(task, "COMPLETED");
+                  const canSetInProgress = canToggleTaskStatus(task, "NOT_COMPLETED");
 
                 const statusGlyph = task.status === "GREEN" ? "✓" : task.status === "YELLOW" ? "◐" : "○";
+                const statusLabel = task.status === "GREEN" ? "Completed" : task.status === "YELLOW" ? "In Progress" : "Not Started";
                 const statusColor = task.status === "GREEN" ? "#10b981" : task.status === "YELLOW" ? "#f59e0b" : "#9ca3af";
                 const statusBgColor = task.status === "GREEN" ? "#d1fae5" : task.status === "YELLOW" ? "#fef3c7" : "#f3f4f6";
-                const description = (task.description ?? "").trim();
 
                 const isLinkSelected = isLinkMode && linkFromTaskId === task.id;
                 const isDragging = dragPreview?.taskId === task.id;
@@ -1430,7 +1648,7 @@ function TaskGroup({
                       top: rect.y,
                       width: rect.w,
                       height: rect.h,
-                      padding: "14px 14px 28px",
+                      padding: "14px 14px 42px",
                       boxSizing: "border-box",
                       borderRadius: 12,
                       backgroundColor: "#ffffff",
@@ -1438,7 +1656,7 @@ function TaskGroup({
                       boxShadow: isDragging
                         ? "0 20px 40px rgba(0,0,0,0.15), 0 0 0 2px rgba(59,130,246,0.5)"
                         : "0 1px 3px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04)",
-                      cursor: isLinkMode ? "crosshair" : canEditBoard ? "grab" : "pointer",
+                      cursor: isLinkMode && !isTaskFrozen ? "crosshair" : canEditBoard && !isTaskFrozen ? "grab" : "pointer",
                       userSelect: "none",
                       overflow: "hidden",
                       zIndex: isDragging ? 5 : 2,
@@ -1462,77 +1680,158 @@ function TaskGroup({
                         {task.title}
                       </div>
 
-                      {!isCompleted && (
-                        <button
-                          onPointerDown={(e) => e.stopPropagation()}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (!window.confirm(`Delete task "${task.title}"?`)) return;
-                            const nextLinks = links.filter((l) => l.from !== task.id && l.to !== task.id);
-                            if (nextLinks.length !== links.length) onUpdateLinks(nextLinks);
-                            onDeleteTask(task.id);
-                          }}
-                          style={{
-                            padding: "2px 6px",
-                            fontSize: 11,
-                            backgroundColor: "transparent",
-                            color: "#9ca3af",
-                            border: "none",
-                            cursor: "pointer",
-                            lineHeight: 1,
-                            borderRadius: 4,
-                            transition: "color 0.15s, background-color 0.15s",
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.color = "#ef4444";
-                            e.currentTarget.style.backgroundColor = "#fef2f2";
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.color = "#9ca3af";
-                            e.currentTarget.style.backgroundColor = "transparent";
-                          }}
-                          title="Delete task"
-                        >
-                          ✕
-                        </button>
+                      {!isCompleted && !isTaskFrozen && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                          <button
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (!canSetCompleted) return;
+                              onSetTaskStatus(task.id, "COMPLETED");
+                            }}
+                            disabled={!canSetCompleted}
+                            style={{
+                              width: 18,
+                              height: 18,
+                              borderRadius: 5,
+                              border: `1px solid ${canSetCompleted ? "#10b981" : blockedStatusColors.border}`,
+                              backgroundColor: canSetCompleted ? (task.status === "GREEN" ? "#10b981" : "#ffffff") : blockedStatusColors.background,
+                              color: canSetCompleted ? (task.status === "GREEN" ? "#ffffff" : "#10b981") : blockedStatusColors.text,
+                              cursor: canSetCompleted ? "pointer" : "not-allowed",
+                              fontSize: 10,
+                              fontWeight: 800,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                            }}
+                            title={task.status === "GREEN" ? "Clear completed status" : "Mark task as completed"}
+                          >
+                            ✓
+                          </button>
+                          <button
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (!canSetInProgress) return;
+                              onSetTaskStatus(task.id, "NOT_COMPLETED");
+                            }}
+                            disabled={!canSetInProgress}
+                            style={{
+                              width: 18,
+                              height: 18,
+                              borderRadius: 5,
+                              border: `1px solid ${canSetInProgress ? "#f59e0b" : blockedStatusColors.border}`,
+                              backgroundColor: canSetInProgress ? (task.status === "YELLOW" ? "#f59e0b" : "#ffffff") : blockedStatusColors.background,
+                              color: canSetInProgress ? (task.status === "YELLOW" ? "#ffffff" : "#f59e0b") : blockedStatusColors.text,
+                              cursor: canSetInProgress ? "pointer" : "not-allowed",
+                              fontSize: 10,
+                              fontWeight: 800,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                            }}
+                            title={task.status === "YELLOW" ? "Clear work in progress status" : "Mark task as work in progress"}
+                          >
+                            ◐
+                          </button>
+                          <button
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (isTaskDeleteLocked) return;
+                              if (!window.confirm(`Delete task "${task.title}"?`)) return;
+                              const nextLinks = links.filter((l) => l.from !== task.id && l.to !== task.id);
+                              if (nextLinks.length !== links.length) onUpdateLinks(nextLinks);
+                              onDeleteTask(task.id);
+                            }}
+                            disabled={isTaskDeleteLocked}
+                            style={{
+                              width: 18,
+                              height: 18,
+                              borderRadius: 5,
+                              border: `1px solid ${isTaskDeleteLocked ? blockedStatusColors.border : "#fecaca"}`,
+                              backgroundColor: isTaskDeleteLocked ? blockedStatusColors.background : "#ffffff",
+                              color: isTaskDeleteLocked ? blockedStatusColors.text : "#ef4444",
+                              cursor: isTaskDeleteLocked ? "not-allowed" : "pointer",
+                              fontSize: 10,
+                              fontWeight: 800,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              flexShrink: 0,
+                            }}
+                            title="Delete task"
+                          >
+                            ✕
+                          </button>
+                        </div>
                       )}
                     </div>
 
+                    {(() => {
+                      const subtasks = tasks.filter((t) => t.parentId === task.id);
+                      if (subtasks.length === 0) return null;
+                      return (
+                        <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 3, overflow: "hidden" }}>
+                          {subtasks.slice(0, 5).map((st) => {
+                            const stGlyph = st.status === "GREEN" ? "✓" : st.status === "YELLOW" ? "◐" : "○";
+                            const stColor = st.status === "GREEN" ? "#10b981" : st.status === "YELLOW" ? "#f59e0b" : "#9ca3af";
+                            return (
+                              <div key={st.id} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, lineHeight: 1.3 }}>
+                                <span style={{ color: stColor, fontWeight: 700, flexShrink: 0 }}>{stGlyph}</span>
+                                <span style={{ color: "#4b5563", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{st.title}</span>
+                              </div>
+                            );
+                          })}
+                          {subtasks.length > 5 && (
+                            <div style={{ fontSize: 11, color: "#9ca3af", fontStyle: "italic" }}>+{subtasks.length - 5} more</div>
+                          )}
+                        </div>
+                      );
+                    })()}
+
                     <div
                       style={{
-                        marginTop: 8,
-                        fontSize: 13,
-                        color: description ? "#4b5563" : "#9ca3af",
-                        fontStyle: description ? "normal" : "italic",
-                        lineHeight: 1.45,
-                        display: "-webkit-box",
-                        WebkitLineClamp: 4,
-                        WebkitBoxOrient: "vertical",
-                        overflow: "hidden",
-                        whiteSpace: "pre-wrap",
+                        position: "absolute",
+                        bottom: 8,
+                        left: 14,
+                        right: 24,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: 8,
                       }}
                     >
-                      {description || "Add description…"}
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                          padding: "3px 8px",
+                          borderRadius: 6,
+                          backgroundColor: statusBgColor,
+                          fontSize: 11,
+                          fontWeight: 700,
+                          color: statusColor,
+                          minWidth: 0,
+                        }}
+                        title={statusLabel}
+                      >
+                        <span>{statusGlyph}</span>
+                        <span
+                          style={{
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {statusLabel}
+                        </span>
+                      </div>
+
                     </div>
 
-                    <div style={{
-                      position: "absolute",
-                      bottom: 8,
-                      left: 14,
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 4,
-                      padding: "3px 8px",
-                      borderRadius: 6,
-                      backgroundColor: statusBgColor,
-                      fontSize: 11,
-                      fontWeight: 600,
-                      color: statusColor,
-                    }}>
-                      {statusGlyph}
-                    </div>
-
-                    {!isCompleted && !isLinkMode && (
+                    {!isCompleted && !isLinkMode && !isTaskFrozen && (
                       <div
                         onPointerDown={(e) => handleResizePointerDown(e, task.id)}
                         onPointerMove={handleResizePointerMove}
@@ -1564,172 +1863,26 @@ function TaskGroup({
       </div>
 
 	      {taskModalTaskId && (
-	        <div
-	          style={{
-	            position: "fixed",
-	            inset: 0,
-            backgroundColor: "rgba(0, 0, 0, 0.5)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 1200,
-            padding: 16,
-          }}
-          onClick={closeTaskModal}
-        >
-          <div
-            style={{
-              backgroundColor: noteBackgroundColor,
-              backgroundImage: "linear-gradient(180deg, rgba(255,255,255,0.65), rgba(0,0,0,0.02))",
-              borderRadius: 12,
-              padding: 24,
-              width: "100%",
-              maxWidth: 560,
-              maxHeight: "90vh",
-              overflow: "auto",
-              boxShadow: "0 10px 40px rgba(0,0,0,0.30)",
-              border: `2px solid ${noteBorderColor}`,
+          <TaskDetailModal
+            accentColor={noteBorderColor}
+            titleValue={taskModalTitle}
+            notesValue={taskModalNotes}
+            readOnly={taskModalReadOnly}
+            titleReadOnly={taskModalTitleReadOnly}
+            errorMessage={taskModalError}
+            onTitleChange={setTaskModalTitle}
+            onNotesChange={setTaskModalNotes}
+            onClose={closeTaskModal}
+            onSave={saveTaskModal}
+            subtasks={taskModalSubtasks}
+            canAddSubtask={canAddTaskModalSubtask}
+            onAddSubtask={(title) => {
+              if (!taskModalTaskId) return;
+              onAddSubtask(taskModalTaskId, title);
             }}
-            onClick={(e) => e.stopPropagation()}
-	          >
-	            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
-	              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 900, color: "#111" }}>
-	                Task Details
-	              </h3>
-	              <button
-	                onClick={closeTaskModal}
-	                style={{
-	                  padding: "4px 8px",
-                  fontSize: 18,
-                  backgroundColor: "transparent",
-                  border: "none",
-                  cursor: "pointer",
-                  color: "#666",
-                  lineHeight: 1,
-                }}
-                title="Close"
-              >
-                ✕
-              </button>
-            </div>
-
-	            <div style={{ marginBottom: 12 }}>
-	              <label style={{ display: "block", marginBottom: 6, fontWeight: 600, fontSize: 12, color: "#333" }}>
-	                Title
-	              </label>
-	              <input
-	                type="text"
-	                value={taskModalTitle}
-	                onChange={(e) => setTaskModalTitle(e.target.value)}
-	                readOnly={isCompleted}
-	                autoFocus
-	                style={{
-	                  width: "100%",
-	                  padding: 10,
-	                  fontSize: 14,
-	                  backgroundColor: isCompleted ? "rgba(255,255,255,0.55)" : "white",
-	                  border: `1px solid ${noteBorderColor}`,
-	                  borderRadius: 6,
-	                  boxSizing: "border-box",
-	                  outline: "none",
-	                  cursor: isCompleted ? "default" : "text",
-	                }}
-	              />
-	            </div>
-
-            <div style={{ marginBottom: 12 }}>
-              <label style={{ display: "block", marginBottom: 6, fontWeight: 600, fontSize: 12, color: "#333" }}>
-                Short Description
-              </label>
-	              <textarea
-	                value={taskModalDescription}
-	                onChange={(e) => setTaskModalDescription(e.target.value)}
-	                readOnly={isCompleted}
-	                rows={4}
-	                style={{
-	                  width: "100%",
-	                  padding: 10,
-	                  fontSize: 13,
-	                  backgroundColor: isCompleted ? "rgba(255,255,255,0.55)" : "white",
-	                  border: `1px solid ${noteBorderColor}`,
-	                  borderRadius: 6,
-	                  boxSizing: "border-box",
-	                  outline: "none",
-	                  resize: "vertical",
-	                  fontFamily: "inherit",
-	                  cursor: isCompleted ? "default" : "text",
-	                }}
-	              />
-	            </div>
-
-            <div style={{ marginBottom: 12 }}>
-              <label style={{ display: "block", marginBottom: 6, fontWeight: 600, fontSize: 12, color: "#333" }}>
-                Notes / Comments
-              </label>
-	              <textarea
-	                value={taskModalNotes}
-	                onChange={(e) => setTaskModalNotes(e.target.value)}
-	                readOnly={isCompleted}
-	                rows={14}
-	                style={{
-	                  width: "100%",
-	                  padding: 10,
-	                  fontSize: 13,
-	                  backgroundColor: isCompleted ? "rgba(255,255,255,0.55)" : "white",
-	                  border: `1px solid ${noteBorderColor}`,
-	                  borderRadius: 6,
-	                  boxSizing: "border-box",
-	                  outline: "none",
-	                  resize: "vertical",
-	                  fontFamily: "inherit",
-	                  cursor: isCompleted ? "default" : "text",
-	                }}
-	              />
-	            </div>
-
-            {taskModalError && (
-              <div style={{ marginBottom: 10, color: "#f44336", fontSize: 12, fontWeight: 600 }}>
-                {taskModalError}
-              </div>
-            )}
-
-	            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-	              <button
-	                onClick={closeTaskModal}
-	                style={{
-	                  padding: "8px 12px",
-                  fontSize: 13,
-                  fontWeight: 700,
-                  backgroundColor: "white",
-                  color: "#666",
-                  border: "1px solid #ddd",
-                  borderRadius: 8,
-	                  cursor: "pointer",
-	                }}
-	              >
-	                {isCompleted ? "Close" : "Cancel"}
-	              </button>
-	              {!isCompleted && (
-	                <button
-	                  onClick={saveTaskModal}
-	                  style={{
-	                    padding: "8px 12px",
-	                    fontSize: 13,
-	                    fontWeight: 800,
-	                    backgroundColor: noteBorderColor,
-	                    color: "white",
-	                    border: "none",
-	                    borderRadius: 8,
-	                    cursor: "pointer",
-	                  }}
-	                >
-	                  Save
-	                </button>
-	              )}
-	            </div>
-	          </div>
-	        </div>
-	      )}
+            autoFocusTitle
+          />
+        )}
     </div>
   );
 }
@@ -1766,7 +1919,7 @@ function FocusTemplatesPanel({
   const [editTemplateEnd, setEditTemplateEnd] = useState("");
   const [editTemplateDays, setEditTemplateDays] = useState<Weekday[]>([]);
 
-  const suspendInfoStorageKey = "focustree.templateSuspendInfo.dismissed";
+  const suspendInfoStorageKey = "onion-app.templateSuspendInfo.dismissed";
   const [suspendInfoDismissed, setSuspendInfoDismissed] = useState(() => {
     try {
       return window.localStorage.getItem(suspendInfoStorageKey) === "1";
@@ -2227,6 +2380,9 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
     return { state: next, didAutoClose: changed };
   }, [rawState, currentYM]);
   const plan = getMonth(state, ymSafe);
+  const frozenTaskIds = useMemo(() => getFrozenTaskIds(state), [state]);
+  const deleteLockedTaskIds = useMemo(() => getDeleteLockedTaskIds(state), [state]);
+  const titleLockedTaskIds = useMemo(() => getTitleLockedTaskIds(state), [state]);
   const shortName = getShortUserName(getUserName());
   const selectableMilestoneIds = state.grandPlan
     ? getSelectableMilestoneIds(state.grandPlan.milestones)
@@ -2242,9 +2398,20 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
 
   useEffect(() => {
     if (!didAutoClose) return;
-    saveState(state);
+    // Re-derive from fresh storage: the memoized `state` may be stale if another
+    // component saved since this page's last loadState, and saving it directly
+    // would roll those writes back.
+    let next = loadState();
+    let changed = false;
+    Object.values(next.months).forEach((plan0) => {
+      if (plan0.ym < currentYM && !plan0.isClosed) {
+        next = autoCloseMonth(next, plan0.ym);
+        changed = true;
+      }
+    });
+    if (changed) saveState(next);
     setTick((t) => t + 1);
-  }, [didAutoClose, state]);
+  }, [didAutoClose, currentYM]);
 
   const previousYM = useMemo(() => getPreviousYM(ymSafe), [ymSafe]);
   const previousPlan = previousYM ? getMonth(state, previousYM) : undefined;
@@ -2309,7 +2476,7 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
   const [creatingTask, setCreatingTask] = useState<{ milestoneId: string | null } | null>(null);
 
   // v8: Pin navigation (null = Standalone)
-  const selectedPinStorageKey = `focustree:month-setup:selected-pin:${ymSafe}`;
+  const selectedPinStorageKey = `onion-app:month-setup:selected-pin:${ymSafe}`;
   const [selectedMilestoneId, setSelectedMilestoneId] = useState<string | null>(() => {
     try {
       const raw = window.localStorage.getItem(selectedPinStorageKey);
@@ -2395,24 +2562,45 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
 
   const handleUpdateTask = (
     taskId: string,
-    updates: Partial<Pick<TaskNode, "title" | "description" | "notes" | "boardX" | "boardY" | "boardW" | "boardH">>
+    updates: Partial<Pick<TaskNode, "title" | "notes" | "boardX" | "boardY" | "boardW" | "boardH">>
   ) => {
-    mutate((s) => updateTaskInMonth(s, ymSafe, taskId, updates));
+    mutate((s) => updateTask(s, taskId, updates));
   };
 
   const handleDeleteTask = (taskId: string) => {
-    mutate((s) => deleteTaskFromMonth(s, ymSafe, taskId));
+    mutate((s) => deleteTask(s, taskId));
+  };
+
+  const handleSetTaskStatus = (taskId: string, outcome: "COMPLETED" | "NOT_COMPLETED" | undefined) => {
+    mutate((s) => applyTaskStatus(s, taskId, outcome));
+  };
+
+  const handleAddSubtask = (parentTaskId: string, title: string) => {
+    mutate((s) => addSubtask(s, parentTaskId, title).state);
   };
 
   // v8: Milestones pinned to this month (shown as "pins" at the top)
   const pinnedMilestones = getMilestonesInMonth(state, ymSafe);
   const pinnedIdsKey = (plan?.pinnedMilestoneIds ?? []).join("|");
   const primaryMilestoneId = plan?.primaryMilestoneId ?? null;
-  const primaryMilestone = pinnedMilestones.find((m) => m.id === primaryMilestoneId) ?? null;
-  const secondaryMilestones = pinnedMilestones.filter((m) => m.id !== primaryMilestoneId);
-  const orderedPinnedMilestones = primaryMilestone
-    ? [primaryMilestone, ...secondaryMilestones]
-    : secondaryMilestones;
+  const orderedPinnedMilestones = useMemo(() => {
+    const categoriesById = new Map((state.grandPlan?.categories ?? []).map((category) => [category.id, category] as const));
+    return pinnedMilestones
+      .slice()
+      .sort((a, b) => {
+        const aCategory = categoriesById.get(a.categoryId);
+        const bCategory = categoriesById.get(b.categoryId);
+        const hueDiff = getColorHue(aCategory?.color ?? "") - getColorHue(bCategory?.color ?? "");
+        if (hueDiff !== 0) return hueDiff;
+        const categoryTitleDiff = (aCategory?.title ?? "").localeCompare(bCategory?.title ?? "");
+        if (categoryTitleDiff !== 0) return categoryTitleDiff;
+        const aIsPrimary = a.id === primaryMilestoneId;
+        const bIsPrimary = b.id === primaryMilestoneId;
+        if (aIsPrimary !== bIsPrimary) return aIsPrimary ? -1 : 1;
+        if (a.order !== b.order) return a.order - b.order;
+        return a.title.localeCompare(b.title);
+      });
+  }, [pinnedMilestones, state.grandPlan?.categories, primaryMilestoneId]);
 
   useEffect(() => {
     try {
@@ -2454,18 +2642,19 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
   }, [state.grandPlan]);
 
   const wizardMilestoneIndex = useMemo(() => {
+    const allMilestones = state.grandPlan?.milestones ?? [];
     const map = new Map<string, { title: string; categoryTitle: string; categoryColor: string }>();
     for (const group of wizardMilestoneGroups) {
       for (const milestone of group.milestones) {
         map.set(milestone.id, {
-          title: milestone.title,
+          title: formatMilestoneTitle(milestone, allMilestones),
           categoryTitle: group.category.title,
           categoryColor: group.category.color,
         });
       }
     }
     return map;
-  }, [wizardMilestoneGroups]);
+  }, [state.grandPlan?.milestones, wizardMilestoneGroups]);
 
   const selectedObjectiveTitle = monthWizardPrimaryId
     ? wizardMilestoneIndex.get(monthWizardPrimaryId)?.title ?? ""
@@ -2544,10 +2733,11 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
 
   useEffect(() => {
     if (!plan) return;
-    if (selectedMilestoneId && !plan.pinnedMilestoneIds.includes(selectedMilestoneId)) {
-      setSelectedMilestoneId(plan.pinnedMilestoneIds[0] ?? null);
+    const visibleIds = new Set(pinnedMilestones.map((m) => m.id));
+    if (selectedMilestoneId && !visibleIds.has(selectedMilestoneId)) {
+      setSelectedMilestoneId(pinnedMilestones[0]?.id ?? null);
     }
-  }, [pinnedIdsKey, selectedMilestoneId]);
+  }, [pinnedMilestones, selectedMilestoneId]);
 
   // Removed auto-selection of primary milestone - user must explicitly choose via wizard
 
@@ -2581,17 +2771,12 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
     );
   }
 
-  // v6.1: Get standalone tasks (no linkedMilestoneId)
-  const standaloneTasks = plan?.tasks.filter((t) => !t.linkedMilestoneId) ?? [];
+  const allTasks = useMemo(() => getAllTasks(state), [state]);
+  const monthTasks = useMemo(() => getTasksForMonth(state, ymSafe), [state, ymSafe]);
+  const standaloneTasks = useMemo(() => getStandaloneTasks(state), [state]);
 
   const monthWizardSteps = ["Milestones", "Focus sessions"] as const;
   const monthWizardTitle = monthWizardSteps[monthWizardStep] ?? monthWizardSteps[0];
-
-
-  // v6.1: Get tasks for a specific milestone
-  const getTasksForMilestone = (milestoneId: string) => {
-    return plan?.tasks.filter((t) => t.linkedMilestoneId === milestoneId) ?? [];
-  };
 
   // v8: Pin milestone to this month board (no automatic task creation)
   const handlePinMilestone = (milestone: MilestoneNode) => {
@@ -2613,6 +2798,24 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
     });
     setSelectedMilestoneId(milestone.id);
     setShowMilestonePicker(false);
+  };
+
+  const handleUnpinMilestone = (milestoneId: string) => {
+    if (!plan) return;
+    mutate((s0) => {
+      const plan0 = getMonth(s0, ymSafe);
+      if (!plan0) return s0;
+      const nextPinned = plan0.pinnedMilestoneIds.filter((id) => id !== milestoneId);
+      const nextPrimary = plan0.primaryMilestoneId === milestoneId
+        ? nextPinned[0] ?? undefined
+        : plan0.primaryMilestoneId;
+      return upsertMonth(s0, {
+        ...plan0,
+        pinnedMilestoneIds: nextPinned,
+        primaryMilestoneId: nextPrimary,
+      });
+    });
+    setSelectedMilestoneId((prev) => prev === milestoneId ? null : prev);
   };
 
   const handleSetObjectiveMilestone = (milestoneId: string) => {
@@ -2639,30 +2842,6 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
     onWizardStateChange?.({ open: false, primarySelected: false, wizardStep: 0 });
   };
 
-  const importMilestoneBoardFromPrevious = (plan0: MonthPlan, milestoneId: string) => {
-    if (!previousPlan) return plan0;
-    if (plan0.tasks.some((t) => t.linkedMilestoneId === milestoneId)) return plan0;
-
-    const prevTasks = previousPlan.tasks.filter((t) => t.linkedMilestoneId === milestoneId);
-    if (prevTasks.length === 0) return plan0;
-
-    const scopeKey = `milestone:${milestoneId}`;
-    const nextTasks = [...plan0.tasks, ...prevTasks.map((t) => ({ ...t }))];
-    const nextBoardByScope = { ...(plan0.boardByScope ?? {}) };
-    const prevBoard = previousPlan.boardByScope?.[scopeKey];
-    if (prevBoard) nextBoardByScope[scopeKey] = { ...prevBoard };
-    const nextLinksByScope = { ...(plan0.taskLinksByScope ?? {}) };
-    const prevLinks = previousPlan.taskLinksByScope?.[scopeKey];
-    if (prevLinks) nextLinksByScope[scopeKey] = prevLinks.map((l) => ({ ...l }));
-
-    return {
-      ...plan0,
-      tasks: nextTasks,
-      boardByScope: nextBoardByScope,
-      taskLinksByScope: nextLinksByScope,
-    };
-  };
-
   const applyMonthWizardMilestones = () => {
     if (!plan) return;
     const filteredSecondary = monthWizardSecondaryIds.filter(
@@ -2676,16 +2855,11 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
     mutate((s0) => {
       const plan0 = getMonth(s0, ymSafe);
       if (!plan0) return s0;
-      let nextPlan: MonthPlan = {
+      const nextPlan: MonthPlan = {
         ...plan0,
         pinnedMilestoneIds: nextPinned,
         primaryMilestoneId: fallbackPrimary,
       };
-
-      const carryoverToImport = nextPinned.filter((id) => carryoverMilestoneIds.has(id));
-      carryoverToImport.forEach((milestoneId) => {
-        nextPlan = importMilestoneBoardFromPrevious(nextPlan, milestoneId);
-      });
 
       let nextState = upsertMonth(s0, nextPlan);
       nextPinned.forEach((milestoneId) => {
@@ -2826,12 +3000,12 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
   if (plan?.isClosed) {
     const grandPlan = state.grandPlan;
 
-    const tasksTotalCount = plan.tasks.length;
-    const tasksCompletedCount = plan.tasks.filter((t) => t.status === "GREEN").length;
+    const tasksTotalCount = monthTasks.length;
+    const tasksCompletedCount = monthTasks.filter((t) => t.status === "GREEN").length;
     const completionRate = tasksTotalCount > 0 ? Math.round((tasksCompletedCount / tasksTotalCount) * 100) : 0;
 
     const dates = listDatesInMonth(ymSafe);
-    const tasksById = new Map(plan.tasks.map((t) => [t.id, t] as const));
+    const tasksById = new Map(allTasks.map((t) => [t.id, t] as const));
     const templatesById = new Map(plan.templates.map((t) => [t.id, t] as const));
 
     const categoryMetas = [
@@ -2863,7 +3037,7 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
           dateISO,
           badge: {
             id: m.id,
-            title: m.title,
+            title: formatMilestoneTitle(m, grandPlan?.milestones ?? []),
             dateLabel: formatDateLabel(dateISO as DateISO, { withYear: false }),
             categoryLabel,
             color,
@@ -3244,34 +3418,24 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
 	                  : null;
 
 		                const title = milestone
-		                  ? `[${category?.title ?? "Category"}] ${milestone.title}`
+		                  ? `[${category?.title ?? "Category"}] ${formatMilestoneTitle(milestone, state.grandPlan?.milestones ?? [])}`
 		                  : "Standalone";
 
 		                const color = milestone ? category?.color ?? APP_MAIN_COLOR : "#000";
-		                const tasks = milestone ? getTasksForMilestone(milestone.id) : standaloneTasks;
+		                const tasks = milestone ? getTasksForMilestone(state, milestone.id) : standaloneTasks;
 
 		                const scopeKey = milestone ? `milestone:${milestone.id}` : "standalone";
-		                const zoomStorageKey = `focustree:month-setup:board-zoom:${ymSafe}:${scopeKey}`;
+		                const zoomStorageKey = `onion-app:month-setup:board-zoom:${ymSafe}:${scopeKey}`;
 		                const defaultBoardSize = { width: 2400, height: 1400 };
-		                const boardSize = plan.boardByScope?.[scopeKey] ?? defaultBoardSize;
-		                const links = plan.taskLinksByScope?.[scopeKey] ?? [];
+		                const boardSize = getTaskBoardForScope(state, scopeKey) ?? defaultBoardSize;
+		                const links = getTaskLinksForScope(state, scopeKey);
 
 	                const handleUpdateBoardSize = (next: { width: number; height: number }) => {
-	                  mutate((s0) => {
-	                    const plan0 = getMonth(s0, ymSafe);
-	                    if (!plan0) return s0;
-	                    const nextBoardByScope = { ...(plan0.boardByScope ?? {}), [scopeKey]: next };
-	                    return upsertMonth(s0, { ...plan0, boardByScope: nextBoardByScope });
-	                  });
+	                  mutate((s0) => updateTaskBoardForScope(s0, scopeKey, next));
 	                };
 
 	                const handleUpdateLinks = (next: { from: string; to: string }[]) => {
-	                  mutate((s0) => {
-	                    const plan0 = getMonth(s0, ymSafe);
-	                    if (!plan0) return s0;
-	                    const nextLinksByScope = { ...(plan0.taskLinksByScope ?? {}), [scopeKey]: next };
-	                    return upsertMonth(s0, { ...plan0, taskLinksByScope: nextLinksByScope });
-	                  });
+	                  mutate((s0) => updateTaskLinksForScope(s0, scopeKey, next));
 	                };
 
 		                return (
@@ -3281,6 +3445,9 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
 		                    tasks={tasks}
 		                    milestoneId={milestone ? milestone.id : null}
 		                    milestoneStatus={milestone?.status}
+                        frozenTaskIds={frozenTaskIds}
+                        deleteLockedTaskIds={deleteLockedTaskIds}
+                        titleLockedTaskIds={titleLockedTaskIds}
                         isObjective={Boolean(milestone && primaryMilestoneId === milestone.id)}
                         onSetObjective={milestone ? handleSetObjectiveMilestone : undefined}
 		                    boardSize={boardSize}
@@ -3290,7 +3457,9 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
 			                    zoomStorageKey={zoomStorageKey}
 			                    onAddTask={handleAddTask}
 			                    onUpdateTask={handleUpdateTask}
+			                    onSetTaskStatus={handleSetTaskStatus}
 			                    onDeleteTask={handleDeleteTask}
+			                    onAddSubtask={handleAddSubtask}
 		                    onMarkMilestoneCompleted={milestone ? handleMarkMilestoneCompleted : undefined}
 		                    hideTitle
 		                    chromeless={!milestone}
@@ -3302,6 +3471,8 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
 		                      primaryMilestoneId,
 		                      onSelectMilestone: setSelectedMilestoneId,
 		                      onPinMilestone: isInPeriod && state.grandPlan && state.grandPlan.milestones.length > 0 ? () => setShowMilestonePicker(true) : undefined,
+		                      onUnpinMilestone: isInPeriod ? handleUnpinMilestone : undefined,
+		                      formatMilestoneTitle: (m) => formatMilestoneTitle(m, state.grandPlan?.milestones ?? []),
 		                    }}
 		                  />
 		                );
@@ -3521,7 +3692,7 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
                                               style={{ cursor: "pointer" }}
                                             />
                                             <span style={{ flex: 1, color: "#111", fontSize: 14, lineHeight: 1.35 }}>
-                                              {milestone.title}
+                                              {formatMilestoneTitle(milestone, state.grandPlan?.milestones ?? [])}
                                             </span>
                                           </label>
                                         );
@@ -3631,7 +3802,7 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
                                               style={{ cursor: isPrimary ? "not-allowed" : "pointer" }}
                                             />
                                             <span style={{ flex: 1, color: "#111", fontSize: 14, lineHeight: 1.35 }}>
-                                              {milestone.title}
+                                              {formatMilestoneTitle(milestone, state.grandPlan?.milestones ?? [])}
                                             </span>
                                           </label>
                                         );
@@ -3870,7 +4041,7 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
                               fontSize: 14,
                             }}
                           >
-                            {milestone.title}
+                            {formatMilestoneTitle(milestone, state.grandPlan?.milestones ?? [])}
                             <span
                               style={{
                                 float: "right",
@@ -4212,7 +4383,7 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
 	                    ? state.grandPlan?.categories.find((c) => c.id === milestone.categoryId) ?? null
 	                    : null;
 	                  const accentColor = category?.color ?? "#FFD700";
-	                  const title = milestone?.title ?? "this milestone";
+	                  const title = milestone ? formatMilestoneTitle(milestone, state.grandPlan?.milestones ?? []) : "this milestone";
 
 	                  return (
 	                    <>
@@ -4271,7 +4442,10 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
 	              title="Add Task"
 	              subtitle={
                   creatingTask.milestoneId
-                    ? `This task will be linked to “${state.grandPlan?.milestones.find((m) => m.id === creatingTask.milestoneId)?.title ?? "Milestone"}”.`
+                    ? `This task will be linked to “${(() => {
+                        const milestone = state.grandPlan?.milestones.find((m) => m.id === creatingTask.milestoneId);
+                        return milestone ? formatMilestoneTitle(milestone, state.grandPlan?.milestones ?? []) : "Milestone";
+                      })()}”.`
                     : "This task will be standalone (not linked to a milestone)."
                 }
 	              accentColor={(() => {
@@ -4284,20 +4458,17 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
                   return category?.color ?? APP_MAIN_COLOR;
                 })()}
 	              titlePlaceholder="Task title..."
-	              descriptionLabel="Short Description"
-	              descriptionPlaceholder="What needs to be done (optional)..."
+	              descriptionLabel="Notes"
+	              descriptionPlaceholder="What should be visible on this task card? (optional)..."
 	              confirmLabel="Add Task"
 	              onCancel={() => setCreatingTask(null)}
-	              onConfirm={(title, description) => {
-                  const nextDescription = description.trim() || undefined;
+	              onConfirm={(title, notes) => {
+                  const nextNotes = notes.trim() || undefined;
                   const milestoneId = creatingTask.milestoneId;
 
                   mutate((s0) => {
-                    const plan0 = getMonth(s0, ymSafe);
-                    if (!plan0) return s0;
-
                     if (milestoneId) {
-                      const result = addTaskWithMilestone(s0, ymSafe, title.trim(), milestoneId, null, nextDescription);
+                      const result = addTaskWithMilestone(s0, title.trim(), milestoneId, null, nextNotes);
                       let nextState = result.state;
                       const m0 = nextState.grandPlan?.milestones.find((m) => m.id === milestoneId);
                       if (m0 && m0.status === "NOT_STARTED") {
@@ -4306,15 +4477,7 @@ export default function MonthSetupPage(props: MonthSetupPageProps = {}) {
                       return nextState;
                     }
 
-                    const task: TaskNode = {
-                      id: makeId("task"),
-                      title: title.trim(),
-                      description: nextDescription,
-                      parentId: null,
-                      status: "NONE",
-                    };
-
-                    return upsertMonth(s0, { ...plan0, tasks: [...plan0.tasks, task] });
+                    return addStandaloneTask(s0, title.trim(), null, nextNotes).state;
                   });
 
                   setCreatingTask(null);

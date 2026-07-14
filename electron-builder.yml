@@ -1,11 +1,16 @@
-appId: com.focustree.app
-productName: OnionOps
+appId: com.onionapp.app
+productName: Onion-App
 directories:
   output: release
   buildResources: build
 files:
   - out/**/*
   - package.json
+extraResources:
+  - LICENSE
+  - NOTICE
+  - COMMERCIAL_LICENSE.md
+  - THIRD_PARTY_NOTICES.txt
 extraMetadata:
   main: out/main/main.js
 mac:
@@ -29,5 +34,6 @@ win:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
+  license: license.txt
 publish:
   provider: github
