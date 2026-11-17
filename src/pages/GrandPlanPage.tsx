@@ -3,16 +3,14 @@ import { useLocation, useNavigate } from "react-router-dom";
 import type { DateISO, YM, Category, MilestoneNode, TaskNode } from "../app/types";
 import { APP_MAIN_COLOR, REPORT_THEME } from "../app/theme";
 import {
-  BadgePanel,
   DonutChart,
   ReportCard,
   ReportLegend,
   StackedHistogram,
-  type BadgeItem,
   type DonutSlice,
   type StackedDatum,
 } from "../components/ReportCharts";
-import { formatDateLabel, getCategoryMeta, UNKNOWN_CATEGORY, UNCATEGORIZED_CATEGORY } from "../app/reporting";
+import { getCategoryMeta, UNKNOWN_CATEGORY, UNCATEGORIZED_CATEGORY } from "../app/reporting";
 import { dayOfWeekFromDateISO, isTemplateScheduledForWeekday } from "../app/weekdays";
 import {
   loadState,
@@ -42,7 +40,8 @@ import {
   getCurrentYM,
 } from "../app/storage";
 import { getShortUserName, getUserName } from "../app/userProfile";
-import { formatMilestoneTitle, getSelectableMilestoneIds } from "../app/milestones";
+import { getSelectableMilestoneIds } from "../app/milestones";
+import GrandPlanReportTrees from "../components/GrandPlanReportTrees";
 import MilestoneTreeView from "../components/MilestoneTreeView";
 import MilestoneDetailModal from "../components/MilestoneDetailModal";
 import TaskDetailModal from "../components/TaskDetailModal";
@@ -674,31 +673,6 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
       UNKNOWN_CATEGORY,
     ];
 
-    const categoryById = new Map(grandPlan.categories.map((c) => [c.id, c]));
-    const planBadges = grandPlan.milestones
-      .filter((m) => m.status === "COMPLETED")
-      .map((m) => {
-        const completedAt = m.completedAt ?? m.createdAt;
-        const dateISO = completedAt.slice(0, 10);
-        const category = categoryById.get(m.categoryId);
-        const color = category?.color ?? UNKNOWN_CATEGORY.color;
-        const categoryLabel = category?.title ?? UNKNOWN_CATEGORY.title;
-        return {
-          dateISO,
-          badge: {
-            id: m.id,
-            title: formatMilestoneTitle(m, grandPlan.milestones),
-            dateLabel: formatDateLabel(dateISO as DateISO),
-            categoryLabel,
-            color,
-            isGoal: m.parentId === null,
-          } satisfies BadgeItem,
-        };
-      })
-      .filter((b) => b.dateISO >= startDate && b.dateISO <= endDate)
-      .sort((a, b) => (a.dateISO < b.dateISO ? -1 : 1))
-      .map((b) => b.badge);
-
     const taskMilestoneById = new Map<string, string | null | undefined>();
     const templateMilestoneById = new Map<string, string | null | undefined>();
     tasksInPlan.forEach((t) => {
@@ -838,8 +812,11 @@ export default function GrandPlanPage(props: GrandPlanPageProps = {}) {
             </div>
           </div>
 
-          <div style={{ display: "grid", gap: 16 }}>
-            <BadgePanel badges={planBadges} />
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16 }}>
+            <GrandPlanReportTrees
+              grandPlan={grandPlan}
+              getTasksForMilestone={(milestoneId) => getTasksForMilestone(state, milestoneId)}
+            />
             <ReportCard title="Task Completion">
               <div style={{ display: "flex", gap: 18, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
                 <div style={{ flex: "1 1 320px", minWidth: 260, maxWidth: 520 }}>

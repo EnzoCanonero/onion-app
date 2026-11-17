@@ -14,6 +14,8 @@ interface MilestoneTreeViewProps {
   onSelectMilestone: (milestone: MilestoneNode) => void;
   selectableMilestoneIds?: Set<string>;
   disableAddForMilestoneIds?: Set<string>;
+  /** Frozen view: milestones can be opened but nothing can be added. */
+  readOnly?: boolean;
 }
 
 function getStatusIcon(status: MilestoneStatus): string {
@@ -48,6 +50,7 @@ interface SingleTreeProps {
   onSelectMilestone: (milestone: MilestoneNode) => void;
   selectableMilestoneIds?: Set<string>;
   disableAddForMilestoneIds?: Set<string>;
+  readOnly?: boolean;
 }
 
 // Renders a single tree with root at bottom, children branching upward
@@ -59,6 +62,7 @@ function SingleTree({
   onSelectMilestone,
   selectableMilestoneIds,
   disableAddForMilestoneIds,
+  readOnly,
 }: SingleTreeProps) {
   // Get all milestones in this tree
   const treeMilestones = allMilestones.filter((m) => {
@@ -349,6 +353,7 @@ function SingleTree({
 	                  </div>
 
                   {/* Add milestone above button (adds a child which appears above in inverted view) */}
+	                  {!readOnly && (
 	                  <button
 	                    data-tutorial-target="add-milestone"
 	                    onClick={(e) => {
@@ -375,6 +380,7 @@ function SingleTree({
 	                  >
                     + Add Milestone
                   </button>
+	                  )}
                 </div>
 
                 {/* Connection line to child below (if this node has a parent, which means there's a child below in inverted view) */}
@@ -417,9 +423,18 @@ export default function MilestoneTreeView({
   onSelectMilestone,
   selectableMilestoneIds,
   disableAddForMilestoneIds,
+  readOnly,
 }: MilestoneTreeViewProps) {
   // Find root milestones (no parent) - these are the final goals at the bottom of each tree
   const rootMilestones = milestones.filter((m) => m.parentId === null).sort((a, b) => a.order - b.order);
+
+  if (milestones.length === 0 && readOnly) {
+    return (
+      <div style={{ textAlign: "center", padding: 32 }}>
+        <p style={{ color: "#666", margin: 0 }}>No milestones in this category.</p>
+      </div>
+    );
+  }
 
   if (milestones.length === 0) {
     return (
@@ -487,6 +502,7 @@ export default function MilestoneTreeView({
             onSelectMilestone={onSelectMilestone}
             selectableMilestoneIds={selectableMilestoneIds}
             disableAddForMilestoneIds={disableAddForMilestoneIds}
+            readOnly={readOnly}
           />
         ))}
       </div>
